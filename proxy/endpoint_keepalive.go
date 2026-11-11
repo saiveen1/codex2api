@@ -14,7 +14,9 @@ import (
 const maxUpstreamResponseBodyBytes = 64 << 20
 
 func readUpstreamErrorBody(ctx context.Context, reader io.Reader) ([]byte, error) {
-	return readAllWithContinuousRetryKeepalive(ctx, io.LimitReader(reader, maxUpstreamErrorBodyBytes))
+	body, err := readAllWithContinuousRetryKeepalive(ctx, io.LimitReader(reader, maxUpstreamErrorBodyBytes))
+	noteDiagnosticErrorBody(ctx, body)
+	return body, err
 }
 
 // upstreamResponseReadContext 保留普通请求取消后的有界 usage 补读窗口。

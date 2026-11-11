@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -30,20 +29,7 @@ const defaultLogDir = "logs"
 const upstreamErrorLogBodyMaxBytes = 8 * 1024
 
 func upstreamErrorLogBody(body []byte) string {
-	if len(strings.TrimSpace(string(body))) > 0 && !json.Valid(body) {
-		return fmt.Sprintf("[non-JSON upstream body omitted; %d bytes]", len(body))
-	}
-	truncated := false
-	if len(body) > upstreamErrorLogBodyMaxBytes {
-		body = body[:upstreamErrorLogBodyMaxBytes]
-		truncated = true
-	}
-	bodyStr := security.MaskSensitiveData(string(body))
-	bodyStr = security.SafeTruncate(bodyStr, 5000)
-	if truncated {
-		bodyStr += " ... [truncated]"
-	}
-	return bodyStr
+	return diagnosticLegacyBody(body, upstreamErrorLogBodyMaxBytes)
 }
 
 func errorLogDir() string {
@@ -111,6 +97,7 @@ func logUpstreamError(endpoint string, statusCode int, model string, accountID i
 
 // CloseErrorLogger 关闭所有错误日志文件（程序退出时调用）
 func CloseErrorLogger() {
+	closeDiagnosticLog()
 	badRequestLogger.close()
 	serverErrorLogger.close()
 }

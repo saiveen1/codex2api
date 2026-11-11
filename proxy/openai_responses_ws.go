@@ -147,6 +147,7 @@ func executeOpenAIResponsesWebsocket(ctx context.Context, account *auth.Account,
 		headers:      headers,
 	}, body)
 	record(resp)
+	noteDiagnosticDispatch(ctx, resp, err, int64(len(body)), body)
 	return resp, err
 }
 

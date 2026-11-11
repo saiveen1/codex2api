@@ -654,6 +654,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		recordTrace := beginUpstreamTrace(ctx, account, traceProxy, true)
 		resp, err := WebsocketExecuteFunc(ctx, account, requestBody, sessionID, proxyOverride, apiKey, deviceCfg, headers, poolRouteKey)
 		recordTrace(resp)
+		noteDiagnosticDispatch(ctx, resp, err, int64(len(requestBody)), requestBody)
 		return resp, err
 	}
 	if wantWebsocket && WebsocketExecuteFunc == nil {

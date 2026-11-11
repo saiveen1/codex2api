@@ -41,19 +41,7 @@ import (
 const consoleUpstreamErrorLogMaxBytes = 4 * 1024
 
 func upstreamErrorConsoleBody(body []byte) string {
-	if len(bytes.TrimSpace(body)) > 0 && !gjson.ValidBytes(body) {
-		return fmt.Sprintf("[non-JSON upstream body omitted; %d bytes]", len(body))
-	}
-	truncated := false
-	if len(body) > consoleUpstreamErrorLogMaxBytes {
-		body = body[:consoleUpstreamErrorLogMaxBytes]
-		truncated = true
-	}
-	bodyStr := security.SafeTruncate(security.SanitizeLog(string(body)), consoleUpstreamErrorLogMaxBytes)
-	if truncated {
-		bodyStr += " ... [truncated]"
-	}
-	return bodyStr
+	return diagnosticLegacyBody(body, consoleUpstreamErrorLogMaxBytes)
 }
 
 // Handler API 路由处理器
@@ -1770,6 +1758,7 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 	populateCompactUsageMetaFromRequest(c, input)
 	populateUltraUsageMetaFromRequest(c, input)
 	markCyberPolicyUsageKind(input)
+	logUsageDiagnostic(c, input)
 	input = database.SnapshotUsageLogBilling(input)
 	if deferImageUsage(c, h, input) {
 		return
@@ -3465,6 +3454,7 @@ func (h *Handler) authMiddlewareWithQuotaRead(allowQuotaRead bool) gin.HandlerFu
 		attachUserAgentAudit(c)
 		attachWsAcquireAudit(c)
 		attachUpstreamTrace(c, h.store)
+		defer beginRequestDiagnostic(c)()
 		// 如果没有配置任何密钥
 		hasKeys, presenceErr := h.hasAnyKeysWithError()
 		if presenceErr != nil {

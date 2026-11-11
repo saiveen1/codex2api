@@ -4573,8 +4573,11 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 
 // UsageLogInput 日志写入参数
 type UsageLogInput struct {
-	billingSnapshot   *usageBillingSnapshot
-	RequestID         string
+	billingSnapshot *usageBillingSnapshot
+	RequestID       string
+	// Trace-only metadata for structured diagnostics; not persisted to SQL.
+	TraceAttemptIndex int
+	TraceHTTPStatus   int
 	UpstreamRequestID string
 	UpstreamProxyID   int64
 	UpstreamProxyName string

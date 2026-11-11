@@ -88,6 +88,7 @@ func withResponsesWSStreamID(payload []byte, streamID string) []byte {
 }
 
 func writeResponsesWSErrorForContext(c *gin.Context, conn *websocket.Conn, err *api.APIError) error {
+	noteDiagnosticWSError(c, err)
 	return writeResponsesWSErrorForStream(conn, err, c.GetString(responsesWSStreamContextKey), responsesWSWriteTimeout)
 }
 
@@ -162,7 +163,7 @@ func (h *Handler) runResponsesWSMultiplex(c *gin.Context, conn *websocket.Conn, 
 			// Request.Clone copies context values, including mutable audit
 			// pointers. Allocate them per turn so parallel lanes cannot reset
 			// each other's request IDs, account traces or timing records.
-			frameCtx := context.WithValue(ctx, upstreamTraceContextKey{}, &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), store: h.store})
+			frameCtx := context.WithValue(ctx, upstreamTraceContextKey{}, &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), parentRequestID: snapshotUpstreamTrace(c.Request.Context()).RequestID, store: h.store, started: time.Now()})
 			frameCtx = context.WithValue(frameCtx, userAgentAuditContextKey{}, &userAgentAudit{})
 			frameCtx = context.WithValue(frameCtx, wsAcquireAuditContextKey{}, &wsAcquireAudit{})
 			frameCtx, interrupt := interrupts.begin(frameCtx, turn.streamID)

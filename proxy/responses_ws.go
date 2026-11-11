@@ -313,10 +313,13 @@ func stripNewAPIPolicyWebSocketEventID(payload []byte) ([]byte, string) {
 // 安全上下文，再归一化请求体、在重试循环内带排除项重新选号转发；可恢复的失败按协议写回错误
 // 帧并保留连接，需要关闭连接的致命失败才返回 close error。
 func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.Conn, rawPayload []byte, policyEventID string, options *responsesWSForwardOptions) (returnErr error) {
+	resetUpstreamRequestTrace(c)
+	defer finishRequestDiagnostic(c, nil, false)
 	defer releasePromptRequestFrameBody(c)
 	reservation, admitted := security.TryAcquireRequestMemory(int64(len(rawPayload)))
 	if !admitted {
 		apiErr := api.NewAPIError(api.ErrCodeServiceUnavailable, "Request memory capacity exhausted, please retry later", api.ErrorTypeServer)
+		noteDiagnosticWSError(c, apiErr)
 		_ = writeResponsesWSErrorForStream(conn, apiErr, c.GetString(responsesWSStreamContextKey), responsesWSOverloadWriteTimeout)
 		return newResponsesWSCloseError(websocket.CloseTryAgainLater, apiErr.Message, apiErr)
 	}
@@ -330,7 +333,6 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 	// prior frame's config or body digest.
 	resetPromptRequestSecurityFrame(c)
 	resetPromptPolicyRequestCorrelationID(c)
-	resetUpstreamRequestTrace(c)
 	quotaParentRequest := c.Request
 	if err := h.refreshAPIKeyModelRequestQuotaTurn(c); err != nil {
 		return writeResponsesWSErrorForContext(c, conn, apiKeyModelRequestError(err).apiErr)

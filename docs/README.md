@@ -42,6 +42,7 @@
 - 性能问题
 - 网络/代理问题
 - 日志分析
+- [结构化错误诊断与请求 ID 排查](error-diagnostics.md)
 - 诊断脚本
 
 ### 6. 贡献指南 ([CONTRIBUTING.md](CONTRIBUTING.md))

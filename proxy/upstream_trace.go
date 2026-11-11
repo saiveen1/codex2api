@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
@@ -14,9 +15,10 @@ import (
 
 type upstreamTraceContextKey struct{}
 type upstreamTraceAttempt struct {
-	accountID int64
-	requestID string
-	proxy     auth.ProxyAuditLabel
+	accountID  int64
+	requestID  string
+	proxy      auth.ProxyAuditLabel
+	diagnostic diagnosticAttempt
 	// upstreamTurnState 是上游响应回带的 X-Codex-Turn-State，空串表示没有。
 	upstreamTurnState string
 }
@@ -28,6 +30,8 @@ type upstreamTraceSnapshot struct {
 	Proxy             auth.ProxyAuditLabel
 	InjectedTurnState string
 	UpstreamTurnState string
+	Diagnostic        diagnosticAttempt
+	ParentRequestID   string
 }
 
 func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
@@ -37,12 +41,13 @@ func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	result := upstreamTraceSnapshot{RequestID: a.requestID}
+	result := upstreamTraceSnapshot{RequestID: a.requestID, ParentRequestID: a.parentRequestID}
 	if a.current != nil {
 		result.accountID = a.current.accountID
 		result.UpstreamRequestID = a.current.requestID
 		result.Proxy = a.current.proxy
 		result.UpstreamTurnState = a.current.upstreamTurnState
+		result.Diagnostic = a.current.diagnostic
 	}
 	return result
 }
@@ -55,14 +60,22 @@ func (s upstreamTraceSnapshot) apply(input *database.UsageLogInput) {
 		input.UpstreamProxyName = s.Proxy.Name
 		input.InjectedTurnState = s.InjectedTurnState
 		input.UpstreamTurnState = s.UpstreamTurnState
+		input.TraceAttemptIndex = s.Diagnostic.Index
+		input.TraceHTTPStatus = s.Diagnostic.HTTPStatus
 	}
 }
 
 type upstreamTraceAudit struct {
-	mu        sync.Mutex
-	requestID string
-	store     *auth.Store
-	current   *upstreamTraceAttempt
+	mu                sync.Mutex
+	requestID         string
+	parentRequestID   string
+	store             *auth.Store
+	current           *upstreamTraceAttempt
+	started           time.Time
+	attempts          int
+	diagnosticFailed  bool
+	diagnosticOutcome int
+	diagnosticFinal   string
 }
 
 func upstreamTraceFromContext(ctx context.Context) *upstreamTraceAudit {
@@ -77,7 +90,10 @@ func attachUpstreamTrace(c *gin.Context, store *auth.Store) {
 	if c == nil || c.Request == nil {
 		return
 	}
-	a := &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), store: store}
+	if upstreamTraceFromContext(c.Request.Context()) != nil {
+		return
+	}
+	a := &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), store: store, started: time.Now()}
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), upstreamTraceContextKey{}, a))
 	c.Header("X-Codex2API-Request-ID", a.requestID)
 }
@@ -87,10 +103,13 @@ func resetUpstreamRequestTrace(c *gin.Context) {
 		return
 	}
 	if a := upstreamTraceFromContext(c.Request.Context()); a != nil {
-		a.mu.Lock()
-		a.requestID = NewUpstreamSessionUUID()
-		a.current = nil
-		a.mu.Unlock()
+		// A multiplexed WS lane must not mutate another lane's shared context.
+		next := &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), store: a.store, started: time.Now()}
+		next.parentRequestID = a.parentRequestID
+		if next.parentRequestID == "" {
+			next.parentRequestID = a.requestID
+		}
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), upstreamTraceContextKey{}, next))
 	}
 }
 
@@ -122,10 +141,17 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	label.Name = security.MaskSensitiveData(label.Name)
 	attempt := &upstreamTraceAttempt{accountID: account.ID(), proxy: label}
 	a.mu.Lock()
+	a.attempts++
+	attempt.diagnostic = diagnosticAttempt{Index: a.attempts, RequestBytes: -1, Error: diagnosticError{Detail: "unavailable"}}
 	a.current = attempt
 	a.mu.Unlock()
 	header := account.GetUpstreamRequestIDHeader()
 	return func(resp *http.Response) {
+		if resp != nil {
+			a.mu.Lock()
+			attempt.diagnostic.HTTPStatus = resp.StatusCode
+			a.mu.Unlock()
+		}
 		if resp == nil || ws {
 			return
 		} // A WS handshake ID is not a per-turn ID; WS turn state arrives per frame, see ObserveCodexTurnStateFrame.
@@ -170,6 +196,7 @@ func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *au
 	record := beginUpstreamTrace(req.Context(), account, proxyURL, false)
 	resp, err := client.Do(req)
 	record(resp)
+	noteDiagnosticHTTPDispatch(req, resp, err)
 	return resp, err
 }
 
@@ -192,5 +219,7 @@ func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
 		input.UpstreamProxyID = current.proxy.ID
 		input.UpstreamProxyName = current.proxy.Name
 		input.UpstreamTurnState = current.upstreamTurnState
+		input.TraceAttemptIndex = current.diagnostic.Index
+		input.TraceHTTPStatus = current.diagnostic.HTTPStatus
 	}
 }
