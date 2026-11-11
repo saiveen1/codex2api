@@ -100,6 +100,39 @@ func TestContinuousRetryHTTPSelectionIsOptInAndExact(t *testing.T) {
 	}
 }
 
+func TestContinuousRetryHTTP400ExactSelector(t *testing.T) {
+	body := []byte(`{"error":{"message":"Bad Request"}}`)
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		codes   []int
+		want    bool
+	}{
+		{name: "selected", enabled: true, codes: []int{400, 503}, want: true},
+		{name: "master disabled", codes: []int{400, 503}},
+		{name: "400 removed", enabled: true, codes: []int{503}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := database.ContinuousRetryPolicy{Enabled: tc.enabled, StatusCodes: tc.codes}
+			general, rate := 0, 0
+			if got := shouldRetryHTTPStatus(http.StatusBadRequest, body, &general, &rate, 0, 0, policy); got != tc.want {
+				t.Fatalf("HTTP 400 retry = %v, want %v", got, tc.want)
+			}
+			if tc.want && (general != 1 || rate != 0) {
+				t.Fatalf("unexpected retry accounting: general=%d rate=%d", general, rate)
+			}
+			if continuousRetryHTTPSelected(policy, http.StatusForbidden, body) {
+				t.Fatal("selecting HTTP 400 must not select other 4xx statuses")
+			}
+			for _, code := range []string{"cyber_policy", "content_policy_violation", "insufficient_quota"} {
+				if continuousRetryHTTPSelected(policy, http.StatusBadRequest, []byte(`{"error":{"code":"`+code+`"}}`)) {
+					t.Fatalf("HTTP 400 selector bypassed terminal guard for %s", code)
+				}
+			}
+		})
+	}
+}
+
 func TestContinuousRetryHTTPSelectionSupportsContextCategory(t *testing.T) {
 	policy := database.ContinuousRetryPolicy{
 		Enabled:    true,

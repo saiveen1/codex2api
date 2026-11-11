@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   buildContinuousRetryCatchAllPatch,
   buildContinuousRetryEnabledPatch,
+  buildContinuousRetryHTTP400Patch,
   createContinuousRetrySaveQueue,
   parseContinuousRetryErrorCodes,
   parseContinuousRetryMaxDurationSeconds,
@@ -68,4 +69,30 @@ test('continuous retry max duration is always bounded', () => {
   assert.equal(parseContinuousRetryMaxDurationSeconds('-1'), 1)
   assert.equal(parseContinuousRetryMaxDurationSeconds('12.9'), 12)
   assert.equal(parseContinuousRetryMaxDurationSeconds('901'), 900)
+})
+
+test('HTTP 400 toggle preserves other status codes and leaves the source unchanged', () => {
+  const original = [503, 403, 400, 503]
+  assert.deepEqual(buildContinuousRetryHTTP400Patch(original, true), {
+    continuous_retry_status_codes: [400, 403, 503],
+  })
+  assert.deepEqual(buildContinuousRetryHTTP400Patch(original, false), {
+    continuous_retry_status_codes: [403, 503],
+  })
+  assert.deepEqual(original, [503, 403, 400, 503])
+  assert.deepEqual(buildContinuousRetryHTTP400Patch([], true), { continuous_retry_status_codes: [400] })
+  assert.deepEqual(buildContinuousRetryHTTP400Patch([400], false), { continuous_retry_status_codes: [] })
+})
+
+test('queued HTTP 400 toggle uses the latest saved status codes', async () => {
+  const enqueue = createContinuousRetrySaveQueue()
+  let settings = { continuous_retry_status_codes: [403] }
+  const first = enqueue(async () => {
+    settings = { continuous_retry_status_codes: [403, 503] }
+  })
+  const second = enqueue(async () => {
+    settings = buildContinuousRetryHTTP400Patch(settings.continuous_retry_status_codes, true)
+  })
+  await Promise.all([first, second])
+  assert.deepEqual(settings.continuous_retry_status_codes, [400, 403, 503])
 })

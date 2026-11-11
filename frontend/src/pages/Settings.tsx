@@ -30,6 +30,7 @@ import {
 import {
   buildContinuousRetryCatchAllPatch,
   buildContinuousRetryEnabledPatch,
+  buildContinuousRetryHTTP400Patch,
   createContinuousRetrySaveQueue,
   parseContinuousRetryErrorCodes,
   parseContinuousRetryMaxDurationSeconds,
@@ -2901,6 +2902,7 @@ export default function Settings() {
   const continuousRetryStatusCodesText = (settingsForm.continuous_retry_status_codes ?? []).join(',')
   const continuousRetryErrorCodesText = (settingsForm.continuous_retry_error_codes ?? []).join(',')
   const continuousRetryFineControlsDisabled = !settingsForm.continuous_retry_enabled || settingsForm.continuous_retry_catch_all
+  const continuousRetry400Covered = settingsForm.continuous_retry_catch_all || (settingsForm.continuous_retry_categories ?? []).includes('http_4xx')
   const [continuousRetryStatusCodesDraft, setContinuousRetryStatusCodesDraft] = useState(continuousRetryStatusCodesText)
   const [continuousRetryErrorCodesDraft, setContinuousRetryErrorCodesDraft] = useState(continuousRetryErrorCodesText)
   const lazyModeActive = settingsForm.lazy_mode
@@ -3179,8 +3181,8 @@ export default function Settings() {
     void autoSaveSettingsPatch({ [field]: decision.bytes })
   }, [autoSaveSettingsPatch, commitSettingsForm, persistedSettings])
 
-  const autoSaveContinuousRetryPatch = useCallback((patch: Partial<SystemSettings>) => {
-    return continuousRetrySaveQueueRef.current(() => autoSaveSettingsPatch(patch))
+  const autoSaveContinuousRetryPatch = useCallback((patch: Partial<SystemSettings> | ((current: SystemSettings) => Partial<SystemSettings>)) => {
+    return continuousRetrySaveQueueRef.current(() => autoSaveSettingsPatch(typeof patch === 'function' ? patch(settingsFormRef.current) : patch))
   }, [autoSaveSettingsPatch])
 
   const autoSaveBooleanField = useCallback((field: keyof SystemSettings, value: boolean, extraPatch: Partial<SystemSettings> = {}) => {
@@ -6046,6 +6048,21 @@ export default function Settings() {
                           }}
                         />
                       </SettingField>
+                      <SettingField
+                        label={t('settings.continuousRetryHTTP400')}
+                        description={t('settings.continuousRetryHTTP400Desc')}
+                        warning={t('settings.continuousRetryHTTP400Warning')}
+                        layout="switch"
+                      >
+                        <Switch
+                          aria-label={t('settings.continuousRetryHTTP400')}
+                          checked={continuousRetry400Covered || (settingsForm.continuous_retry_status_codes ?? []).includes(400)}
+                          disabled={continuousRetryFineControlsDisabled || continuousRetry400Covered}
+                          onCheckedChange={(checked) => void autoSaveContinuousRetryPatch((current) =>
+                            buildContinuousRetryHTTP400Patch(current.continuous_retry_status_codes ?? [], checked),
+                          )}
+                        />
+                      </SettingField>
                       <div className={cn('grid gap-3 sm:grid-cols-2 lg:grid-cols-4', continuousRetryFineControlsDisabled && 'opacity-60')}>
                         {continuousRetryCategoryOptions.map((option) => (
                           <SettingField
@@ -6079,7 +6096,7 @@ export default function Settings() {
                             aria-label={t('settings.continuousRetryStatusCodes')}
                             value={continuousRetryStatusCodesDraft}
                             disabled={continuousRetryFineControlsDisabled}
-                            placeholder="403,404,429,500,501,502,503,504"
+                            placeholder="400,403,404,429,500,501,502,503,504"
                             onChange={(event) => setContinuousRetryStatusCodesDraft(event.target.value)}
                             onBlur={(event) => {
                               const values = parseContinuousRetryStatusCodes(event.target.value)

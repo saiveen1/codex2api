@@ -748,7 +748,7 @@ func TestContinuousRetryCatchAllStopsAtCYBAndRetainsPolicyDecision(t *testing.T)
 
 func TestResponsesContinuousRetrySelectedDeterministicStatuses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, statusCode := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented} {
+	for _, statusCode := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented} {
 		t.Run(http.StatusText(statusCode), func(t *testing.T) {
 			var calls atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

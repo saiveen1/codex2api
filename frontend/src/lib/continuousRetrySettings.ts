@@ -26,6 +26,11 @@ export function buildContinuousRetryCatchAllPatch(enabled: boolean) {
     : { continuous_retry_catch_all: false }
 }
 
+export function buildContinuousRetryHTTP400Patch(statusCodes: readonly number[], enabled: boolean) {
+  const next = enabled ? [...statusCodes, 400] : statusCodes.filter((value) => value !== 400)
+  return { continuous_retry_status_codes: Array.from(new Set(next)).sort((a, b) => a - b) }
+}
+
 export function parseContinuousRetryStatusCodes(raw: string): number[] {
   const values = raw
     .split(',')
