@@ -538,19 +538,29 @@ type continuousRetrySSEEvent struct {
 }
 
 func readSSEStreamWithContinuousRetryKeepalive(ctx context.Context, body io.Reader, callback func(event string, data []byte) bool) error {
-	return readStreamWithContinuousRetryKeepalive(ctx, func(yield func(continuousRetrySSEEvent) bool) error {
+	ctx = bindDiagnosticAttempt(ctx)
+	err := readStreamWithContinuousRetryKeepalive(ctx, func(yield func(continuousRetrySSEEvent) bool) error {
 		return ReadSSEStreamWithEvent(body, func(event string, data []byte) bool {
 			return yield(continuousRetrySSEEvent{event: event, data: data})
 		})
 	}, func(item continuousRetrySSEEvent) bool {
+		noteDiagnosticStreamEvent(ctx, item.event, item.data)
 		return callback(item.event, item.data)
 	})
+	noteDiagnosticStreamReadError(ctx, err)
+	return err
 }
 
 func readRawGrokSSEFramesWithContinuousRetryKeepalive(ctx context.Context, body io.Reader, callback func(rawGrokSSEFrame) bool) error {
-	return readStreamWithContinuousRetryKeepalive(ctx, func(yield func(rawGrokSSEFrame) bool) error {
+	ctx = bindDiagnosticAttempt(ctx)
+	err := readStreamWithContinuousRetryKeepalive(ctx, func(yield func(rawGrokSSEFrame) bool) error {
 		return readRawGrokSSEFrames(body, yield)
-	}, callback)
+	}, func(frame rawGrokSSEFrame) bool {
+		noteDiagnosticStreamEvent(ctx, frame.Event, frame.Data)
+		return callback(frame)
+	})
+	noteDiagnosticStreamReadError(ctx, err)
+	return err
 }
 
 // waitWithContinuousRetryKeepalive waits in short chunks only after a request

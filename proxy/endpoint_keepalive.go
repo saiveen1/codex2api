@@ -14,8 +14,9 @@ import (
 const maxUpstreamResponseBodyBytes = 64 << 20
 
 func readUpstreamErrorBody(ctx context.Context, reader io.Reader) ([]byte, error) {
+	ctx = bindDiagnosticAttempt(ctx)
 	body, err := readAllWithContinuousRetryKeepalive(ctx, io.LimitReader(reader, maxUpstreamErrorBodyBytes))
-	noteDiagnosticErrorBody(ctx, body)
+	noteDiagnosticErrorEvidence(ctx, body, "upstream_http", err)
 	return body, err
 }
 
@@ -31,10 +32,12 @@ func upstreamResponseReadContext(downstreamCtx, upstreamCtx context.Context, pol
 // readAllLimitedWithContinuousRetryKeepalive 将读取上限与请求级保活组合，
 // 用于非流式成功响应及原生协议 JSON 聚合，避免读体阶段长时间没有下游活动。
 func readAllLimitedWithContinuousRetryKeepalive(ctx context.Context, reader io.Reader, limit int64) ([]byte, error) {
+	ctx = bindDiagnosticAttempt(ctx)
 	if limit < 0 {
 		return nil, fmt.Errorf("response body limit must be non-negative")
 	}
 	body, err := readAllWithContinuousRetryKeepalive(ctx, io.LimitReader(reader, limit+1))
+	noteDiagnosticResponseRead(ctx, body, err)
 	if err != nil {
 		return nil, err
 	}

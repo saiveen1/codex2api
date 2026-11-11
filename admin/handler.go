@@ -8044,6 +8044,7 @@ type opsErrorExportEntry struct {
 	StatusCode         int       `json:"status_code"`
 	ErrorKind          string    `json:"error_kind"`
 	ErrorMessage       string    `json:"error_message"`
+	DiagnosticContext  string    `json:"diagnostic_context,omitempty"`
 	AccountID          int64     `json:"account_id"`
 	AccountName        string    `json:"account_name"`
 	AccountEmail       string    `json:"account_email"`
@@ -8234,6 +8235,7 @@ func newOpsErrorExportEntry(logRow *database.UsageLog) opsErrorExportEntry {
 		StatusCode:         logRow.StatusCode,
 		ErrorKind:          logRow.UpstreamErrorKind,
 		ErrorMessage:       logRow.ErrorMessage,
+		DiagnosticContext:  logRow.DiagnosticContext,
 		AccountID:          logRow.AccountID,
 		AccountName:        logRow.AccountName,
 		AccountEmail:       logRow.AccountEmail,

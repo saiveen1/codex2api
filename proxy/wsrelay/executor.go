@@ -247,6 +247,7 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 		e.manager.releaseUnusedChatCapacity(wc)
 		return nil, err
 	}
+	proxy.RecordDiagnosticWebsocketRequest(ctx, wsBody)
 	sendErr := e.sendRequest(wc, wsBody, pr.RequestID)
 	if sendErr != nil && gjson.GetBytes(wsBody, "previous_response_id").String() != "" {
 		wc.session.RemovePendingRequest(pr.RequestID)

@@ -23,6 +23,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useToast } from '../hooks/useToast'
 import { DEFAULT_PAGE_SIZE_OPTIONS, usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import type { APIKeyRow, OpsErrorSummary, SystemSettings, UsageAPIKeyStat, UsageEndpointStat, UsageFeatureStats, UsageLog, UsageModelStat, UsageStats, PromptFilterLog, PromptPolicyIncidentDetailResponse } from '../types'
+import { DiagnosticDetailsButton, diagnosticContextSummary } from '../components/DiagnosticDetailsDialog'
 import { cn, formatCompactEmail } from '../lib/utils'
 import { formatUsageNumber as formatTokens } from '../lib/usageFormat'
 import { buildModelShareData, formatSharePercent, type ModelShareMetric } from '../lib/usageInsights'
@@ -971,6 +972,8 @@ function UsageErrorSummaryCell({ log, mobile = false }: { log: UsageLog; mobile?
     return mobile ? null : <span className="text-muted-foreground/50">-</span>
   }
 
+  const conciseSummary = diagnosticContextSummary(log.diagnostic_context, message || undefined)
+
   return (
     <div
       className={cn(
@@ -997,9 +1000,12 @@ function UsageErrorSummaryCell({ log, mobile = false }: { log: UsageLog; mobile?
           'mt-1 break-words text-[11px] leading-relaxed text-muted-foreground',
           mobile ? 'line-clamp-3' : 'line-clamp-2',
         )}
-        title={message || t('usage.statusErrorEmpty')}
+        title={conciseSummary}
       >
-        {message || t('usage.statusErrorEmpty')}
+        {conciseSummary}
+      </div>
+      <div className="mt-2">
+        <DiagnosticDetailsButton log={log} variant="ghost" className="h-6 px-1.5 text-[11px]" />
       </div>
     </div>
   )

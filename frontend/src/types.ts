@@ -3695,6 +3695,8 @@ export interface UsageLog {
   is_retry_attempt: boolean
   attempt_index: number
   upstream_error_kind: string
+  /** Bounded (<=24 KiB) safe JSON diagnostic metadata; absent on historical rows. */
+  diagnostic_context?: string
 	error_message: string
 	prompt_policy_incident_id?: string
 }

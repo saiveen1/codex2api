@@ -137,6 +137,7 @@ func executeOpenAIResponsesWebsocket(ctx context.Context, account *auth.Account,
 		proxyURL = boundProxy
 	}
 	record := beginUpstreamTrace(ctx, account, proxyURL, true)
+	RecordDiagnosticWebsocketRequest(ctx, body)
 	resp, err := openAIResponsesWebsocketPool.roundTrip(ctx, openAIResponsesWSSpec{
 		accountID:    account.ID(),
 		accountBound: accountBound,

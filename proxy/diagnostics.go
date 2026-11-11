@@ -16,17 +16,19 @@ import (
 	"github.com/codex2api/api"
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
-	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
 )
 
 type diagnosticAttempt struct {
-	Index        int                     `json:"index"`
-	HTTPStatus   int                     `json:"http_status,omitempty"`
-	Transport    string                  `json:"transport,omitempty"`
-	RequestBytes int64                   `json:"request_bytes"`
-	Request      *diagnosticRequestShape `json:"request,omitempty"`
-	Error        diagnosticError         `json:"error"`
+	Index           int                     `json:"index"`
+	HTTPStatus      int                     `json:"http_status,omitempty"`
+	Transport       string                  `json:"transport,omitempty"`
+	Protocol        string                  `json:"protocol,omitempty"`
+	RequestEncoding string                  `json:"request_encoding,omitempty"`
+	RequestCapture  string                  `json:"request_capture,omitempty"`
+	RequestBytes    int64                   `json:"request_bytes"`
+	Request         *diagnosticRequestShape `json:"request,omitempty"`
+	Error           diagnosticError         `json:"error"`
 }
 
 type diagnosticEvent struct {
@@ -34,6 +36,8 @@ type diagnosticEvent struct {
 	Time              string                  `json:"time"`
 	Event             string                  `json:"event"`
 	Stage             string                  `json:"stage"`
+	Summary           string                  `json:"summary,omitempty"`
+	CaptureStatus     string                  `json:"capture_status,omitempty"`
 	RequestID         string                  `json:"request_id"`
 	ParentRequestID   string                  `json:"parent_request_id,omitempty"`
 	UpstreamRequestID string                  `json:"upstream_request_id,omitempty"`
@@ -77,7 +81,7 @@ func diagnosticEndpoint(s string) string {
 
 func diagnosticBase(ctx context.Context, event, stage string) diagnosticEvent {
 	s := snapshotUpstreamTrace(ctx)
-	return diagnosticEvent{Schema: 1, Time: time.Now().UTC().Format(time.RFC3339Nano), Event: event, Stage: stage,
+	return diagnosticEvent{Schema: 2, Time: time.Now().UTC().Format(time.RFC3339Nano), Event: event, Stage: stage,
 		RequestID: s.RequestID, ParentRequestID: diagnosticID(s.ParentRequestID), UpstreamRequestID: diagnosticID(s.UpstreamRequestID), AccountID: s.accountID, ProxyID: s.Proxy.ID,
 		Attempt: s.Diagnostic, Error: diagnosticError{Detail: "unavailable"}}
 }
@@ -88,6 +92,8 @@ func diagnosticTransportKind(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof"
 	}
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
@@ -107,9 +113,6 @@ func diagnosticTransportKind(err error) string {
 
 // Called after dispatch, never reads the live request/response streams.
 func noteDiagnosticDispatch(ctx context.Context, resp *http.Response, err error, requestBytes int64, body []byte) {
-	if security.FileLogsDisabled() {
-		return
-	}
 	a := upstreamTraceFromContext(ctx)
 	if a == nil {
 		return
@@ -117,16 +120,21 @@ func noteDiagnosticDispatch(ctx context.Context, resp *http.Response, err error,
 	failed := err != nil || (resp != nil && resp.StatusCode >= 400)
 	upstreamStatus, upstreamBody, structured := continuousRetryHTTPErrorDetails(err)
 	var shape *diagnosticRequestShape
-	if failed && body != nil {
+	if body != nil {
 		shape = summarizeDiagnosticRequest(body)
 	}
 	a.mu.Lock()
 	if a.current != nil {
-		a.current.diagnostic.RequestBytes = requestBytes
-		a.current.diagnostic.Request = shape
+		if a.current.diagnostic.Request == nil && shape != nil {
+			a.current.diagnostic.RequestBytes = requestBytes
+			a.current.diagnostic.Request = shape
+			a.current.diagnostic.RequestEncoding = "identity"
+			a.current.diagnostic.RequestCapture = "adapter_input"
+		}
 		if structured {
 			a.current.diagnostic.HTTPStatus = upstreamStatus
 			a.current.diagnostic.Error = summarizeDiagnosticError(upstreamBody)
+			a.current.diagnostic.Error.Source = "upstream_handshake"
 		} else if err != nil {
 			a.current.diagnostic.Transport = diagnosticTransportKind(err)
 		}
@@ -143,38 +151,18 @@ func noteDiagnosticDispatch(ctx context.Context, resp *http.Response, err error,
 		e.Stage = "upstream_transport"
 		e.Kind = diagnosticTransportKind(err)
 	}
-	writeDiagnostic(e)
+	writeDiagnosticEvent(e)
 }
 
 func noteDiagnosticHTTPDispatch(req *http.Request, resp *http.Response, err error) {
-	if security.FileLogsDisabled() {
-		return
+	if snapshotUpstreamTrace(req.Context()).Diagnostic.Request == nil {
+		noteDiagnosticHTTPRequest(req)
 	}
-	var body []byte
-	if (err != nil || (resp != nil && resp.StatusCode >= 400)) && req.GetBody != nil && req.ContentLength <= diagnosticBodyLimit {
-		// GetBody is an independent replay reader, not req.Body. No network replay occurs.
-		if r, openErr := req.GetBody(); openErr == nil {
-			body, _ = io.ReadAll(io.LimitReader(r, diagnosticBodyLimit+1))
-			_ = r.Close()
-		}
-	}
-	noteDiagnosticDispatch(req.Context(), resp, err, req.ContentLength, body)
+	noteDiagnosticDispatch(req.Context(), resp, err, req.ContentLength, nil)
 }
 
 func noteDiagnosticErrorBody(ctx context.Context, body []byte) {
-	if security.FileLogsDisabled() {
-		return
-	}
-	a := upstreamTraceFromContext(ctx)
-	if a == nil {
-		return
-	}
-	detail := summarizeDiagnosticError(body)
-	a.mu.Lock()
-	if a.current != nil {
-		a.current.diagnostic.Error = detail
-	}
-	a.mu.Unlock()
+	noteDiagnosticErrorEvidence(ctx, body, "upstream_http", nil)
 }
 
 func diagnosticIngress(c *gin.Context) *diagnosticRequestShape {
@@ -187,7 +175,7 @@ func diagnosticIngress(c *gin.Context) *diagnosticRequestShape {
 }
 
 func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
-	if security.FileLogsDisabled() || c == nil || c.Request == nil || input == nil {
+	if c == nil || c.Request == nil || input == nil {
 		return
 	}
 	a := upstreamTraceFromContext(c.Request.Context())
@@ -197,6 +185,7 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	failed := input.StatusCode >= 400 || input.ErrorMessage != "" || input.UpstreamErrorKind != ""
 	a.mu.Lock()
 	previousFailure := a.diagnosticFailed
+	a.diagnosticUsageLogged = true
 	if failed {
 		a.diagnosticFailed = true
 	}
@@ -217,6 +206,10 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	}
 	e := diagnosticBase(c.Request.Context(), "attempt_outcome", "upstream_response")
 	// Continuation snapshots and account switches must not inherit the latest attempt.
+	var held diagnosticEvent
+	if input.DiagnosticContext != "" && json.Unmarshal([]byte(input.DiagnosticContext), &held) == nil && held.Schema == 2 && held.RequestID == input.RequestID && held.AccountID == input.AccountID && held.Attempt.Index == input.TraceAttemptIndex {
+		e.Attempt, e.AccountID = held.Attempt, held.AccountID
+	}
 	if input.TraceAttemptIndex != e.Attempt.Index || input.AccountID != e.AccountID {
 		e.Attempt = diagnosticAttempt{Index: input.TraceAttemptIndex, HTTPStatus: input.TraceHTTPStatus, RequestBytes: -1}
 	}
@@ -237,6 +230,7 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	e.Error = e.Attempt.Error
 	if e.Error.Detail == "" || e.Error.Detail == "unavailable" {
 		e.Error = summarizeDiagnosticError([]byte(input.ErrorMessage))
+		e.Error.Source = "usage_fallback"
 		if code, _, ok := strings.Cut(input.ErrorMessage, " · "); ok && diagnosticErrorCode(code) != "other" {
 			e.Error.Code = diagnosticErrorCode(code)
 		}
@@ -244,8 +238,10 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	switch {
 	case input.UpstreamErrorKind == "continue_thinking_error":
 		e.Stage = "continuation"
-	case e.Attempt.Transport != "":
+	case e.Attempt.Transport != "" && e.Attempt.HTTPStatus == 0:
 		e.Stage = "upstream_transport"
+	case e.Error.Source == "upstream_stream":
+		e.Stage = "upstream_stream"
 	case e.Attempt.HTTPStatus >= 400:
 		e.Stage = "upstream_http"
 	case input.Stream || input.ViaWebsocket:
@@ -257,7 +253,7 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	if failed {
 		e.Outcome = "failure"
 	}
-	writeDiagnostic(e)
+	saveDiagnosticUsageContext(input, e)
 }
 
 type diagnosticResponseWriter struct {
@@ -291,11 +287,15 @@ func (w *diagnosticResponseWriter) WriteString(s string) (int, error) {
 }
 
 // RequestDiagnosticMiddleware precedes body limits and rate limiting, but excludes admin/UI routes.
-func RequestDiagnosticMiddleware(store *auth.Store) gin.HandlerFunc {
+func RequestDiagnosticMiddleware(store *auth.Store, databases ...*database.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/v1beta/") || strings.HasPrefix(path, "/backend-api/codex/") || diagnosticEndpoint(path) != "other" {
 			attachUpstreamTrace(c, store)
+			if len(databases) > 0 {
+				a := upstreamTraceFromContext(c.Request.Context())
+				a.diagnosticDB = databases[0]
+			}
 			defer beginRequestDiagnostic(c)()
 		}
 		c.Next()
@@ -303,9 +303,6 @@ func RequestDiagnosticMiddleware(store *auth.Store) gin.HandlerFunc {
 }
 
 func beginRequestDiagnostic(c *gin.Context) func() {
-	if security.FileLogsDisabled() {
-		return func() {}
-	}
 	if c.GetBool("diagnostic_active") {
 		return func() {}
 	}
@@ -316,7 +313,8 @@ func beginRequestDiagnostic(c *gin.Context) func() {
 		if recovered := recover(); recovered != nil {
 			e := diagnosticBase(c.Request.Context(), "request_end", "panic")
 			e.Outcome, e.OutcomeStatus = "failure", 500
-			writeDiagnostic(e)
+			writeDiagnosticEvent(e)
+			persistDiagnosticOnlyUsage(c, e)
 			panic(recovered)
 		}
 		finishRequestDiagnostic(c, writer.errorBody, writer.overflow)
@@ -324,7 +322,7 @@ func beginRequestDiagnostic(c *gin.Context) func() {
 }
 
 func finishRequestDiagnostic(c *gin.Context, errorBody []byte, overflow bool) {
-	if security.FileLogsDisabled() || c == nil || c.Request == nil {
+	if c == nil || c.Request == nil {
 		return
 	}
 	a := upstreamTraceFromContext(c.Request.Context())
@@ -340,16 +338,35 @@ func finishRequestDiagnostic(c *gin.Context, errorBody []byte, overflow bool) {
 	}
 	e := diagnosticBase(c.Request.Context(), "request_end", "completion")
 	e.Endpoint = diagnosticEndpoint(c.FullPath())
+	if e.Endpoint == "other" {
+		e.Endpoint = diagnosticEndpoint(c.Request.URL.Path)
+	}
 	e.HTTPStatus, e.OutcomeStatus = status, outcome
 	e.DurationMs = time.Since(started).Milliseconds()
 	e.Request = diagnosticIngress(c)
 	e.Error = summarizeDiagnosticError(errorBody)
-	if overflow {
+	e.Error.Source = "downstream_response"
+	if e.Request != nil {
+		e.Stream = e.Request.Stream
+	}
+	e.Websocket = e.Attempt.Protocol == "websocket"
+	if e.Attempt.Error.Source != "" {
+		e.Error = e.Attempt.Error
+	}
+	if overflow && e.Error.Source == "downstream_response" {
 		e.Error.Detail = "size_limit"
 	}
 	if status >= 400 {
 		e.OutcomeStatus = status
-		e.Stage = "local_or_gateway"
+		if e.Attempt.HTTPStatus >= 400 {
+			e.Stage = "upstream_http"
+		} else if e.Attempt.Transport != "" {
+			e.Stage = "upstream_transport"
+		} else if e.Error.Source == "upstream_stream" {
+			e.Stage = "upstream_stream"
+		} else {
+			e.Stage = "local_or_gateway"
+		}
 	}
 	e.Outcome = final
 	if e.Outcome == "" {
@@ -361,11 +378,12 @@ func finishRequestDiagnostic(c *gin.Context, errorBody []byte, overflow bool) {
 	if e.Error.Type == "authentication_error" {
 		e.Stage = "authentication"
 	}
-	writeDiagnostic(e)
+	writeDiagnosticEvent(e)
+	persistDiagnosticOnlyUsage(c, e)
 }
 
 func noteDiagnosticWSError(c *gin.Context, err *api.APIError) {
-	if security.FileLogsDisabled() || err == nil || c == nil || c.Request == nil {
+	if err == nil || c == nil || c.Request == nil {
 		return
 	}
 	a := upstreamTraceFromContext(c.Request.Context())
@@ -375,13 +393,21 @@ func noteDiagnosticWSError(c *gin.Context, err *api.APIError) {
 	a.mu.Lock()
 	a.diagnosticFailed = true
 	a.diagnosticFinal = "failure"
+	a.diagnosticOutcome = api.HTTPStatusCode(err.Code)
 	a.mu.Unlock()
 	e := diagnosticBase(c.Request.Context(), "websocket_error", "websocket_local_or_gateway")
-	e.Websocket, e.Outcome = true, "failure"
+	e.Websocket, e.Outcome, e.OutcomeStatus = true, "failure", api.HTTPStatusCode(err.Code)
 	body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": string(err.Code), "type": string(err.Type)}})
 	e.Error = summarizeDiagnosticError(body)
+	e.Error.Source = "websocket_gateway"
+	e.Error.BodyFormat, e.Error.BodyBytes, e.Error.BodyFingerprint = "api_error", 0, ""
+	e.Error.MessagePresent, e.Error.MessageBytes = err.Message != "", len(err.Message)
+	e.Error.MessageClass = diagnosticMessageClass(err.Message)
+	e.Error.Fingerprint = diagnosticFingerprint(string(err.Code) + "\x00" + err.Message)
+	e.Error.EvidenceTruncated = err.Details != nil
 	e.Request = diagnosticIngress(c)
-	writeDiagnostic(e)
+	writeDiagnosticEvent(e)
+	persistDiagnosticOnlyUsage(c, e)
 }
 
 // Legacy logs keep their format but no longer dump arbitrary structured bodies.

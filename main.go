@@ -466,7 +466,7 @@ func main() {
 	r.Use(api.RecoveryMiddleware())
 	r.Use(api.RequestContextMiddleware())
 	r.Use(api.VersionMiddleware())
-	r.Use(proxy.RequestDiagnosticMiddleware(store))
+	r.Use(proxy.RequestDiagnosticMiddleware(store, db))
 	security.MaxRequestBodySize = cfg.MaxRequestBodySize
 	security.ConfigureRequestMemoryBudget(cfg.RequestMemoryBudgetBytes)
 	// 账号导入端点(multipart 文件上传)单独放宽体积上限,默认 200MB,可用

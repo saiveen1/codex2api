@@ -62,20 +62,23 @@ func (s upstreamTraceSnapshot) apply(input *database.UsageLogInput) {
 		input.UpstreamTurnState = s.UpstreamTurnState
 		input.TraceAttemptIndex = s.Diagnostic.Index
 		input.TraceHTTPStatus = s.Diagnostic.HTTPStatus
+		applyDiagnosticTraceSnapshot(s, input)
 	}
 }
 
 type upstreamTraceAudit struct {
-	mu                sync.Mutex
-	requestID         string
-	parentRequestID   string
-	store             *auth.Store
-	current           *upstreamTraceAttempt
-	started           time.Time
-	attempts          int
-	diagnosticFailed  bool
-	diagnosticOutcome int
-	diagnosticFinal   string
+	mu                    sync.Mutex
+	requestID             string
+	parentRequestID       string
+	store                 *auth.Store
+	current               *upstreamTraceAttempt
+	started               time.Time
+	attempts              int
+	diagnosticFailed      bool
+	diagnosticOutcome     int
+	diagnosticFinal       string
+	diagnosticDB          *database.DB
+	diagnosticUsageLogged bool
 }
 
 func upstreamTraceFromContext(ctx context.Context) *upstreamTraceAudit {
@@ -105,6 +108,7 @@ func resetUpstreamRequestTrace(c *gin.Context) {
 	if a := upstreamTraceFromContext(c.Request.Context()); a != nil {
 		// A multiplexed WS lane must not mutate another lane's shared context.
 		next := &upstreamTraceAudit{requestID: NewUpstreamSessionUUID(), store: a.store, started: time.Now()}
+		next.diagnosticDB = a.diagnosticDB
 		next.parentRequestID = a.parentRequestID
 		if next.parentRequestID == "" {
 			next.parentRequestID = a.requestID
@@ -143,6 +147,10 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	a.mu.Lock()
 	a.attempts++
 	attempt.diagnostic = diagnosticAttempt{Index: a.attempts, RequestBytes: -1, Error: diagnosticError{Detail: "unavailable"}}
+	attempt.diagnostic.Protocol = "http"
+	if ws {
+		attempt.diagnostic.Protocol = "websocket"
+	}
 	a.current = attempt
 	a.mu.Unlock()
 	header := account.GetUpstreamRequestIDHeader()
@@ -194,6 +202,7 @@ func noteUpstreamTurnState(ctx context.Context, state string) {
 
 func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *auth.Account, proxyURL string) (*http.Response, error) {
 	record := beginUpstreamTrace(req.Context(), account, proxyURL, false)
+	noteDiagnosticHTTPRequest(req)
 	resp, err := client.Do(req)
 	record(resp)
 	noteDiagnosticHTTPDispatch(req, resp, err)

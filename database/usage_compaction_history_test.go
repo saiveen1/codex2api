@@ -156,8 +156,9 @@ func TestUsageLogInsertColumnCountIncludesCompactionHistory(t *testing.T) {
 	// 50 legacy + 2 cache-write + 4 trace + 3 image-token + 3 user image-billing + 1 ultra +
 	// 2 manual inject/observe turn-state + 2 auto template audit turn-state fields +
 	// 2 upstream response model audit fields (upstream_response_model / upstream_model_mismatch)
-	// + 1 Daybreak program field + 1 video seconds field + explicit created_at (issue #857).
-	const want = 72
+	// + 1 Daybreak program field + 1 video seconds field + explicit created_at (issue #857)
+	// + 1 bounded diagnostic context field.
+	const want = 73
 	if usageLogInsertColumnCount != want {
 		t.Fatalf("usageLogInsertColumnCount = %d, want %d", usageLogInsertColumnCount, want)
 	}

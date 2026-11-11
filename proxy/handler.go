@@ -925,6 +925,13 @@ func usageLogErrorMessageImpl(statusCode int, body []byte, trustedText bool) str
 	}
 
 	if message == "" {
+		// Preserve evidence from detail/code-only formats without persisting arbitrary error text.
+		if gjson.ValidBytes(body) {
+			detail := summarizeDiagnosticError(body)
+			if detail.MessagePresent || detail.CodePresent || detail.TypePresent || detail.ParamPresent {
+				return diagnosticErrorSummary(statusCode, detail)
+			}
+		}
 		// HTML and plain-text provider pages routinely contain request IDs,
 		// internal routing details or echoed credentials. They are not an API
 		// contract, so persist only the transport status instead of the body —

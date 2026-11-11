@@ -27,6 +27,7 @@ import { getTimeRangeISO, type TimeRangeKey } from '../lib/timeRange'
 import { formatCompactEmail } from '../lib/utils'
 import { formatBeijingTime } from '../utils/time'
 import type { APIKeyRow, OpsErrorSummary, UsageLog } from '../types'
+import { DiagnosticDetailsButton, diagnosticContextSummary } from '../components/DiagnosticDetailsDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -455,17 +456,18 @@ export default function OperationsErrors() {
                       </div>
                     </div>
 
-                    {log.error_message ? (
-                      <div className="rounded-lg bg-destructive/5 border border-destructive/20 p-2 text-xs text-destructive line-clamp-3 leading-relaxed">
-                        {log.error_message}
-                      </div>
-                    ) : null}
+                    <div className="rounded-lg bg-destructive/5 border border-destructive/20 p-2 text-xs text-destructive line-clamp-3 leading-relaxed" title={diagnosticContextSummary(log.diagnostic_context, log.error_message)}>
+                      {diagnosticContextSummary(log.diagnostic_context, log.error_message)}
+                    </div>
 
-                    <div className="flex items-center justify-between pt-1 border-t border-border/50 text-[11px] text-muted-foreground">
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/50 text-[11px] text-muted-foreground">
                       <span>{formatBeijingTime(log.created_at)}</span>
-                      <Button variant="outline" size="xs" onClick={() => setSelectedLog(log)}>
-                        {t('opsErrors.details')}
-                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        <DiagnosticDetailsButton log={log} />
+                        <Button variant="outline" size="xs" onClick={() => setSelectedLog(log)}>
+                          {t('opsErrors.details')}
+                        </Button>
+                      </div>
                     </div>
                   </Card>
                 ))}
@@ -532,14 +534,17 @@ export default function OperationsErrors() {
                           </span>
                         </TableCell>
                         <TableCell className="max-w-[360px] whitespace-normal">
-                          <div className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground" title={log.error_message || ''}>
-                            {log.error_message || t('opsErrors.noErrorMessage')}
+                          <div className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground" title={diagnosticContextSummary(log.diagnostic_context, log.error_message)}>
+                            {diagnosticContextSummary(log.diagnostic_context, log.error_message)}
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Button variant="outline" size="xs" onClick={() => setSelectedLog(log)}>
-                            {t('opsErrors.details')}
-                          </Button>
+                          <div className="flex items-center gap-1.5">
+                            <DiagnosticDetailsButton log={log} />
+                            <Button variant="outline" size="xs" onClick={() => setSelectedLog(log)}>
+                              {t('opsErrors.details')}
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -586,6 +591,13 @@ export default function OperationsErrors() {
                 <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words font-geist-mono text-[12px] leading-relaxed text-foreground">
                   {selectedLog.error_message || t('opsErrors.noErrorMessage')}
                 </pre>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/15 bg-primary/5 p-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-foreground">诊断摘要 / diagnostic summary</div>
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{diagnosticContextSummary(selectedLog.diagnostic_context, selectedLog.error_message)}</div>
+                </div>
+                <DiagnosticDetailsButton log={selectedLog} size="sm" />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
