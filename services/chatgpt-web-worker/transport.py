@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Bounded HTTP with fixed TLS fingerprint and isolated, DNS-pinned asset requests."""
+import asyncio
+import ipaddress
+import json
+import socket
+from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
+
+from curl_cffi import CurlOpt
+from curl_cffi.requests import AsyncSession
+
+from contract import SafeError
+
+ASSET_HOSTS = frozenset({"files.oaiusercontent.com", "oaiusercontent.com",
+                         "oaidalleapiprodscus.blob.core.windows.net",
+                         "prod-files-secure.s3.us-west-2.amazonaws.com"})
+
+
+async def public_destination(url):
+    try:
+        part = urlsplit(url)
+        if (part.scheme != "https" or part.hostname not in ASSET_HOSTS or part.port not in {None, 443}
+                or part.username or part.password or part.fragment or "\\" in url
+                or any(ord(c) < 33 for c in url) or len(url) > 16384):
+            raise ValueError()
+        answers = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(
+            part.hostname, 443, type=socket.SOCK_STREAM), 5)
+        addresses = sorted({answer[4][0] for answer in answers})
+        if not addresses or any(not ipaddress.ip_address(address).is_global or
+                                ipaddress.ip_address(address).is_multicast or
+                                ipaddress.ip_address(address).is_reserved for address in addresses):
+            raise ValueError()
+        return part.hostname, addresses
+    except Exception:
+        raise SafeError("image_download_failed") from None
+
+
+async def read_bounded(response, limit):
+    data = bytearray()
+    async for chunk in response.aiter_content():
+        data.extend(chunk)
+        if len(data) > limit:
+            raise SafeError("upstream_error")
+    return bytes(data)
+
+
+def check_status(response, asset=False):
+    status = response.status_code
+    if 200 <= status < 300:
+        return
+    if asset:
+        raise SafeError("image_download_failed")
+    if status == 401:
+        raise SafeError("auth_required", 401)
+    if status == 403:
+        raise SafeError("environment_challenge", 403)
+    if status == 429:
+        raise SafeError("quota_exhausted", 429)
+    raise SafeError("upstream_error")
+
+
+class CurlTransport:
+    def __init__(self, account):
+        self.proxy = account.raw.get("proxy_url") or ""
+        self.options = {CurlOpt.PROXY: self.proxy, CurlOpt.NOPROXY: "",
+                        CurlOpt.SSL_VERIFYPEER: 1, CurlOpt.SSL_VERIFYHOST: 2,
+                        CurlOpt.PROXY_SSL_VERIFYPEER: 1, CurlOpt.PROXY_SSL_VERIFYHOST: 2}
+        self.session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
+                                   proxy=self.proxy, max_clients=2, curl_options=dict(self.options))
+
+    @asynccontextmanager
+    async def open(self, method, url, *, headers, timeout, asset=False, **kwargs):
+        session = self.session
+        if asset:
+            host, addresses = await public_destination(url)
+            # CONNECT_TO applies to proxy CONNECT/SOCKS too; original host remains TLS SNI/certificate name.
+            address = addresses[0]
+            target = f"[{address}]" if ":" in address else address
+            session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
+                                   proxy=self.proxy,
+                                   curl_options=self.options | {CurlOpt.CONNECT_TO: [f"{host}:443:{target}:443"],
+                                                               CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
+        response = None
+        try:
+            response = await session.request(method, url, headers=headers, timeout=timeout,
+                                             allow_redirects=False, stream=True, **kwargs)
+            check_status(response, asset)
+            yield response
+        finally:
+            if response is not None:
+                await response.aclose()
+            if asset:
+                await session.close()
+
+    async def close(self):
+        await self.session.close()
+
+
+async def json_response(response, limit=4 * 1024 * 1024):
+    try:
+        value = json.loads(await read_bounded(response, limit))
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except SafeError:
+        raise
+    except Exception:
+        raise SafeError("upstream_error") from None

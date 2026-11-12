@@ -249,6 +249,16 @@ export default function ImageStudioPortal() {
     return stored.key ? stored.remember : true
   })
   const [activeAPIKey, setActiveAPIKey] = useState(() => readStoredAPIKey().key)
+  const [channelSnapshot, setChannelSnapshot] = useState<{key: string; channel?: string} | null>(null)
+  useEffect(() => {
+    if (!activeAPIKey) { setChannelSnapshot(null); return }
+    let cancelled = false
+    void api.getPublicAPIKeyUsage(activeAPIKey, 'today', { page: 1, pageSize: 1 }).then(result => {
+      if (!cancelled) setChannelSnapshot({ key: activeAPIKey, channel: result.key.limits.upstream_channel })
+    }).catch(() => { if (!cancelled) setChannelSnapshot(null) })
+    return () => { cancelled = true }
+  }, [activeAPIKey])
+  const isWebKey = channelSnapshot?.key === activeAPIKey && channelSnapshot.channel === 'chatgpt_web'
   const [quotaSnapshot, setQuotaSnapshot] = useState<{ key: string; value: ImageStudioQuota } | null>(null)
   const [quotaLoading, setQuotaLoading] = useState(false)
   const [quotaError, setQuotaError] = useState('')
@@ -682,6 +692,11 @@ export default function ImageStudioPortal() {
 
   const submitJob = async () => {
     if (!activeAPIKey) return
+    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].includes(size) || quality !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+      showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'))
+      setAdvancedOpen(true)
+      return
+    }
     if (quotaLocked) {
       showToast(t(`imageStudioPortal.quota.${quota.status}`))
       return
@@ -996,6 +1011,8 @@ export default function ImageStudioPortal() {
                     ]}
                   />
 
+                  {channelSnapshot?.key === activeAPIKey && channelSnapshot.channel === 'chatgpt_web' && <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>}
+
                   <div className="portal-prompt-field">
                     <div className="portal-field-heading">
                       <label htmlFor="portal-prompt">{t('images.prompt')}</label>
@@ -1023,10 +1040,10 @@ export default function ImageStudioPortal() {
 
                   <div className="portal-model-settings">
                     <Field label={t('images.model')}>
-                      <Select value={model} onValueChange={setModel} options={IMAGE_MODELS} compact />
+                      <Select value={model} onValueChange={setModel} options={isWebKey ? IMAGE_MODELS.filter(option => option.value === 'gpt-image-2') : IMAGE_MODELS} compact />
                     </Field>
                     <Field label={t('images.size')}>
-                      <Select value={size} onValueChange={setSize} options={SIZE_OPTIONS.map(option => ({ ...option, label: option.value === 'auto' ? t('imageStudioPortal.design.autoSize') : option.label.replace('x', ' × ') }))} compact />
+                      <Select value={size} onValueChange={setSize} options={isWebKey ? ['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].map(value => ({ value, label: value === 'auto' ? t('imageStudioPortal.design.autoSize') : value })) : SIZE_OPTIONS.map(option => ({ ...option, label: option.value === 'auto' ? t('imageStudioPortal.design.autoSize') : option.label.replace('x', ' × ') }))} compact />
                     </Field>
                   </div>
 
@@ -1163,10 +1180,10 @@ export default function ImageStudioPortal() {
                     {advancedOpen ? (
                       <div id="portal-advanced-settings" className="grid grid-cols-2 gap-3 border-t border-border p-3">
                         <Field label={t('images.quality')}>
-                          <Select value={quality} onValueChange={setQuality} options={imageQualityOptions(model)} compact />
+                          <Select value={quality} onValueChange={setQuality} options={imageQualityOptions(model).filter(option => !isWebKey || option.value === 'auto')} compact />
                         </Field>
                         <Field label={t('images.format')}>
-                          <Select value={outputFormat} onValueChange={setOutputFormat} options={FORMAT_OPTIONS} compact />
+                          <Select value={outputFormat} onValueChange={setOutputFormat} options={isWebKey ? FORMAT_OPTIONS.filter(option => ['png', 'jpeg', 'webp'].includes(option.value)) : FORMAT_OPTIONS} compact />
                         </Field>
                         <div className="col-span-2">
                           <Field label={t('images.style')}>

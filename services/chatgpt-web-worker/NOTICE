@@ -1,0 +1,25 @@
+ChatGPT Web worker — AGPL-3.0-only
+
+This worker contains protocol adaptations of yukkcat/chatgpt2api by yukkcat and
+its contributors, pinned to commit 4336d0594dd4fe2962bca5b0b55bc95a24686e59.
+Upstream repository: https://github.com/yukkcat/chatgpt2api
+The complete upstream GNU Affero General Public License version 3 is preserved
+verbatim in LICENSE; this worker uses AGPL-3.0-only, not “or later”.
+
+Adapted files are identified in their headers and PROVENANCE.md. Worker-specific
+HTTP authentication, validation, transport restrictions, SQLite submission fence,
+cache and tests are new implementation work. All original upstream application
+UI/account/database services and executable challenge VM are excluded.
+No upstream copyright notices were removed from adapted excerpts; the referenced
+source modules have no additional file-level copyright notice.
+
+Changes dated 2026-11-12: isolate one supplied account and exit, bound input,
+output and CPU, reject unsupported challenges, prohibit generation replays,
+remove credential/account mutation and fallback, add durable private state,
+strict output trust and SSRF controls, and replace external integration tests
+with mock-only tests. No live verification has occurred.
+
+Public release/combined distribution is not authorized. Before release, review
+AGPL corresponding-source/network-source obligations, notices, distribution/build
+materials and compatibility of the combined gateway/worker distribution.
+A separate subprocess is not asserted to exempt anyone from license duties.

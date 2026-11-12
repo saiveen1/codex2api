@@ -642,7 +642,8 @@ codex2api/
 ## 免责声明与开源协议
 
 - 本项目仅供学习、研究与技术交流使用。
-- 本项目采用 `MIT License` 开源协议。
+- 网关保留既有 `MIT License` 声明；可选的 `services/chatgpt-web-worker/` 组件使用 `AGPL-3.0-only`，该目录以自身 LICENSE、NOTICE 和 PROVENANCE 为准。组合发布前请核对对应源码与分发义务，不默认认为独立进程构成豁免。
+- 可选的 [ChatGPT Web 图片通道](docs/chatgpt-web-images.md) 默认关闭，与原 Codex 通道隔离，真实网页能力需另行验收。
 - 项目不对任何直接或间接使用后果提供担保；生产环境使用风险由使用者自行承担。
 
 ---

@@ -1,4 +1,5 @@
 {
+  "chatgptWeb": {"title":"ChatGPT Web images", "config":"Environment-only configuration: CHATGPT_WEB_ENABLED (default false), CHATGPT_WEB_WORKER_URL, CHATGPT_WEB_WORKER_SECRET and CHATGPT_WEB_TIMEOUT_SECONDS. Values are not shown here.", "deployment":"Deployment", "enabled":"Enabled", "disabled":"Disabled", "configured":"Configured", "notConfigured":"Not configured", "refresh":"Refresh", "check":"Check environment (no generation)", "enable":"Enable", "disable":"Disable", "status":"Status", "capabilities":"Capabilities", "quota":"Image quota", "unknown":"Unknown", "reset":"Reset", "observed":"Observed", "error":"Error", "executions":"Recent execution phases (latest 50)", "empty":"None", "loadError":"Unable to load web settings.", "actionError":"Web account operation failed.", "account":"Account", "resultUnknown":"Result unknown; do not resubmit automatically."},
   "qualityTest": {
     "studioTab": "Test studio",
     "recordsTab": "Test history",
@@ -5866,7 +5867,9 @@
       "upstreamChannelGrok": "Grok",
       "upstreamChannelAntigravity": "Antigravity",
       "upstreamChannelClaude": "Claude",
+      "upstreamChannelChatGPTWeb": "ChatGPT Web",
       "upstreamChannelHint": {
+        "chatgpt_web": "Images only (gpt-image-2). Unsupported options such as exact dimensions and masks are rejected rather than silently ignored. Multiple images may partially fail.",
         "auto": "No restriction: requests are routed by model to Codex, Grok, Antigravity, or Claude accounts.",
         "codex": "This key only dispatches to Codex accounts; Grok, Antigravity, and Claude accounts are excluded.",
         "grok": "This key only dispatches to Grok accounts. Account mappings are applied first, then the request is sent only to accounts whose model list contains the target. An empty list uses the visible catalog, or the default model list before the first sync.",

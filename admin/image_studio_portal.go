@@ -229,6 +229,7 @@ func normalizePortalImageJobPayload(req *imageGenerationJobPayload, editMode boo
 }
 
 func (h *Handler) enqueuePortalImageJob(c *gin.Context, apiKey *database.APIKeyRow, req imageGenerationJobPayload, editMode bool) {
+	req.ChannelSnapshot = imageJobChannel(apiKey)
 	keyID, keyName, keyMasked := imageJobAPIKeyMeta(apiKey)
 	endpoint := "/api/image-studio/jobs"
 	if editMode {

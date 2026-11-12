@@ -133,6 +133,9 @@ func (h *Handler) enforceAPIKeyLimits(c *gin.Context, model string) (int, string
 // enforceAPIKeyLimitsChecks 执行全部限额检查；reserve 为 false 时跳过进程内
 // RPM/RPD 计数，供批量入队复用（实际执行时由每个上游调用另行预留）。
 func (h *Handler) enforceAPIKeyLimitsChecks(c *gin.Context, model string, reserve bool) (int, string) {
+	if isChatGPTWebRequest(c) && rejectChatGPTWebEndpoint(c) {
+		return http.StatusBadRequest, "ChatGPT Web keys support only Images endpoints"
+	}
 	var daybreakStatus int
 	var daybreakMessage string
 	model, daybreakStatus, daybreakMessage = h.checkDaybreakRequest(c, model)

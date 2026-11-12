@@ -559,6 +559,7 @@ export default function ImageStudio() {
   const [upscale, setUpscale] = useState('')
   const [style, setStyle] = useState('')
   const [apiKeyID, setAPIKeyID] = useState('')
+  const isWebKey = apiKeys.find(key => String(key.id) === apiKeyID)?.limits?.upstream_channel === 'chatgpt_web'
   const [templateName, setTemplateName] = useState('')
   const [templateTags, setTemplateTags] = useState('')
   const [imageToImageMode, setImageToImageMode] = useState(false)
@@ -1326,10 +1327,10 @@ export default function ImageStudio() {
 
   const changeGenerationModel = (value: string) => {
     setModel(value)
-    setSize(current => sizeForAspect(value, aspectFromSize(current)))
+    if (!isWebKey) setSize(current => sizeForAspect(value, aspectFromSize(current)))
   }
 
-  const selectedAspect = aspectFromSize(size)
+  const selectedAspect = isWebKey && (size === '1:1' || size === '16:9' || size === '9:16') ? size : aspectFromSize(size)
   const selectedPreset = STYLE_PRESETS.find(preset => preset.value === style.trim())
   const advancedCount = [quality !== 'auto', outputFormat !== 'png', background !== 'auto', Boolean(upscale), Boolean(apiKeyID), Boolean(style.trim() && !selectedPreset)].filter(Boolean).length
 
@@ -1343,6 +1344,11 @@ export default function ImageStudio() {
   }
 
   const submitGeneration = () => {
+    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].includes(size) || quality !== 'auto' || background !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+      showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'), 'error')
+      setAdvancedOpen(true)
+      return
+    }
     if (!submitting) void submitJob(createJobPayload(), imageToImageMode ? 'edit' : 'text')
   }
 
@@ -1433,7 +1439,7 @@ export default function ImageStudio() {
 
         <div className="studio-settings-section">
           <Field label={t('images.model')}>
-            <Select value={model} onValueChange={changeGenerationModel} options={IMAGE_MODELS} compact />
+            <Select value={model} onValueChange={changeGenerationModel} options={isWebKey ? IMAGE_MODELS.filter(option => option.value === 'gpt-image-2') : IMAGE_MODELS} compact />
           </Field>
           <div>
             <div className="studio-field-heading">
@@ -1445,7 +1451,7 @@ export default function ImageStudio() {
                 const Icon = ASPECT_RATIO_ICONS[aspect]
                 const aspectLabel = t(`images.aspect.${aspect === '1:1' ? 'square' : aspect === '16:9' ? 'landscape' : aspect === '9:16' ? 'portrait' : 'auto'}`)
                 return (
-                  <button key={aspect} type="button" aria-pressed={selectedAspect === aspect} onClick={() => setSize(sizeForAspect(model, aspect))}>
+                  <button key={aspect} type="button" aria-pressed={selectedAspect === aspect} onClick={() => setSize(isWebKey ? aspect : sizeForAspect(model, aspect))}>
                     <Icon /><span>{aspectLabel}</span>
                   </button>
                 )
@@ -1472,13 +1478,13 @@ export default function ImageStudio() {
           {advancedOpen && (
             <div id="studio-advanced-params" className="studio-advanced-content">
               <Field label={t('images.quality')}>
-                <Select value={quality} onValueChange={setQuality} options={imageQualityOptions(model).map(option => ({ ...option, label: t(`images.workspace.quality.${option.value}`) }))} compact />
+                <Select value={quality} onValueChange={setQuality} options={imageQualityOptions(model).filter(option => !isWebKey || option.value === 'auto').map(option => ({ ...option, label: t(`images.workspace.quality.${option.value}`) }))} compact />
               </Field>
               <Field label={t('images.format')}>
-                <Select value={outputFormat} onValueChange={setOutputFormat} options={FORMAT_OPTIONS} compact />
+                <Select value={outputFormat} onValueChange={setOutputFormat} options={isWebKey ? FORMAT_OPTIONS.filter(option => ['png', 'jpeg', 'webp'].includes(option.value)) : FORMAT_OPTIONS} compact />
               </Field>
               <Field label={t('images.background')}>
-                <Select value={background} onValueChange={setBackground} options={backgroundOptions} compact />
+                <Select value={background} onValueChange={setBackground} options={isWebKey ? backgroundOptions.filter(option => option.value === 'auto') : backgroundOptions} compact />
               </Field>
               <Field label={t('images.localUpscale')}>
                 <Select value={upscale} onValueChange={setUpscale} options={upscaleOptions} compact />
@@ -1495,6 +1501,9 @@ export default function ImageStudio() {
                     compact
                   />
                 </Field>
+                {apiKeys.find(key => String(key.id) === apiKeyID)?.limits?.upstream_channel === 'chatgpt_web' && (
+                  <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>
+                )}
               </div>
               <div className="studio-full-field">
                 <Field label={t('images.style')}>

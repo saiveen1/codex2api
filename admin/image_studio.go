@@ -56,23 +56,29 @@ type imagePromptTemplatePayload struct {
 }
 
 type imageGenerationJobPayload struct {
-	StorageMode      string   `json:"storage_mode,omitempty"`
-	RetentionSeconds int64    `json:"retention_seconds,omitempty"`
-	Prompt           string   `json:"prompt"`
-	Model            string   `json:"model"`
-	Size             string   `json:"size"`
-	Quality          string   `json:"quality"`
-	OutputFormat     string   `json:"output_format"`
-	Background       string   `json:"background"`
-	Style            string   `json:"style"`
-	Upscale          string   `json:"upscale"`
-	StrictSize       *bool    `json:"strict_size,omitempty"`
-	UpscaleFit       string   `json:"upscale_fit,omitempty"`
-	N                int      `json:"n"`
-	APIKeyID         int64    `json:"api_key_id"`
-	TemplateID       int64    `json:"template_id"`
-	InputImages      []string `json:"input_images"`
-	External         bool     `json:"-"`
+	StorageMode       string          `json:"storage_mode,omitempty"`
+	RetentionSeconds  int64           `json:"retention_seconds,omitempty"`
+	Prompt            string          `json:"prompt"`
+	Model             string          `json:"model"`
+	Size              string          `json:"size"`
+	Quality           string          `json:"quality"`
+	OutputFormat      string          `json:"output_format"`
+	Background        string          `json:"background"`
+	Style             string          `json:"style"`
+	Upscale           string          `json:"upscale"`
+	StrictSize        *bool           `json:"strict_size,omitempty"`
+	UpscaleFit        string          `json:"upscale_fit,omitempty"`
+	N                 int             `json:"n"`
+	APIKeyID          int64           `json:"api_key_id"`
+	TemplateID        int64           `json:"template_id"`
+	InputImages       []string        `json:"input_images"`
+	ChannelSnapshot   string          `json:"upstream_channel_snapshot,omitempty"`
+	Mask              json.RawMessage `json:"mask,omitempty"`
+	InputFidelity     json.RawMessage `json:"input_fidelity,omitempty"`
+	Moderation        json.RawMessage `json:"moderation,omitempty"`
+	OutputCompression json.RawMessage `json:"output_compression,omitempty"`
+	PartialImages     json.RawMessage `json:"partial_images,omitempty"`
+	External          bool            `json:"-"`
 }
 
 func normalizeImageJobOutputCount(value int) (int, error) {
@@ -324,6 +330,7 @@ func (h *Handler) CreateImageGenerationJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	req.ChannelSnapshot = imageJobChannel(apiKey)
 	paramsJSON, _ := json.Marshal(req)
 	keyID, keyName, keyMasked := imageJobAPIKeyMeta(apiKey)
 	if h.inspectImageStudioPromptFilter(c, proxy.AppendImageStyleToPrompt(req.Prompt, req.Style), req.Model, keyID, keyName, keyMasked) {
@@ -433,6 +440,7 @@ func (h *Handler) CreateImageEditJob(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	req.ChannelSnapshot = imageJobChannel(apiKey)
 	paramsJSON, _ := json.Marshal(req)
 	keyID, keyName, keyMasked := imageJobAPIKeyMeta(apiKey)
 	if h.inspectImageStudioPromptFilter(c, proxy.AppendImageStyleToPrompt(req.Prompt, req.Style), req.Model, keyID, keyName, keyMasked) {
@@ -938,6 +946,10 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 			return
 		}
 	}
+	if err := h.validateImageJobChannel(ctx, req, apiKey); err != nil {
+		h.markImageJobFailedDetached(jobID, err.Error(), 0, opts.queueOwner)
+		return
+	}
 	log.Printf("[image-studio] job=%d started model=%s size=%s quality=%s format=%s background=%s api_key=%s prompt_chars=%d",
 		jobID,
 		imageLogValue(req.Model),
@@ -971,10 +983,11 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 	if imageProxy == nil {
 		imageProxy = proxy.NewHandler(h.store, h.db, nil, nil)
 	}
-	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatch(req.N, func() ([]byte, int, error) {
-		return imageProxy.GenerateImageOnceForAdmin(ctx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
+	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
+		outputCtx := imageJobOutputContext(ctx, req, jobID, index)
+		return imageProxy.GenerateImageOnceForAdmin(outputCtx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
 	})
-	if shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
+	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
 		pngErr := err
 		pngStatus := upstreamStatus
 		fallbackReq := jpegFallbackImageJobRequest(req)
@@ -1090,6 +1103,7 @@ func buildAdminImageEditRequest(req imageGenerationJobPayload) ([]byte, error) {
 		images[i] = map[string]string{"image_url": img}
 	}
 	body["images"] = images
+	addWebImageJobOptions(body, req)
 	if upstreamSize := upstreamImageJobSize(req); upstreamSize != "" && upstreamSize != "auto" {
 		body["size"] = upstreamSize
 	}
@@ -1122,6 +1136,10 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 			return
 		}
 	}
+	if err := h.validateImageJobChannel(ctx, req, apiKey); err != nil {
+		h.markImageJobFailedDetached(jobID, err.Error(), 0, opts.queueOwner)
+		return
+	}
 	log.Printf("[image-studio] job=%d started mode=edit model=%s image_count=%d prompt_chars=%d",
 		jobID,
 		imageLogValue(req.Model),
@@ -1141,10 +1159,11 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 	if imageProxy == nil {
 		imageProxy = proxy.NewHandler(h.store, h.db, nil, nil)
 	}
-	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatch(req.N, func() ([]byte, int, error) {
-		return imageProxy.GenerateImageEditForAdmin(ctx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
+	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
+		outputCtx := imageJobOutputContext(ctx, req, jobID, index)
+		return imageProxy.GenerateImageEditForAdmin(outputCtx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
 	})
-	if shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
+	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
 		pngErr := err
 		pngStatus := upstreamStatus
 		fallbackReq := jpegFallbackImageJobRequest(req)
@@ -1239,6 +1258,7 @@ func buildAdminImageGenerationRequest(req imageGenerationJobPayload) ([]byte, er
 		"prompt":          proxy.AppendImageStyleToPrompt(req.Prompt, req.Style),
 		"response_format": "b64_json",
 	}
+	addWebImageJobOptions(body, req)
 	if upstreamSize := upstreamImageJobSize(req); upstreamSize != "" && upstreamSize != "auto" {
 		body["size"] = upstreamSize
 	}
@@ -1261,6 +1281,9 @@ func buildAdminImageGenerationRequest(req imageGenerationJobPayload) ([]byte, er
 // compatibility adjustment never changes the promised final dimensions.
 func upstreamImageJobSize(req imageGenerationJobPayload) string {
 	size := strings.TrimSpace(req.Size)
+	if req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb {
+		return size
+	}
 	width, height, ok := imageupscale.ParseSize(size)
 	if !ok || !strictImageJobSize(req) {
 		return size
@@ -1279,6 +1302,10 @@ func strictImageJobSize(req imageGenerationJobPayload) bool {
 }
 
 func runImageJobBatch(count int, execute func() ([]byte, int, error)) ([]byte, int, []string, error) {
+	return runImageJobBatchIndexed(count, false, func(int) ([]byte, int, error) { return execute() })
+}
+
+func runImageJobBatchIndexed(count int, stopOnFailure bool, execute func(int) ([]byte, int, error)) ([]byte, int, []string, error) {
 	count, err := normalizeImageJobOutputCount(count)
 	if err != nil {
 		return nil, 0, nil, err
@@ -1289,20 +1316,29 @@ func runImageJobBatch(count int, execute func() ([]byte, int, error)) ([]byte, i
 	lastStatus := 0
 	successStatus := 0
 	for index := 0; index < count; index++ {
-		responseJSON, status, callErr := execute()
+		responseJSON, status, callErr := execute(index)
 		lastStatus = status
 		if callErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("output %d: %s", index+1, callErr.Error()))
+			if stopOnFailure {
+				break
+			}
 			continue
 		}
 		var response map[string]any
 		if err := json.Unmarshal(responseJSON, &response); err != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("output %d: invalid upstream response", index+1))
+			if stopOnFailure {
+				break
+			}
 			continue
 		}
 		data, ok := response["data"].([]any)
 		if !ok || len(data) == 0 {
 			partialErrors = append(partialErrors, fmt.Sprintf("output %d: upstream returned no image", index+1))
+			if stopOnFailure {
+				break
+			}
 			continue
 		}
 		if combined == nil {

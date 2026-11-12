@@ -43,12 +43,16 @@ func (h *Handler) runPipelinedImageJob(parent context.Context, id int64, owner s
 			warnings = append(warnings, ctx.Err().Error())
 			break
 		}
-		n, notes, err := h.runPipelineOutput(ctx, id, req, key, p)
+		outputCtx := imageJobOutputContext(ctx, req, id, index)
+		n, notes, err := h.runPipelineOutput(outputCtx, id, req, key, p)
 		p.Release()
 		delivered += n
 		warnings = append(warnings, notes...)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("output %d: %v", index+1, err))
+			if req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb {
+				break
+			}
 		}
 	}
 	elapsed := int(time.Since(start).Milliseconds())
@@ -79,7 +83,7 @@ func (h *Handler) runPipelineOutput(ctx context.Context, id int64, req imageGene
 		}, len(payload.InputImages) > 0, key)
 	}
 	body, status, err := call(req)
-	if shouldFallbackImageJobToJPEG(req, status, err) && len(body) == 0 {
+	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, status, err) && len(body) == 0 {
 		req = jpegFallbackImageJobRequest(req)
 		body, status, err = call(req)
 	}

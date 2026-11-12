@@ -498,6 +498,9 @@ func (h *Handler) applyUpstreamChannelFilterWithGate(c *gin.Context, effectiveMo
 		}
 	}
 	switch requestUpstreamChannel(c) {
+	case database.UpstreamChannelChatGPTWeb:
+		// Web images use a separate capability and quota gate.
+		return func(*auth.Account) bool { return false }
 	case database.UpstreamChannelGrok:
 		return combine(grokChannelAccountFilterWithGate(effectiveModel, gate))
 	case database.UpstreamChannelAntigravity:
@@ -3541,6 +3544,9 @@ func (h *Handler) authMiddlewareWithQuotaRead(allowQuotaRead bool) gin.HandlerFu
 		c.Set(contextAPIKeyName, strings.TrimSpace(apiKeyRow.Name))
 		c.Set(contextAPIKeyMasked, security.MaskAPIKey(apiKeyRow.Key))
 		c.Set(contextAPIKeyRow, apiKeyRow)
+		if rejectChatGPTWebEndpoint(c) {
+			return
+		}
 		if rejectExternalSchedulerIngress(c, apiKeyRow) {
 			c.Abort()
 			return

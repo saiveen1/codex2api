@@ -5495,6 +5495,16 @@ func (s *Store) ResolveProxyForAccount(acc *Account) string {
 // read lock across selection prevents an account pin from being rejected under
 // one pool configuration and then authorized as direct under another.
 func (s *Store) resolveProxyForAccountSnapshot(acc *Account) (string, bool) {
+	return s.resolveProxyForAccountRoute(acc, true)
+}
+
+// ResolveChatGPTWebProxy never treats Resin as an implicit exit: the web worker
+// receives the concrete proxy itself and does not traverse the Codex executor.
+func (s *Store) ResolveChatGPTWebProxy(acc *Account) (string, bool) {
+	return s.resolveProxyForAccountRoute(acc, false)
+}
+
+func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (string, bool) {
 	if s == nil {
 		return "", false
 	}
@@ -5512,7 +5522,7 @@ func (s *Store) resolveProxyForAccountSnapshot(acc *Account) (string, bool) {
 		accountID = acc.DBID
 		accountProxy = strings.TrimSpace(acc.ProxyURL)
 		groupIDs = cloneInt64Slice(acc.GroupIDs)
-		resinCarriesEgress = ResinEgressEnabled() && !acc.isRelayStyleLocked()
+		resinCarriesEgress = allowResin && ResinEgressEnabled() && !acc.isRelayStyleLocked()
 		acc.mu.RUnlock()
 	}
 
@@ -10215,7 +10225,7 @@ func (s *Store) SetAPIKeyUpstreamChannel(apiKeyID int64, channel string) {
 		return
 	}
 	channel = strings.ToLower(strings.TrimSpace(channel))
-	if channel != database.UpstreamChannelCodex && channel != database.UpstreamChannelGrok && channel != database.UpstreamChannelAntigravity && channel != database.UpstreamChannelClaude {
+	if channel != database.UpstreamChannelCodex && channel != database.UpstreamChannelGrok && channel != database.UpstreamChannelAntigravity && channel != database.UpstreamChannelClaude && channel != database.UpstreamChannelChatGPTWeb {
 		channel = ""
 	}
 	s.apiKeyGroupsMu.Lock()
@@ -10289,6 +10299,12 @@ func (s *Store) LoadAPIKeyAllowedGroups(ctx context.Context) error {
 // APIKeyAllowsAccount 判断某 API Key 是否允许调度到该账号。分组白名单与套餐白名单
 // 各自非空时都必须命中(AND 语义);任一为空表示该维度不限。
 func (s *Store) APIKeyAllowsAccount(apiKeyID int64, acc *Account) bool {
+	return s.apiKeyAllowsAccount(apiKeyID, acc, false)
+}
+
+// Web keys are fail-closed in native scheduling; only the explicit web admission
+// helper may apply their shared account/group/plan authorization gates.
+func (s *Store) apiKeyAllowsAccount(apiKeyID int64, acc *Account, web bool) bool {
 	if s == nil || apiKeyID <= 0 || acc == nil {
 		return true
 	}
@@ -10300,6 +10316,10 @@ func (s *Store) APIKeyAllowsAccount(apiKeyID int64, acc *Account) bool {
 	s.apiKeyGroupsMu.RUnlock()
 	// 渠道限定是硬门：grok 渠道只允许 Grok 账号，codex 渠道排除 Grok 账号。
 	switch channel {
+	case database.UpstreamChannelChatGPTWeb:
+		if !web {
+			return false
+		}
 	case database.UpstreamChannelGrok:
 		if !acc.IsGrokAPI() {
 			return false

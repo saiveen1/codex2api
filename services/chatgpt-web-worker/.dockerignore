@@ -1,0 +1,16 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!app.py
+!backend.py
+!contract.py
+!conversation.py
+!executor.py
+!ledger.py
+!proof.py
+!transport.py
+!LICENSE
+!NOTICE
+!PROVENANCE.md
+!README.md

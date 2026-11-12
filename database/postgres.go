@@ -491,6 +491,11 @@ func New(driver string, dsn string, schema ...string) (*DB, error) {
 		if err := db.ensureCodexRefreshSchema(ctx); err != nil {
 			return nil, fmt.Errorf("初始化 Codex 刷新保护表失败: %w", err)
 		}
+		if err := db.ensureChatGPTWebSchema(ctx); err != nil {
+			backgroundTaskCancel()
+			_ = conn.Close()
+			return nil, fmt.Errorf("initialize ChatGPT Web state: %w", err)
+		}
 		if err := db.ensureIntelligenceCheckSchema(ctx); err != nil {
 			return nil, fmt.Errorf("initialize intelligence checks: %w", err)
 		}
@@ -1901,6 +1906,7 @@ type APIKeyLimits struct {
 	//   - grok:    仅 Grok 账号（此时不再要求账号声明模型，直接透传请求模型）
 	//   - antigravity: Antigravity 管理渠道
 	//   - claude:      仅 Claude OAuth / Anthropic Messages 账号
+	//   - chatgpt_web: 显式启用的 ChatGPT Web 图片渠道（不参与原生调度）
 	UpstreamChannel string `json:"upstream_channel,omitempty"`
 	// ScopeLimits 是「该 Key × 某账号分组 / 某账号」维度的用量上限（issue #439）。
 	// 与上面的 Cost/Token 限额不同，它只统计该 Key 打到对应 scope 的用量，超额后默认
@@ -1926,6 +1932,7 @@ const (
 	UpstreamChannelGrok        = "grok"
 	UpstreamChannelAntigravity = "antigravity"
 	UpstreamChannelClaude      = "claude"
+	UpstreamChannelChatGPTWeb  = "chatgpt_web"
 )
 
 // ResolveUpstreamChannel 归一 Key 的上游渠道限定；未知值一律视为不限（auto）。
@@ -1939,6 +1946,8 @@ func (l APIKeyLimits) ResolveUpstreamChannel() string {
 		return UpstreamChannelAntigravity
 	case UpstreamChannelClaude:
 		return UpstreamChannelClaude
+	case UpstreamChannelChatGPTWeb:
+		return UpstreamChannelChatGPTWeb
 	}
 	return UpstreamChannelAuto
 }

@@ -69,6 +69,7 @@ func (h *Handler) CreateExternalImageJob(c *gin.Context) {
 		return
 	}
 	req.APIKeyID = apiKey.ID
+	req.ChannelSnapshot = imageJobChannel(apiKey)
 	keyID, keyName, keyMasked := imageJobAPIKeyMeta(apiKey)
 	imageProxy := h.imageProxy
 	if imageProxy == nil {

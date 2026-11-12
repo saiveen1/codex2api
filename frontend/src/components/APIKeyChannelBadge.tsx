@@ -4,14 +4,15 @@ import type { UpstreamChannel } from '../types'
 import ChannelLogo from './ChannelLogo'
 import { Badge } from './ui/badge'
 
-const CHANNEL_NAMES: Record<UpstreamChannel, string> = {
+const CHANNEL_NAMES: Record<UpstreamChannel | 'chatgpt_web', string> = {
   codex: 'Codex',
   grok: 'Grok',
   antigravity: 'Antigravity',
   claude: 'Claude',
+  chatgpt_web: 'ChatGPTWeb',
 }
 
-export default function APIKeyChannelBadge({ channel }: { channel?: UpstreamChannel }) {
+export default function APIKeyChannelBadge({ channel }: { channel?: UpstreamChannel | 'chatgpt_web' }) {
   const { t } = useTranslation()
   const known = channel && Object.prototype.hasOwnProperty.call(CHANNEL_NAMES, channel) ? channel : undefined
   return (
@@ -20,7 +21,7 @@ export default function APIKeyChannelBadge({ channel }: { channel?: UpstreamChan
       title={t(known ? `apiKeys.limits.upstreamChannel${CHANNEL_NAMES[known]}` : 'apiKeys.limits.upstreamChannelHint.auto')}
       className={`gap-1 border-transparent bg-muted/70 px-1.5 py-0 text-[11px] font-semibold ${known ? 'text-foreground' : 'text-muted-foreground'}`}
     >
-      {known ? <ChannelLogo channel={known} size={12} /> : <Waypoints className="size-3" />}
+      {known ? <ChannelLogo channel={known === 'chatgpt_web' ? 'codex' : known} size={12} /> : <Waypoints className="size-3" />}
       {known ? CHANNEL_NAMES[known] : t('apiKeys.limits.upstreamChannelAutoTab')}
     </Badge>
   )

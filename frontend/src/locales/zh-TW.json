@@ -1,4 +1,5 @@
 {
+  "chatgptWeb": {"title":"ChatGPT Web 圖片", "config":"僅透過環境變數設定：CHATGPT_WEB_ENABLED（預設 false）、CHATGPT_WEB_WORKER_URL、CHATGPT_WEB_WORKER_SECRET 和 CHATGPT_WEB_TIMEOUT_SECONDS。此處不顯示其值。", "deployment":"部署狀態", "enabled":"已啟用", "disabled":"未啟用", "configured":"已設定", "notConfigured":"未設定", "refresh":"重新整理", "check":"檢查環境（不產生圖片）", "enable":"啟用", "disable":"停用", "status":"狀態", "capabilities":"能力", "quota":"圖片額度", "unknown":"未知", "reset":"重設", "observed":"觀察時間", "error":"錯誤", "executions":"最近執行階段（最多 50 筆）", "empty":"無", "loadError":"無法載入網頁圖片設定。", "actionError":"網頁帳號操作失敗。", "account":"帳號", "resultUnknown":"結果未知；不要自動重新提交。"},
   "qualityTest": {
     "studioTab": "檢測工作台",
     "recordsTab": "檢測記錄",
@@ -341,8 +342,10 @@
       "upstreamChannelGrok": "Grok",
       "upstreamChannelAntigravity": "Antigravity",
       "upstreamChannelClaude": "Claude",
+      "upstreamChannelChatGPTWeb": "ChatGPT Web",
       "upstreamChannelAutoTab": "自動",
       "upstreamChannelHint": {
+        "chatgpt_web": "僅支援圖片（gpt-image-2）；精確尺寸和遮罩等不支援的選項會明確拒絕，不會靜默忽略。多張圖片可能部分失敗。",
         "auto": "不限渠道：請求依模型路由到 Codex、Grok、Antigravity 或 Claude 帳號。",
         "codex": "此 Key 只調度 Codex 帳號，不會使用其他渠道帳號。",
         "grok": "此 Key 只調度 Grok 帳號，並使用該渠道的模型目錄。",

@@ -133,6 +133,9 @@ func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRo
 		return records
 	}
 	h.syncAPIKeyAllowedGroups(row)
+	if row.Limits.ResolveUpstreamChannel() == database.UpstreamChannelChatGPTWeb {
+		return h.chatGPTWebModelRecords(ctx, row)
+	}
 	now := time.Now()
 	accounts := h.store.Accounts()
 	sort.SliceStable(accounts, func(i, j int) bool {

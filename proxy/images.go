@@ -1246,6 +1246,10 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	if releaseAPIKeyConcurrency != nil {
 		defer releaseAPIKeyConcurrency()
 	}
+	if isChatGPTWebRequest(c) {
+		h.forwardChatGPTWebImages(c, rawBody, imageModel, promptForRequest, nil, "", responseFormat, stream)
+		return
+	}
 	if isGrokImageModel(imageModel) {
 		h.forwardGrokImagesRequest(c, "/v1/images/generations", imageModel, requestModel, logEffectiveModel, promptForRequest, responseFormat, grokImagesParamsFromJSON(rawBody), nil, stream)
 		return
@@ -1383,6 +1387,10 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 	}
 	if releaseAPIKeyConcurrency != nil {
 		defer releaseAPIKeyConcurrency()
+	}
+	if isChatGPTWebRequest(c) {
+		h.forwardChatGPTWebImages(c, chatGPTWebFormOptions(c), imageModel, promptForRequest, images, maskDataURL, responseFormat, stream)
+		return
 	}
 	if isGrokImageModel(imageModel) {
 		h.forwardGrokImagesRequest(c, "/v1/images/edits", imageModel, requestModel, logEffectiveModel, promptForRequest, responseFormat, grokImagesParamsFromForm(c), images, stream)
@@ -1522,6 +1530,10 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	}
 	if releaseAPIKeyConcurrency != nil {
 		defer releaseAPIKeyConcurrency()
+	}
+	if isChatGPTWebRequest(c) {
+		h.forwardChatGPTWebImages(c, rawBody, imageModel, promptForRequest, images, maskDataURL, responseFormat, stream)
+		return
 	}
 	if isGrokImageModel(imageModel) {
 		h.forwardGrokImagesRequest(c, "/v1/images/edits", imageModel, requestModel, logEffectiveModel, promptForRequest, responseFormat, grokImagesParamsFromJSON(rawBody), images, stream)

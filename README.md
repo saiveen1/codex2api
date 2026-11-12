@@ -592,7 +592,8 @@ Join the group to discuss deployment, usage, and development questions.
 ## Disclaimer and License
 
 - This project is for learning, research, and technical discussion only.
-- This project is released under the `MIT License`.
+- The gateway retains its existing `MIT License` notice. The optional `services/chatgpt-web-worker/` component is `AGPL-3.0-only`; its own LICENSE, NOTICE and PROVENANCE govern that subtree. Review the applicable source/distribution obligations before publishing a combined deployment; process separation is not assumed to exempt them.
+- The opt-in [ChatGPT Web image integration](docs/chatgpt-web-images.md) is separate from the default Codex channel and requires independent live verification.
 - The project provides no warranty for direct or indirect consequences. Production use is at your own risk.
 
 ---

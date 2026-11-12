@@ -249,6 +249,7 @@ func loadQueueInputs(ctx context.Context, req *imageGenerationJobPayload) error 
 }
 
 func (h *Handler) persistQueuedImageJob(c *gin.Context, req imageGenerationJobPayload, key *database.APIKeyRow, status int, external bool) {
+	req.ChannelSnapshot = imageJobChannel(key)
 	if h.imageQueue != nil && h.imageQueue.maxQueuedPerKey > 0 && key != nil && key.ID > 0 {
 		queued, err := h.db.CountQueuedImageJobsByKey(c.Request.Context(), key.ID)
 		if err != nil {
@@ -451,6 +452,10 @@ func (h *Handler) runClaimedImageJob(ctx context.Context, id int64, owner string
 	}
 	if !imageJobKeyUsable(key) {
 		fail(fmt.Errorf("image job API key is disabled or deleted"))
+		return
+	}
+	if err = h.validateImageJobChannel(jobCtx, req, key); err != nil {
+		fail(err)
 		return
 	}
 	if h.imageQueue != nil && h.imageQueue.pipeline {

@@ -4,6 +4,11 @@
 
 ## 文档列表
 
+### 可选 ChatGPT Web 图片通道
+- [网页文生图 / 图生图集成说明](chatgpt-web-images.md)：默认关闭、账号环境、参数边界与回退。
+- [私网执行协议](chatgpt-web-worker-protocol.md)：持久提交保护、阶段事件和敏感信息边界。
+- 独立 Python 服务的来源与许可见 `services/chatgpt-web-worker/PROVENANCE.md`；本地 mock 通过不代表网页真实账号已验收。
+
 ### 1. API 文档 ([API.md](API.md))
 - 所有 API 端点说明
 - 请求/响应示例

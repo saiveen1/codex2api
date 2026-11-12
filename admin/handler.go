@@ -1027,6 +1027,8 @@ func parseUsageChannel(c *gin.Context) string {
 		return database.UpstreamChannelAntigravity
 	case database.UpstreamChannelClaude:
 		return database.UpstreamChannelClaude
+	case database.UpstreamChannelChatGPTWeb:
+		return database.UpstreamChannelChatGPTWeb
 	}
 	return ""
 }
@@ -1139,6 +1141,11 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			h.invalidateAccountSnapshotCaches()
 		}
 	})
+	api.GET("/chatgpt-web", h.GetChatGPTWebStatus)
+	api.GET("/chatgpt-web/accounts", h.ListChatGPTWebAccounts)
+	api.PUT("/chatgpt-web/accounts/:id", h.SetChatGPTWebAccount)
+	api.POST("/chatgpt-web/accounts/:id/check", h.CheckChatGPTWebAccount)
+	api.GET("/chatgpt-web/executions", h.ListChatGPTWebExecutions)
 	api.GET("/stats", h.GetStats)
 	api.GET("/accounts", h.ListAccounts)
 	api.GET("/accounts/analysis", h.GetAccountAnalysis)
