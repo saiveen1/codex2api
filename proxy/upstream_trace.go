@@ -167,8 +167,9 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 		id := ""
 		if header != "" && auth.ValidateUpstreamRequestIDHeader(header) == nil {
 			id = resp.Header.Get(header)
-		} else if header == "" {
-			for _, name := range []string{"X-Request-Id", "Request-Id", "X-Goog-Request-Id"} {
+		}
+		if strings.TrimSpace(id) == "" {
+			for _, name := range []string{"X-Request-Id", "Request-Id", "X-Openai-Request-Id", "X-Oai-Request-Id", "X-Goog-Request-Id"} {
 				if id = resp.Header.Get(name); strings.TrimSpace(id) != "" {
 					break
 				}

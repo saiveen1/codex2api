@@ -314,7 +314,7 @@ func pipelineRetryMetadata(body []byte) []byte {
 // Per-preparation bounded encoder: the generic shared encoder otherwise keeps
 // large history windows for many CPU slots even after requests finish.
 func compressPipelineRequestBody(body []byte) ([]byte, string) {
-	if len(body) == 0 || !codexRequestCompressionEnabled() {
+	if !shouldCompressCodexRequestBody(body) {
 		return body, ""
 	}
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(1<<20))
@@ -322,7 +322,7 @@ func compressPipelineRequestBody(body []byte) ([]byte, string) {
 		return body, ""
 	}
 	defer encoder.Close()
-	return encoder.EncodeAll(body, nil), "zstd"
+	return selectCodexRequestEncoding(body, encoder.EncodeAll(body, nil))
 }
 
 type QueuedImageResult struct {

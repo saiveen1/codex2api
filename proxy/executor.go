@@ -778,12 +778,8 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		if err := applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers); err != nil {
 			return nil, err
 		}
-		// Content-Encoding 在通用头装配之后设置：真实客户端也是在编码完成时才补这个头
-		// （codex-rs/http-client/src/request.rs prepare_encoded_json），且账号自定义头
-		// 不该有能力声明一个与实际字节不符的编码。
-		if contentEncoding != "" {
-			req.Header.Set("Content-Encoding", contentEncoding)
-		}
+		// Both compressed and identity bodies own their transport headers.
+		applyCodexBodyEncoding(req.Header, contentEncoding)
 		// routing hint 由网关按最终出站 body 合成，须在账号自定义头之后设置。
 		if pipelineFile != nil {
 			stat, err := input.Stat()
@@ -1195,6 +1191,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	if err := applyCodexRequestHeaders(req, account, accessToken, cacheKey, apiKey, deviceCfg, headers); err != nil {
 		return nil, err
 	}
+	applyCodexBodyEncoding(req.Header, "")
 	// routing hint 由网关按最终出站 body 合成，须在账号自定义头之后设置。
 	ApplyCodexRoutingHint(req.Header, account, requestBody)
 

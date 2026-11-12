@@ -78,3 +78,19 @@ func TestUpstreamTraceAccountBoundRouteSnapshot(t *testing.T) {
 		t.Fatalf("direct snapshot mislabeled: %s", input.UpstreamProxyName)
 	}
 }
+
+func TestUpstreamTraceCodexRequestIDFallback(t *testing.T) {
+	for _, override := range []string{"", "Missing-Vendor-Trace", "Authorization"} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		attachUpstreamTrace(c, nil)
+		a := &auth.Account{DBID: 8, UpstreamRequestIDHeader: override}
+		header := make(http.Header)
+		header.Set("x-oai-request-id", "req_12345678")
+		header.Set("Authorization", "must-not-use")
+		beginUpstreamTrace(c.Request.Context(), a, "", false)(&http.Response{Header: header})
+		if got := snapshotUpstreamTrace(c.Request.Context()).UpstreamRequestID; got != "req_12345678" {
+			t.Fatalf("override=%q request ID=%q", override, got)
+		}
+	}
+}

@@ -32,14 +32,15 @@ func decodeZstd(t *testing.T, data []byte) []byte {
 }
 
 func TestCompressCodexRequestBodyDefaultsToEnabled(t *testing.T) {
-	// 默认开启：真实 Codex CLI 对 ChatGPT 后端的 /responses 本来就压，
-	// 默认关等于默认不像真实客户端。
+	// The switch permits compatible, beneficial compression; it does not force
+	// every request to be compressed.
 	if !DefaultRuntimeSettings().CodexRequestCompression {
 		t.Fatal("DefaultRuntimeSettings 未默认开启压缩")
 	}
 
 	withCompressionSetting(t, true)
-	body := []byte(`{"model":"gpt-5.4","instructions":"","input":[{"role":"user","content":"hello"}]}`)
+	t.Setenv("CODEX_REQUEST_COMPRESSION", "")
+	body := []byte(`{"model":"gpt-5.4","input":"` + string(bytes.Repeat([]byte("hello "), 100)) + `"}`)
 
 	got, encoding := CompressCodexRequestBody(body)
 	if encoding != "zstd" {
@@ -68,7 +69,7 @@ func TestCompressCodexRequestBodyRespectsSystemSetting(t *testing.T) {
 }
 
 func TestCompressCodexRequestBodyEnvOverridesSystemSetting(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4"}`)
+	body := []byte(`{"input":"` + string(bytes.Repeat([]byte("hello "), 100)) + `"}`)
 
 	// env 是部署级逃生阀：DB 不可达、后台打不开时仍要能强制切换，因此优先于系统设置。
 	t.Run("env 强制开启", func(t *testing.T) {

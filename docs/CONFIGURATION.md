@@ -117,7 +117,7 @@ Codex2API 采用三层配置架构：
 | `CODEX_SESSION_AFFINITY_TTL` | 否 | `1h` | Codex 会话到账号/代理的黏性 TTL，支持 `1h`、`90m` 或秒数 |
 | `CODEX_COMPACTION_AFFINITY_TTL` | 否 | `168h` | 加密压缩状态的来源亲和 TTL。缓存仅保存密文的 SHA-256 摘要、来源账号和兼容域；已知状态不会跨 Codex 官方、不同 Responses 中转或 Grok 上游流转 |
 | `CODEX_FINGERPRINT_DEBUG` | 否 | `false` | 输出脱敏指纹策略诊断日志，不记录 token |
-| `CODEX_REQUEST_COMPRESSION` | 否 | 跟随系统设置 | 覆盖系统设置「Codex HTTP 请求体压缩」。`zstd`/`on`/`true`/`1` 强制开启，`off`/`false`/`0` 强制关闭，未设置或取值无法识别时以系统设置为准。作为部署级逃生阀存在：DB 不可达或后台打不开时仍可整机切换 |
+| `CODEX_REQUEST_COMPRESSION` | 否 | 跟随系统设置 | 覆盖系统设置「Codex HTTP 请求体压缩」。`zstd`/`on`/`true`/`1` 启用保守首发压缩（仍受下述兼容保护），`off`/`false`/`0` 强制关闭，未设置或取值无法识别时以系统设置为准。作为部署级逃生阀存在：DB 不可达或后台打不开时仍可整机切换 |
 | `CODEX_MULTI_AGENT_V2_COMPAT` | 否 | `false` | 实验性：为官方 Codex 客户端的 Multi-Agent v2 协作工具启用明文参数兼容。仅原生 Codex 账号生效，重启生效；开启后匹配的 v2 子任务正文会以明文发送。详见 `docs/CODEX_MULTI_AGENT_V2_COMPAT.md` |
 | `CODEX_TELEMETRY_ENABLED` | 否 | 跟随系统设置 | 设为 `false` 时无视管理后台「客户端遥测」开关，部署层强制关闭模拟遥测外发 |
 | `CODEX_STATSIG_API_KEY` | 否 | 内置公开 key | 覆盖 Codex Desktop/CLI 共用的公开 Statsig SDK key，仅遥测开启时使用 |
@@ -707,3 +707,13 @@ Codex 刷新新增 `codex_oauth_refresh_attempts` 保护表，启动时自动创
 ## 自适应降智检测
 
 降智检测支持可配置上限的指数退避、恢复加速与复发记忆。默认关闭，配置与状态迁移规则见 [自适应降智检测](INTELLIGENCE_BACKOFF.md)。
+
+## Codex HTTP 首发压缩兼容策略
+
+`codex_request_compression` 开启时，只对最终 JSON 不超过 128 KiB、编码后确实更小且为完整单块 zstd 帧的请求发送压缩正文。大请求在创建编码器/分配压缩缓冲前直接选择 identity；多块、拼接或无法确认的编码结果也在首次发送前使用原始 JSON，不删减或重新序列化正文。
+
+这是网关侧针对压缩兼容问题的保守策略，**不是 OpenAI 的请求总大小限制，也不保证所有 400 都由压缩造成**。部分多块帧能够被接受，但末块 raw、空结束块等候选存在反例，不能作为通用修复。代价是大请求上传字节增加，收益是不先发一次已知风险帧，也不支付其压缩 CPU/缓冲开销。
+
+普通 Codex HTTP `/responses` 与图片流水线共用规则；WebSocket 和明文 `/responses/compact` 不受压缩选择影响。出站编码、长度由实际正文决定，账号自定义的 Content-Encoding/Content-Length/Transfer-Encoding 不能覆盖它们。
+
+此策略不新增 400 后自动回退或额外请求；已有用户选择的持续重试策略保持不变。关闭压缩仍使所有请求直接发送 identity，环境变量启用压缩也不会绕过单块兼容保护。
