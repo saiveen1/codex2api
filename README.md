@@ -6,6 +6,14 @@ A personal fork of Codex2API, an OpenAI / Anthropic-compatible gateway. This REA
 
 ## Fork features
 
+### Integrated OAuth gateway management
+
+- Import `identifier----password----TOTP_SECRET` or JSON material in the existing admin UI, authorize through an explicitly selected external gateway, and insert results directly into the local account pool. No separate bridge service is required.
+- Supports per-account OAuth proxies, execution-machine proxy checks, separate runtime proxies, durable task tracking and safe archives. Unknown outcomes never trigger a new authorization or a blind import retry.
+- Reuses administrator authentication and the application database; configure `CODEX_CRED_ENCRYPTION_KEY` before enabling. This release supports manual authorization for new accounts, not existing-account replacement or automatic 401 recovery.
+
+See [Setup, API and limits](docs/oauth-gateway.md).
+
 ### Privacy-conscious request diagnostics
 
 Implemented in `a6179fb` and `4939c24`.

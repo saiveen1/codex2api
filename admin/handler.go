@@ -46,6 +46,10 @@ import (
 
 // Handler 管理后台 API 处理器
 type Handler struct {
+	oauthGateway             *oauthGatewayRuntime
+	oauthGatewayOnce         sync.Once
+	oauthGatewayWG           sync.WaitGroup
+	oauthGatewayInitErr      error
 	intelligenceDeviceConfig *proxy.DeviceProfileConfig
 	intelligenceOnce         sync.Once
 	intelligenceWG           sync.WaitGroup
@@ -1153,6 +1157,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			h.invalidateAccountSnapshotCaches()
 		}
 	})
+	api.Any("/oauth-gateway/*path", h.handleOAuthGateway)
 	api.GET("/chatgpt-web", h.GetChatGPTWebStatus)
 	api.GET("/chatgpt-web/accounts", h.ListChatGPTWebAccounts)
 	api.PUT("/chatgpt-web/accounts/:id", h.SetChatGPTWebAccount)

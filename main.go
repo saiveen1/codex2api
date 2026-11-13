@@ -540,6 +540,7 @@ func main() {
 	}
 	adminHandler.StartPromptIntelligence(backgroundCtx)
 	adminHandler.StartIntelligenceChecks(backgroundCtx, deviceCfg)
+	adminHandler.StartOAuthGateway(backgroundCtx)
 	adminHandler.RegisterRoutes(r)
 
 	// 管理后台前端静态文件
@@ -749,6 +750,7 @@ func main() {
 	adminHandler.WaitScheduledConnectionTests()
 	adminHandler.WaitQualityTests()
 	adminHandler.WaitIntelligenceChecks()
+	adminHandler.WaitOAuthGateway()
 	wsKeepalive.Stop()
 	wsrelay.ShutdownExecutor()
 	if !proxy.DrainResponseCacheBackendWrites(2 * time.Second) {

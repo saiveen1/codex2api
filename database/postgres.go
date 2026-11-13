@@ -8861,6 +8861,10 @@ func (db *DB) InsertAccountWithUpstream(ctx context.Context, name, platform, acc
 // insertAccountRowWithFamily keeps legacy insert SQL untouched while ensuring
 // every newly-created account immediately receives its stable family key.
 func (db *DB) insertAccountRowWithFamily(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, args ...interface{}) (int64, error) {
+	return db.insertAccountRowWithFamilyGroups(ctx, postgresQuery, sqliteQuery, credentials, nil, args...)
+}
+
+func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, groupIDs []int64, args ...interface{}) (int64, error) {
 	candidate := credentialFamilyCandidate(credentials)
 	returnID := int64(0)
 	err := db.withSQLiteWriteLock(ctx, func() error {
@@ -8885,6 +8889,11 @@ func (db *DB) insertAccountRowWithFamily(ctx context.Context, postgresQuery, sql
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE accounts SET credential_family_id=$1 WHERE id=$2 AND COALESCE(credential_family_id,'')=''`, candidate, returnID); err != nil {
 			return err
+		}
+		if len(groupIDs) > 0 {
+			if err := db.batchReplaceAccountGroups(ctx, tx, []int64{returnID}, groupIDs); err != nil {
+				return err
+			}
 		}
 		return tx.Commit()
 	})

@@ -11,6 +11,7 @@ import { ThemeProvider } from './hooks/useTheme'
 import Dashboard from './pages/Dashboard'
 
 const Accounts = lazy(() => import('./pages/Accounts'))
+const OAuthGateway = lazy(() => import('./pages/OAuthGateway'))
 const Operations = lazy(() => import('./pages/Operations'))
 const OperationsErrors = lazy(() => import('./pages/OperationsErrors'))
 const RuntimeStatus = lazy(() => import('./pages/RuntimeStatus'))
@@ -64,6 +65,7 @@ function AdminApp() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/accounts" element={<Accounts />} />
+          <Route path="/oauth-gateway" element={<OAuthGateway />} />
           <Route path="/accounts/grok" element={<Accounts />} />
           <Route path="/accounts/antigravity" element={<Accounts />} />
           <Route path="/accounts/claude" element={<Accounts />} />

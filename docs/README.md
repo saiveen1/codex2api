@@ -4,6 +4,9 @@
 
 ## 文档列表
 
+### 内置 OAuth 网关管理
+- [启用、任务 API 与安全边界](oauth-gateway.md)：复用现有后台和账号池，手动批量授权、代理检查、加密任务与安全归档；不自动处理 401。
+
 ### 可选 ChatGPT Web 图片通道
 - [网页文生图 / 图生图集成说明](chatgpt-web-images.md)：默认关闭、账号环境、参数边界与回退。
 - [私网执行协议](chatgpt-web-worker-protocol.md)：持久提交保护、阶段事件和敏感信息边界。

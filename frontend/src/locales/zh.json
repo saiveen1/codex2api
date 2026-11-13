@@ -202,6 +202,7 @@
     "qualityTest": "质量测试",
     "dashboard": "仪表盘",
     "accounts": "账号管理",
+    "oauthGateway": "OAuth 网关",
     "grokAccounts": "Grok",
     "apiKeys": "API 密钥",
     "ops": "系统运维",

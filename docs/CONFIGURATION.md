@@ -96,6 +96,7 @@ Codex2API 采用三层配置架构：
 | `CODEX_MAX_REQUEST_BODY_SIZE_MB` | 否 | 48 | HTTP 请求体上限。后台 MP4 动态壁纸上传最大 40MB，默认值为 multipart 上传预留余量 |
 | `CODEX_REQUEST_MEMORY_BUDGET_MB` | 否 | 至少 128 | 单进程 HTTP/WS 逻辑正文总预算（MiB），包括读入/解压、排队和处理中正文及 Realtime 会话正文；默认取 128 与单请求上限的较大值，显式配置不能小于单请求上限，重启生效。预算不足时 HTTP 返回 503 和 `Retry-After: 1`，WS 关闭码为 1013。不是 RSS 硬上限，账号导入的流式 multipart 路径仍按独立导入上限处理 |
 | `ADMIN_SECRET` | 否 | - | 管理后台登录密钥 |
+| `CODEX_CRED_ENCRYPTION_KEY` | 内置 OAuth 网关必需 | - | 现有账号凭据加密根密钥；同时保护内置 OAuth 任务，缺失时仅禁用该模块。必须稳定保管，不随重启更换。详见 [OAuth 网关](oauth-gateway.md)。 |
 | `CODEX_ALLOW_ANONYMOUS` | 否 | `false` | 设为 `true` 时，未配置任何对外 API Key 也允许 `/v1/*` 直接调用（仅限内网测试场景） |
 | `CODEX_SCHEDULER_ENGINE` | 否 | 空 | 调度引擎强制值：`legacy` / `shadow` / `indexed`。设置后优先于数据库配置，适合容器级灰度或紧急回退 |
 | `CODEX_SCHEDULER_MAX_WAITERS` | 否 | `4096` | 本实例账号调度等待请求总上限，正整数，重启生效。队列满立即返回可重试的 503 |
