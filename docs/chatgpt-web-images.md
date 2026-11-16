@@ -58,6 +58,12 @@ Keep the shared secret in your existing private secret configuration, never in
 Git or shell history. The example overlay alone is not a production deployment
 or a claim that Docker images have been built or run.
 
+## 中文快速使用
+
+Web 生图是默认关闭的实验性独立通道，不等同于 Codex 原生生图。先配置私有服务，在设置中启用并检查现有 OAuth 账号，再创建通道为 `chatgpt_web` 的专用 API Key，最后在生图工作台选择 Web 来源和该 Key。检查环境只确认观察到的环境与额度信息，不能代替真实生图验收；Web 失败不会自动回退原生通道。
+
+目前仅支持 `gpt-image-2`、自动质量和比例尺寸（不保证像素尺寸），最多两张参考图；不支持蒙版和指定背景等参数。门户通道无法确认时请重试，不要当作原生通道提交。
+
 ## Enabling a test scope
 
 1. Configure the private worker and leave existing Key channels unchanged.

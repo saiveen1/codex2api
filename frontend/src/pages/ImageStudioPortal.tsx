@@ -1,3 +1,4 @@
+import { imageReferenceLimit, portalChannelReady, webImageParams } from '../lib/imageStudioChannel'
 import { formatImageStudioQuota } from '../lib/imageStudioQuota'
 import { IMAGE_MODELS, imageQualityOptions, normalizeImageQualityForModel } from '../lib/imageStudioModels'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -76,7 +77,6 @@ const FORMAT_OPTIONS = [
   { label: 'JPEG', value: 'jpeg' },
   { label: 'WebP', value: 'webp' },
 ]
-const MAX_INPUT_IMAGES = 4
 const HISTORY_PAGE_SIZE = 20
 const GALLERY_PAGE_SIZE = 16
 const RECENT_JOB_COUNT = 3
@@ -250,6 +250,7 @@ export default function ImageStudioPortal() {
   })
   const [activeAPIKey, setActiveAPIKey] = useState(() => readStoredAPIKey().key)
   const [channelSnapshot, setChannelSnapshot] = useState<{key: string; channel?: string} | null>(null)
+  const [channelRetry, setChannelRetry] = useState(0)
   useEffect(() => {
     if (!activeAPIKey) { setChannelSnapshot(null); return }
     let cancelled = false
@@ -257,8 +258,10 @@ export default function ImageStudioPortal() {
       if (!cancelled) setChannelSnapshot({ key: activeAPIKey, channel: result.key.limits.upstream_channel })
     }).catch(() => { if (!cancelled) setChannelSnapshot(null) })
     return () => { cancelled = true }
-  }, [activeAPIKey])
-  const isWebKey = channelSnapshot?.key === activeAPIKey && channelSnapshot.channel === 'chatgpt_web'
+  }, [activeAPIKey, channelRetry])
+  const channelReady = portalChannelReady(activeAPIKey, channelSnapshot?.key)
+  const isWebKey = channelReady && channelSnapshot?.channel === 'chatgpt_web'
+  const maxInputImages = imageReferenceLimit(isWebKey)
   const [quotaSnapshot, setQuotaSnapshot] = useState<{ key: string; value: ImageStudioQuota } | null>(null)
   const [quotaLoading, setQuotaLoading] = useState(false)
   const [quotaError, setQuotaError] = useState('')
@@ -282,6 +285,13 @@ export default function ImageStudioPortal() {
   const [style, setStyle] = useState('')
   const [imageToImageMode, setImageToImageMode] = useState(false)
   const [inputImageDataURLs, setInputImageDataURLs] = useState<string[]>([])
+  useEffect(() => {
+    if (!isWebKey) return
+    setModel('gpt-image-2')
+    setSize(current => webImageParams({ size: current }).size)
+    setQuality('auto')
+    setOutputFormat(current => webImageParams({ output_format: current }).output_format)
+  }, [isWebKey, model, size, quality, outputFormat])
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
@@ -580,12 +590,13 @@ export default function ImageStudioPortal() {
   const appendInputImages = (files: FileList | File[]) => {
     const list = Array.from(files).filter((file) => file.type.startsWith('image/'))
     if (list.length === 0) return
-    const remaining = MAX_INPUT_IMAGES - inputImageDataURLs.length
+    const remaining = maxInputImages - inputImageDataURLs.length
     if (remaining <= 0) {
-      showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }))
+      showToast(t('images.maxInputImages', { max: maxInputImages }))
       return
     }
     const filesToRead = list.slice(0, remaining)
+    if (list.length > remaining) showToast(t('images.maxInputImages', { max: maxInputImages }))
     void Promise.all(
       filesToRead.map(
         (file) =>
@@ -597,14 +608,14 @@ export default function ImageStudioPortal() {
           }),
       ),
     ).then((urls) => {
-      setInputImageDataURLs((current) => [...current, ...urls].slice(0, MAX_INPUT_IMAGES))
+      setInputImageDataURLs((current) => [...current, ...urls].slice(0, maxInputImages))
     })
   }
 
   const openGalleryPicker = async () => {
     if (!activeAPIKey) return
-    if (inputImageDataURLs.length >= MAX_INPUT_IMAGES) {
-      showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }))
+    if (inputImageDataURLs.length >= maxInputImages) {
+      showToast(t('images.maxInputImages', { max: maxInputImages }))
       return
     }
     setGalleryPickerOpen(true)
@@ -633,9 +644,9 @@ export default function ImageStudioPortal() {
         next.delete(assetID)
         return next
       }
-      const remaining = MAX_INPUT_IMAGES - inputImageDataURLs.length
+      const remaining = maxInputImages - inputImageDataURLs.length
       if (next.size >= remaining) {
-        showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }))
+        showToast(t('images.maxInputImages', { max: maxInputImages }))
         return prev
       }
       next.add(assetID)
@@ -655,14 +666,14 @@ export default function ImageStudioPortal() {
     }
     setGalleryPickerConfirming(true)
     try {
-      const remaining = MAX_INPUT_IMAGES - inputImageDataURLs.length
+      const remaining = maxInputImages - inputImageDataURLs.length
       const toAdd = selectedAssets.slice(0, remaining)
       const urls: string[] = []
       for (const asset of toAdd) {
         urls.push(await assetToDataURL(activeAPIKey, asset))
       }
       if (urls.length > 0) {
-        setInputImageDataURLs((current) => [...current, ...urls].slice(0, MAX_INPUT_IMAGES))
+        setInputImageDataURLs((current) => [...current, ...urls].slice(0, maxInputImages))
         setImageToImageMode(true)
         showToast(t('imageStudioPortal.galleryImagesAdded', { count: urls.length }))
       }
@@ -692,7 +703,11 @@ export default function ImageStudioPortal() {
 
   const submitJob = async () => {
     if (!activeAPIKey) return
-    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].includes(size) || quality !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+    if (!channelReady) { showToast(t('chatgptWeb.channelUnknown')); return }
+    if (isWebKey && imageToImageMode && inputImageDataURLs.length > imageReferenceLimit(true)) {
+      showToast(t('images.maxInputImages', { max: imageReferenceLimit(true) })); return
+    }
+    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
       showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'))
       setAdvancedOpen(true)
       return
@@ -810,7 +825,7 @@ export default function ImageStudioPortal() {
 
   const applyInspiration = (scene: StudioScene, presetSize: string) => {
     setPrompt(t(`imageStudioPortal.design.inspiration.${scene}.prompt`))
-    setSize(presetSize)
+    setSize(isWebKey ? webImageParams({ size: presetSize }).size : presetSize)
     setImageToImageMode(false)
     setInspirationOpen(false)
     setMobilePanel('compose')
@@ -1011,7 +1026,11 @@ export default function ImageStudioPortal() {
                     ]}
                   />
 
-                  {channelSnapshot?.key === activeAPIKey && channelSnapshot.channel === 'chatgpt_web' && <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>}
+                  <div className="rounded-md border border-border bg-muted/20 p-3 text-xs">
+                    <p>{t('chatgptWeb.source')}: {channelReady ? (isWebKey ? t('chatgptWeb.title') : (channelSnapshot?.channel || t('chatgptWeb.defaultSource'))) : t('chatgptWeb.channelUnknown')}</p>
+                    {!channelReady && <button type="button" className="mt-1 text-primary underline" onClick={() => setChannelRetry(value => value + 1)}>{t('chatgptWeb.refresh')}</button>}
+                    {isWebKey && <p className="mt-1 text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>}
+                  </div>
 
                   <div className="portal-prompt-field">
                     <div className="portal-field-heading">
@@ -1060,7 +1079,7 @@ export default function ImageStudioPortal() {
                             variant="ghost"
                             className="h-6 px-1.5 text-[11px]"
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={inputImageDataURLs.length >= MAX_INPUT_IMAGES}
+                            disabled={inputImageDataURLs.length >= maxInputImages}
                           >
                             <Upload className="size-3" />
                             {t('images.upload')}
@@ -1071,7 +1090,7 @@ export default function ImageStudioPortal() {
                             variant="ghost"
                             className="h-6 px-1.5 text-[11px]"
                             onClick={() => void openGalleryPicker()}
-                            disabled={inputImageDataURLs.length >= MAX_INPUT_IMAGES}
+                            disabled={inputImageDataURLs.length >= maxInputImages}
                           >
                             <FolderOpen className="size-3" />
                             {t('imageStudioPortal.fromGallery')}
@@ -1139,7 +1158,7 @@ export default function ImageStudioPortal() {
                                 </button>
                               </div>
                             ))}
-                            {inputImageDataURLs.length < MAX_INPUT_IMAGES ? (
+                            {inputImageDataURLs.length < maxInputImages ? (
                               <>
                                 <button
                                   type="button"
@@ -1204,7 +1223,7 @@ export default function ImageStudioPortal() {
                   {quota?.image_pricing?.[model]?.user_billing_mode === 'per_image' ? <p className="text-center text-xs text-muted-foreground" role="status">{t('imageStudioPortal.quota.imagePrice', { price: formatImageStudioQuota(quota.image_pricing[model].image_unit_price) })}</p> : null}
                   <Button
                     className="portal-generate"
-                    disabled={submitting || !prompt.trim() || quotaLocked}
+                    disabled={submitting || !prompt.trim() || quotaLocked || !channelReady}
                     onClick={() => void submitJob()}
                   >
                     {submitting ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
@@ -1643,8 +1662,8 @@ export default function ImageStudioPortal() {
             <DialogTitle>{t('imageStudioPortal.pickFromGallery')}</DialogTitle>
             <DialogDescription>
               {t('imageStudioPortal.pickFromGalleryDesc', {
-                remaining: Math.max(0, MAX_INPUT_IMAGES - inputImageDataURLs.length),
-                max: MAX_INPUT_IMAGES,
+                remaining: Math.max(0, maxInputImages - inputImageDataURLs.length),
+                max: maxInputImages,
               })}
             </DialogDescription>
           </DialogHeader>

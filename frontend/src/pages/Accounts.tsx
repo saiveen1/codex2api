@@ -1,3 +1,5 @@
+import ChatGPTWebAccountBadge from "../components/ChatGPTWebAccountBadge";
+import type { ChatGPTWebState } from "../api";
 import { AccountCardSurface } from "../components/AccountCardSurface";
 import AccountUsageBar from "../components/AccountUsageBar";
 import PlanBadge, { normalizePlanType } from "../components/AccountPlanBadge";
@@ -1175,6 +1177,7 @@ function useCountdownRemaining(until?: string): string {
 // 整树重渲染;行数据没变时这里直接跳过,交互卡顿的大头就在这。
 const AccountTableRow = memo(function AccountTableRow({
   account,
+  webState,
   channelMonitorBilling,
   sequence,
   selected,
@@ -1193,6 +1196,7 @@ const AccountTableRow = memo(function AccountTableRow({
   actions,
 }: {
   account: AccountRow;
+  webState?: ChatGPTWebState | null;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -1558,6 +1562,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                           }
                                           errorMessage={account.error_message}
                                         />
+                                        {isOAuthAccount(account) && <ChatGPTWebAccountBadge state={webState} />}
                                         <AccountIntelligenceActions bar={intelligenceBar} accountID={account.id} accountName={account.email || account.name} />
                                       </div>
                                       <UsingCreditsBadge account={account} />
@@ -1722,6 +1727,7 @@ const AccountTableRow = memo(function AccountTableRow({
 // 行数据不变则整卡跳过。
 const AccountCardItem = memo(function AccountCardItem({
   account,
+  webState,
   channelMonitorBilling,
   sequence,
   selected,
@@ -1741,6 +1747,7 @@ const AccountCardItem = memo(function AccountCardItem({
   actions,
 }: {
   account: AccountRow;
+  webState?: ChatGPTWebState | null;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -1762,6 +1769,7 @@ const AccountCardItem = memo(function AccountCardItem({
   return (
     <AccountMobileCard
       account={account}
+      webState={webState}
       channelMonitorBilling={channelMonitorBilling}
       sequence={sequence}
       selected={selected}
@@ -1848,6 +1856,16 @@ export default function Accounts() {
         : normalizedPath.endsWith("/accounts/kiro")
           ? "kiro"
           : "codex";
+  const [webStates, setWebStates] = useState<Record<number, ChatGPTWebState> | null>(null);
+  useEffect(() => {
+    if (providerView !== "codex") return;
+    let cancelled = false;
+    setWebStates(null);
+    void api.getChatGPTWebAccounts().then(result => {
+      if (!cancelled) setWebStates(Object.fromEntries(result.accounts.map(state => [state.account_id, state])));
+    }).catch(() => { if (!cancelled) setWebStates(null); });
+    return () => { cancelled = true; };
+  }, [providerView]);
   const { channels: visibleChannels, isChannelVisible } = useVisibleChannels();
   // 设置页隐藏了某个渠道后，直接打开它的账号路由要回落到 Codex 视图。
   useEffect(() => {
@@ -7680,6 +7698,7 @@ export default function Accounts() {
                       <AccountCardItem
                         key={account.id}
                         account={account}
+                        webState={webStates ? webStates[account.id] ?? null : undefined}
                         channelMonitorBilling={channelMonitorBillingByAccount[account.id]}
                         sequence={(currentPage - 1) * pageSize + index + 1}
                         selected={selected.has(account.id)}
@@ -7964,6 +7983,7 @@ export default function Accounts() {
                         <AccountTableRow
                           key={account.id}
                           account={account}
+                          webState={webStates ? webStates[account.id] ?? null : undefined}
                           channelMonitorBilling={channelMonitorBillingByAccount[account.id]}
                           sequence={(currentPage - 1) * pageSize + index + 1}
                           selected={selected.has(account.id)}
@@ -13936,6 +13956,7 @@ function GroupChipList({
 
 function AccountMobileCard({
   account,
+  webState,
   channelMonitorBilling,
   sequence,
   selected,
@@ -13975,6 +13996,7 @@ function AccountMobileCard({
   onChannelMonitor,
 }: {
   account: AccountRow;
+  webState?: ChatGPTWebState | null;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -14219,6 +14241,7 @@ function AccountMobileCard({
               <AccountConcurrencyBadge account={account} />
             </div>
           ) : null}
+          {isOAuthAccount(account) && <ChatGPTWebAccountBadge state={webState} />}
         </div>
       </header>
 

@@ -22,8 +22,8 @@ export default function APIKeyChannelBadge({ channel }: { channel?: UpstreamChan
       title={t(known ? `apiKeys.limits.upstreamChannel${CHANNEL_NAMES[known]}` : 'apiKeys.limits.upstreamChannelHint.auto')}
       className={`gap-1 border-transparent bg-muted/70 px-1.5 py-0 text-[11px] font-semibold ${known ? 'text-foreground' : 'text-muted-foreground'}`}
     >
-      {known ? <ChannelLogo channel={known === 'chatgpt_web' ? 'codex' : known} size={12} /> : <Waypoints className="size-3" />}
-      {known ? CHANNEL_NAMES[known] : t('apiKeys.limits.upstreamChannelAutoTab')}
+      {known && known !== 'chatgpt_web' ? <ChannelLogo channel={known} size={12} /> : <Waypoints className="size-3" />}
+      {known === 'chatgpt_web' ? t('chatgptWeb.title') : known ? CHANNEL_NAMES[known] : t('apiKeys.limits.upstreamChannelAutoTab')}
     </Badge>
   )
 }

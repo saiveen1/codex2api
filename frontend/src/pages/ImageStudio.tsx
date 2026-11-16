@@ -1,9 +1,10 @@
+import { imageKeyMatchesSource, imageReferenceLimit, webImageParams } from '../lib/imageStudioChannel'
 import { IMAGE_MODELS, imageQualityOptions, normalizeImageQualityForModel } from '../lib/imageStudioModels'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api'
+import { api, type ChatGPTWebDeployment } from '../api'
 import { StudioArtwork } from '../components/image-studio/StudioArtwork'
 import { StudioCollectionHero, StudioCollectionSearch, StudioCollectionEmpty, StudioCollectionLoading, StudioCollectionPagination } from '../components/image-studio/StudioCollectionChrome'
 import { imageAssetOrientation, selectImageTemplates, selectImageAssets, selectImageJobs } from '../lib/imageStudioCollections'
@@ -559,7 +560,30 @@ export default function ImageStudio() {
   const [upscale, setUpscale] = useState('')
   const [style, setStyle] = useState('')
   const [apiKeyID, setAPIKeyID] = useState('')
-  const isWebKey = apiKeys.find(key => String(key.id) === apiKeyID)?.limits?.upstream_channel === 'chatgpt_web'
+  const [imageSource, setImageSource] = useState<'default' | 'web'>('default')
+  const selectedKey = apiKeys.find(key => String(key.id) === apiKeyID)
+  const isWebKey = imageSource === 'web'
+  const [webDeployment, setWebDeployment] = useState<ChatGPTWebDeployment | null>(null)
+  const [webDeploymentError, setWebDeploymentError] = useState(false)
+  const webServiceReady = Boolean(webDeployment?.enabled && webDeployment.configured)
+  useEffect(() => {
+    if (!isWebKey) return
+    let cancelled = false
+    setWebDeployment(null)
+    setWebDeploymentError(false)
+    void api.getChatGPTWebStatus().then(status => {
+      if (!cancelled) setWebDeployment(status)
+    }).catch(() => { if (!cancelled) setWebDeploymentError(true) })
+    return () => { cancelled = true }
+  }, [isWebKey])
+  useEffect(() => {
+    if (!isWebKey) return
+    setModel('gpt-image-2')
+    setSize(current => webImageParams({ size: current }).size)
+    setQuality('auto')
+    setBackground('auto')
+    setOutputFormat(current => webImageParams({ output_format: current }).output_format)
+  }, [isWebKey, model, size, quality, background, outputFormat])
   const [templateName, setTemplateName] = useState('')
   const [templateTags, setTemplateTags] = useState('')
   const [imageToImageMode, setImageToImageMode] = useState(false)
@@ -584,14 +608,15 @@ export default function ImageStudio() {
       // Read length outside the state updater so toast/FileReader side effects run once
       // (React may re-invoke pure updaters under StrictMode / concurrent rendering).
       const prevLength = inputImageDataURLsRef.current.length
-      if (prevLength >= MAX_INPUT_IMAGES) {
-        showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
+      const max = imageReferenceLimit(isWebKey, MAX_INPUT_IMAGES)
+      if (prevLength >= max) {
+        showToast(t('images.maxInputImages', { max }), 'error')
         return
       }
-      const remaining = MAX_INPUT_IMAGES - prevLength
+      const remaining = max - prevLength
       const filesToRead = list.slice(0, remaining)
       if (list.length > remaining) {
-        showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
+        showToast(t('images.maxInputImages', { max }), 'error')
       }
 
       void Promise.allSettled(
@@ -610,14 +635,14 @@ export default function ImageStudio() {
           if (r.status === 'fulfilled') dataURLs.push(r.value)
         }
         if (dataURLs.length > 0) {
-          setInputImageDataURLs(current => [...current, ...dataURLs].slice(0, MAX_INPUT_IMAGES))
+          setInputImageDataURLs(current => [...current, ...dataURLs].slice(0, imageReferenceLimit(isWebKey, MAX_INPUT_IMAGES)))
         }
         if (dataURLs.length < results.length) {
           showToast(t('images.loadFailed'), 'error')
         }
       })
     },
-    [showToast, t],
+    [showToast, t, isWebKey],
   )
 
   const handleImageFileChange = useCallback(
@@ -993,6 +1018,22 @@ export default function ImageStudio() {
   }
 
   const submitJob = async (payload = createJobPayload(), forceMode?: 'text' | 'edit') => {
+    if (isWebKey && !webServiceReady) {
+      showToast(t(webDeploymentError ? 'chatgptWeb.loadError' : 'chatgptWeb.serviceNotReady'), 'error')
+      return
+    }
+    if (!imageKeyMatchesSource(imageSource, apiKeyID, selectedKey?.limits?.upstream_channel, Boolean(selectedKey))) {
+      showToast(t('chatgptWeb.keyRequired'), 'error')
+      return
+    }
+    payload = { ...payload, api_key_id: apiKeyID ? Number(apiKeyID) : undefined }
+    if (isWebKey) {
+      payload = webImageParams(payload)
+      if ((payload.input_images?.length || 0) > imageReferenceLimit(true)) {
+        showToast(t('images.maxInputImages', { max: imageReferenceLimit(true) }), 'error')
+        return
+      }
+    }
     const isEditMode = forceMode != null
       ? forceMode === 'edit'
       : Array.isArray(payload.input_images) && payload.input_images.length > 0
@@ -1319,6 +1360,7 @@ export default function ImageStudio() {
     setUpscale('')
     setStyle('')
     setAPIKeyID('')
+    setImageSource('default')
     setTemplateName('')
     setTemplateTags('')
     setImageToImageMode(false)
@@ -1344,7 +1386,7 @@ export default function ImageStudio() {
   }
 
   const submitGeneration = () => {
-    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].includes(size) || quality !== 'auto' || background !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || background !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
       showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'), 'error')
       setAdvancedOpen(true)
       return
@@ -1359,6 +1401,22 @@ export default function ImageStudio() {
         <span>CREATE</span>
       </div>
       <div className="studio-form-scroll">
+        <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+          <Field label={t('chatgptWeb.source')}>
+            <Select value={imageSource} onValueChange={value => { setImageSource(value as 'default' | 'web'); setAPIKeyID('') }} options={[{ value: 'default', label: t('chatgptWeb.defaultSource') }, { value: 'web', label: t('chatgptWeb.title') }]} compact />
+          </Field>
+          <Field label={t('images.apiKey')}>
+            <Select value={apiKeyID} onValueChange={setAPIKeyID} options={[
+              { label: isWebKey ? t('chatgptWeb.selectKey') : t('images.autoApiKey'), value: '' },
+              ...apiKeys.filter(key => (key.limits?.upstream_channel === 'chatgpt_web') === isWebKey).map(key => ({ label: `${key.name ? `${key.name} · ` : ''}${key.key} · ${key.limits?.upstream_channel || t('apiKeys.limits.upstreamChannelAutoTab')}`, value: String(key.id) })),
+            ]} compact />
+          </Field>
+          {isWebKey && (!apiKeyID ? <p className="text-xs text-muted-foreground">{t('chatgptWeb.keyRequired')} <NavLink className="text-primary underline" to="/api-keys">{t('chatgptWeb.createKey')}</NavLink></p> : <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>)}
+          {isWebKey && !webServiceReady && <p className="text-xs text-muted-foreground" role="status">
+            {t(webDeploymentError ? 'chatgptWeb.loadError' : webDeployment ? 'chatgptWeb.serviceNotReady' : 'chatgptWeb.serviceChecking')}{' '}
+            <NavLink className="text-primary underline" to="/settings#settings-codex-images">{t('chatgptWeb.openSettings')}</NavLink>
+          </p>}
+        </div>
         <div className="studio-mode-switch" role="group" aria-label={t('images.mode')}>
           <button type="button" aria-pressed={!imageToImageMode} onClick={() => setImageToImageMode(false)}>
             <Wand2 className="size-3.5" />{t('images.textToImage')}
@@ -1490,22 +1548,6 @@ export default function ImageStudio() {
                 <Select value={upscale} onValueChange={setUpscale} options={upscaleOptions} compact />
               </Field>
               <div className="studio-full-field">
-                <Field label={t('images.apiKey')}>
-                  <Select
-                    value={apiKeyID}
-                    onValueChange={setAPIKeyID}
-                    options={[
-                      { label: t('images.autoApiKey'), value: '' },
-                      ...apiKeys.map(key => ({ label: key.name ? `${key.name} · ${key.key}` : key.key, value: String(key.id) })),
-                    ]}
-                    compact
-                  />
-                </Field>
-                {apiKeys.find(key => String(key.id) === apiKeyID)?.limits?.upstream_channel === 'chatgpt_web' && (
-                  <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>
-                )}
-              </div>
-              <div className="studio-full-field">
                 <Field label={t('images.style')}>
                   <Input value={style} onChange={e => setStyle(e.target.value)} placeholder={t('images.stylePlaceholder')} />
                 </Field>
@@ -1541,7 +1583,7 @@ export default function ImageStudio() {
             <RefreshCcw className="size-3" />{t('images.clearSelection')}
           </button>
         </div>
-        <Button className="studio-submit-button" disabled={submitting || !prompt.trim()} onClick={submitGeneration}>
+        <Button className="studio-submit-button" disabled={submitting || !prompt.trim() || (isWebKey && !webServiceReady) || !imageKeyMatchesSource(imageSource, apiKeyID, selectedKey?.limits?.upstream_channel, Boolean(selectedKey))} onClick={submitGeneration}>
           {submitting ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
           {submitting ? t('images.workspace.submitting') : t('images.generateImage')}
           <ArrowRight className="ml-auto size-4" />

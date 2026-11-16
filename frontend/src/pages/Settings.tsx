@@ -5228,7 +5228,7 @@ export default function Settings() {
 
               <SettingsSection id="settings-codex-images" title={t('settings.nav.codexImages')} description={t('settings.nav.codexImagesDesc')} icon={<ImageIcon className="size-4" />}>
                 <ChatGPTWebSettings />
-                <SettingsCard title={t('settings.codexImagesDriver')} description={t('settings.codexImagesDriverDesc')} icon={<ImageIcon className="size-4" />}>
+                <SettingsCard title={t('chatgptWeb.nativeTitle')} description={t('settings.codexImagesDriverDesc')} icon={<ImageIcon className="size-4" />}>
                   <div className="space-y-4">
                     <div className={SETTINGS_FIELD_GRID}>
                       <SettingField label={t('settings.codexImagesMainModel')} description={t('settings.codexImagesMainModelDesc')}>
