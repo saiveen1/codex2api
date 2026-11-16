@@ -100,8 +100,13 @@ class Executor:
                         images.append(image)
                         self.ledger.store(execution_id, images)  # Persist each partial success before exposing bytes.
                         yield {"type": "image", "image": image}
-                    if state.error:
-                        raise SafeError(state.error)
+                    # A stream interruption after an asset pointer is recoverable:
+                    # upstream already generated the image, so finish the download
+                    # instead of discarding it. An explicit upstream refusal still
+                    # fails the run and must never be reported as a success.
+                    recoverable = {None, "image_stream_interrupted", "image_download_failed"}
+                    if state.error not in recoverable:
+                        raise SafeError(state.error, 400 if state.error == "content_policy_violation" else 502)
                     stage = "completed"
                     self.ledger.update(execution_id, stage=stage, error=None, unknown=0)
                     yield {"type": "completed", "usage_known": False}

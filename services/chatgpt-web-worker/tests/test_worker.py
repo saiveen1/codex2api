@@ -750,12 +750,25 @@ async def test_partial_terminal_error_is_preserved_on_replay(tmp_path):
     assert len(script.submits()) == count
 
 
-async def test_truncated_stream_after_asset_preserves_partial(tmp_path):
+async def test_truncated_stream_after_asset_still_downloads(tmp_path):
     body = sse({"conversation_id": "conv-1", "message": message()}).replace(b"data: [DONE]\n\n", b'data: {"truncated":')
     events, ledger = await execute(tmp_path, Script(body))
+    # A stream interruption after the asset pointer exists must not discard a
+    # completed generation; the run downloads and finishes instead.
     assert any(e["type"] == "image" for e in events)
-    assert events[-1]["code"] == "image_stream_interrupted"
-    assert ledger.get("exec-1")["cache"]
+    assert any(e["type"] == "completed" for e in events)
+    assert ledger.get("exec-1")["stage"] == "completed"
+
+
+async def test_resume_downloads_existing_assets_without_resubmitting(tmp_path):
+    script = Script(sse({"conversation_id": "conv-1", "message": message()}))
+    events, ledger = await execute(tmp_path, script)
+    assert any(e["type"] == "completed" for e in events)
+    submits = len(script.submits())
+    ledger.update("exec-1", stage="downloading", error="image_stream_interrupted")
+    replay = [e async for e in Executor(ledger, script.backend).events(account())]
+    assert any(e["type"] == "completed" for e in replay)
+    assert len(script.submits()) == submits
 
 
 async def test_timeout_after_submit_preserves_unknown(tmp_path):
