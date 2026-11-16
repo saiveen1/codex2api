@@ -74,13 +74,15 @@ class CurlTransport:
         session = self.session
         if asset:
             host, addresses = await public_destination(url)
-            # CONNECT_TO applies to proxy CONNECT/SOCKS too; original host remains TLS SNI/certificate name.
+            # Pin DNS to the validated address; curl_cffi rejects a python list
+            # for CONNECT_TO, and RESOLVE keeps the original host for TLS SNI.
+            # The original host also stays in the URL, so certificate checks
+            # still apply to the real name.
             address = addresses[0]
             target = f"[{address}]" if ":" in address else address
             session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
                                    proxy=self.proxy,
-                                   curl_options=self.options | {CurlOpt.CONNECT_TO: [f"{host}:443:{target}:443"],
-                                                               CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
+                                   curl_options=self.options | {CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
         response = None
         try:
             response = await session.request(method, url, headers=headers, timeout=timeout,
