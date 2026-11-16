@@ -1,3 +1,4 @@
+import { useProxyPool } from "../hooks/useProxyPool";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -45,7 +46,6 @@ import {
   grokModelSummaryTitle,
 } from "../lib/grokModelDisplay";
 import TestConnectionModal from "../components/TestConnectionModal";
-import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
 import AccountProxyQuickEditor from "../components/AccountProxyQuickEditor";
@@ -498,23 +498,7 @@ function GrokAccounts({
   const [showAdd, setShowAdd] = useState(false);
   const [addMethod, setAddMethod] = useState<AddMethod>("oauth_link");
   const [form, setForm] = useState<AddGrokAccountRequest>(EMPTY_FORM);
-  // 代理池条目：账号表单"从代理池选择"下拉的数据源；加载失败静默留空
-  // （选择器为空时自动隐藏，不影响手动填代理）。
-  const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .listProxies()
-      .then((res) => {
-        if (!cancelled) setProxyPool(res.proxies ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setProxyPool([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const proxyPool = useProxyPool();
   // 代理徽章判定上下文：fail-closed(钉住的托管代理已不在启用池)只在代理池开启时
   // 成立,所以开关与全局代理必须跟着代理池一起读进来。
   const [proxyPoolEnabled, setProxyPoolEnabled] = useState(false);
@@ -3954,6 +3938,7 @@ function GrokAccounts({
             <div>
               <ProxyField
                 value={editForm.proxy_url}
+                accountId={editAccount.id}
                 onChange={(url) => setEditForm((f) => ({ ...f, proxy_url: url }))}
                 proxies={proxyPool}
                 label={t("grok.proxyUrl")}

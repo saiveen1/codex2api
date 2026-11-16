@@ -308,6 +308,7 @@ export default function AntigravityEditModal({
             <AccountMetadataFields
               stacked
               proxyUrl={editDraft.proxyUrl}
+              accountId={account?.id}
               proxies={proxies}
               onProxyUrlChange={(proxyUrl) => setEditDraft((current) => ({ ...current, proxyUrl }))}
               groupIds={editDraft.groupIds}

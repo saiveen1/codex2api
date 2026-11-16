@@ -66,7 +66,7 @@ const PROXY_SCHEMES = ["http:", "https:", "socks5:", "socks5h:"];
 
 type BindFilter = "all" | "unbound" | "this" | "other";
 type BindKindFilter = "all" | "codex" | "grok" | "antigravity" | "claude" | "kiro";
-type StatusFilter = "all" | "enabled" | "disabled" | "error" | "untested";
+type StatusFilter = "all" | "enabled" | "disabled" | "bound" | "error" | "untested";
 type RiskFilter = "all" | "unscored" | "low" | "medium" | "high" | "very_high" | "error" | "stale";
 
 const EMPTY_RISK_PROFILE: Omit<ProxyRiskScoringProfile, "id" | "created_at" | "updated_at"> & { id: number; created_at: string; updated_at: string } = {
@@ -590,14 +590,16 @@ export default function Proxies() {
     let disabled = 0;
     let error = 0;
     let untested = 0;
+    let bound = 0;
     for (const p of proxies) {
+      if ((p.bound_count ?? 0) > 0) bound += 1;
       if (p.test_status === "error") error += 1;
       else if (!p.test_status || p.test_status === "untested") untested += 1;
 
       if (p.enabled) enabled += 1;
       else disabled += 1;
     }
-    return { total: proxies.length, enabled, disabled, error, untested };
+    return { total: proxies.length, enabled, disabled, bound, error, untested };
   }, [proxies]);
 
   const filteredProxies = useMemo(() => {
@@ -605,6 +607,7 @@ export default function Proxies() {
     return proxies.filter((p) => {
       if (statusFilter === "enabled" && !p.enabled) return false;
       if (statusFilter === "disabled" && p.enabled) return false;
+      if (statusFilter === "bound" && (p.bound_count ?? 0) === 0) return false;
       if (statusFilter === "error" && p.test_status !== "error") return false;
       if (statusFilter === "untested" && p.test_status && p.test_status !== "untested") return false;
       const risk = p.risk_score;
@@ -635,8 +638,8 @@ export default function Proxies() {
   );
 
   const boundCountForProxy = useCallback(
-    (proxy: ProxyRow): number => proxy.bound_count ?? 0,
-    [],
+    (proxy: ProxyRow): number => proxies.find((item) => item.id === proxy.id)?.bound_count ?? proxy.bound_count ?? 0,
+    [proxies],
   );
 
   const totalBoundAccounts = useMemo(
@@ -1222,6 +1225,7 @@ export default function Proxies() {
     { id: "all", label: t("proxies.filterAll"), count: counts.total },
     { id: "enabled", label: t("proxies.filterEnabled"), count: counts.enabled },
     { id: "disabled", label: t("proxies.filterDisabled"), count: counts.disabled },
+    { id: "bound", label: t("proxies.filterBound"), count: counts.bound },
     { id: "error", label: t("proxies.filterError"), count: counts.error },
     { id: "untested", label: t("proxies.filterUntested"), count: counts.untested },
   ];
@@ -1487,6 +1491,8 @@ export default function Proxies() {
             value={totalBoundAccounts}
             icon={<Users className="size-4" />}
             tone="info"
+            active={statusFilter === "bound"}
+            onClick={() => { setStatusFilter("bound"); setRiskFilter("all"); setQuery(""); setPage(1); }}
           />
           <StatTile
             label={t("proxies.untestedCount")}

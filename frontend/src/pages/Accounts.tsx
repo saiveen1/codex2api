@@ -1,3 +1,4 @@
+import { useProxyPool } from "../hooks/useProxyPool";
 import ChatGPTWebAccountBadge from "../components/ChatGPTWebAccountBadge";
 import type { ChatGPTWebState } from "../api";
 import { AccountCardSurface } from "../components/AccountCardSurface";
@@ -11,7 +12,6 @@ import { memo, useCallback, useEffect, useRef, useState, useMemo } from "react";
 
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, getAdminKey, resetAdminAuthState } from "../api";
-import type { ProxyRow } from "../api";
 import { ProxyField } from "../components/ProxyField";
 import AccountProxyBadge from "../components/AccountProxyBadge";
 import AccountProxyQuickEditor from "../components/AccountProxyQuickEditor";
@@ -2067,24 +2067,7 @@ export default function Accounts() {
     useState<CodexFingerprintMode>("off");
   const [editTimezone, setEditTimezone] = useState("");
   const [editTimezoneCustom, setEditTimezoneCustom] = useState(false);
-  // 代理池条目：账号表单里"从代理池选择"下拉的数据源。加载失败静默留空
-  // （选择器为空时自动隐藏，不影响手动填代理）。
-  const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
-  useEffect(() => {
-    if (providerView !== "codex") return;
-    let cancelled = false;
-    void api
-      .listProxies()
-      .then((res) => {
-        if (!cancelled) setProxyPool(res.proxies ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setProxyPool([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [providerView]);
+  const proxyPool = useProxyPool(providerView === "codex");
   const [editOpenAIForm, setEditOpenAIForm] =
     useState<UpdateOpenAIResponsesAccountRequest>({
       name: "",
@@ -2376,17 +2359,20 @@ export default function Accounts() {
     label = t("accounts.proxyUrl"),
     placeholder = t("accounts.proxyUrlPlaceholder"),
     disabled = false,
+    accountId,
   }: {
     value: string;
     onChange: (value: string) => void;
     label?: string;
     placeholder?: string;
     disabled?: boolean;
+    accountId?: number;
   }) => (
     <ProxyField
       value={value}
       onChange={onChange}
       proxies={proxyPool}
+      accountId={accountId}
       label={label}
       labelClassName="text-sm"
       placeholder={placeholder}
@@ -9871,6 +9857,7 @@ export default function Accounts() {
 
                     <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs space-y-4">
                       {renderProxyInput({
+                        accountId: editingAccount.id,
                         value: editOpenAIForm.proxy_url,
                         onChange: (value) =>
                           setEditOpenAIForm((form) => ({
@@ -9909,6 +9896,7 @@ export default function Accounts() {
                           <p>{t("accounts.oauthStep1Desc")}</p>
                         </div>
                         {renderProxyInput({
+                          accountId: editingAccount.id,
                           value: editOAuthProxyUrl,
                           label: t("accounts.oauthProxyUrl"),
                           placeholder: t("accounts.oauthProxyUrlPlaceholder"),
@@ -10367,6 +10355,7 @@ export default function Accounts() {
                         {/* 代理服务器 */}
                         <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors md:col-span-2">
                           {renderProxyInput({
+                            accountId: editingAccount.id,
                             value: editProxyUrl,
                             onChange: setEditProxyUrl,
                           })}

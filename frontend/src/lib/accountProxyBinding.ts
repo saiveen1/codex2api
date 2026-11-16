@@ -38,6 +38,9 @@ export interface ProxyBindingProxy {
   test_ip?: string;
   test_location?: string;
   test_latency_ms?: number;
+  bound_count?: number;
+  exclusive?: boolean;
+  allowed_account_ids?: number[];
 }
 
 export interface ProxyBindingGroup {
@@ -86,6 +89,14 @@ export function proxyIsUsable(
   proxy: Pick<ProxyBindingProxy, "enabled" | "test_status">,
 ): boolean {
   return proxy.enabled && (proxy.test_status || "untested") !== "error";
+}
+
+export function proxyIsSelectable(proxy: ProxyBindingProxy, accountId?: number): boolean {
+  return proxyIsUsable(proxy) && (!proxy.exclusive || (accountId !== undefined && Boolean(proxy.allowed_account_ids?.includes(accountId))));
+}
+
+export function formatProxyIdentity(proxy: ProxyBindingProxy): string {
+  return `#${proxy.id} · ${formatProxyShortName(proxy, proxy.url)}`;
 }
 
 export function buildProxyBindingContext(input: {

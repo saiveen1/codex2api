@@ -1,3 +1,4 @@
+import { useProxyPool } from "../hooks/useProxyPool";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -29,7 +30,6 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
-import type { ProxyRow } from "../api";
 import type {
   AccountGroup,
   AccountHealthBucket,
@@ -243,20 +243,12 @@ function AntigravityAccounts({
   const [exporting, setExporting] = useState(false);
 
   // 代理池 + 代理池开关 + 全局代理:代理徽章的判定输入(拉取失败静默留空,不影响手填)。
-  const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
+  const proxyPool = useProxyPool();
   const [proxyPoolEnabled, setProxyPoolEnabled] = useState(false);
   const [globalProxyURL, setGlobalProxyURL] = useState("");
   const [quickProxyAccount, setQuickProxyAccount] = useState<AccountRow | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void api
-      .listProxies()
-      .then((res) => {
-        if (!cancelled) setProxyPool(res.proxies ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setProxyPool([]);
-      });
     void api
       .getSettings()
       .then((settings) => {

@@ -105,10 +105,12 @@ export function AccountMetadataFields({
   groups,
   onCreateGroup,
   stacked = false,
+  accountId,
 }: {
   proxyUrl: string;
   onProxyUrlChange: (value: string) => void;
   proxies?: ProxyRow[];
+  accountId?: number;
   groupIds: number[];
   onGroupIdsChange: (value: number[]) => void;
   groups: AccountGroup[];
@@ -125,6 +127,7 @@ export function AccountMetadataFields({
         value={proxyUrl}
         onChange={onProxyUrlChange}
         proxies={proxies}
+        accountId={accountId}
         label={t("antigravity.proxyUrl")}
         placeholder={t("antigravity.proxyUrlPlaceholder")}
       />

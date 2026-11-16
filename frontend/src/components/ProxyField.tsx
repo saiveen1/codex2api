@@ -67,10 +67,12 @@ export function ProxyField({
   placeholder = "socks5://user:pass@host:port",
   disabled = false,
   className,
+  accountId,
 }: {
   value: string;
   onChange: (value: string) => void;
   proxies: ProxyRow[];
+  accountId?: number;
   /** 字段标题;传空串则不渲染标题(由外层自行摆放)。 */
   label?: string;
   /** 标题样式覆盖,便于与所在弹窗相邻字段的标题风格对齐。 */
@@ -152,7 +154,7 @@ export function ProxyField({
         </Button>
       </div>
       {proxies.length > 0 ? (
-        <ProxyPoolSelect className="w-full" proxies={proxies} value={value} onSelect={onChange} disabled={disabled} />
+        <ProxyPoolSelect className="w-full" proxies={proxies} value={value} onSelect={onChange} disabled={disabled} accountId={accountId} />
       ) : (
         // 代理池为空时仍显示一个禁用占位下拉 + 引导,让"从代理池选择"始终可见,
         // 避免让用户误以为该功能缺失(池条目来自「代理」页)。

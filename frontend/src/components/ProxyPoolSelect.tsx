@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, MapPin, Check } from "lucide-react";
 
-import type { ProxyRow } from "../api";
+import { PROXY_POOL_CHANGED, type ProxyRow } from "../api";
+import { formatProxyDisplayURL, formatProxyIdentity, proxyIsSelectable } from "../lib/accountProxyBinding";
 import { cn } from "@/lib/utils";
 
 interface ProxyPoolSelectProps {
@@ -13,6 +14,7 @@ interface ProxyPoolSelectProps {
   value?: string;
   disabled?: boolean;
   className?: string;
+  accountId?: number;
 }
 
 const DROPDOWN_GAP = 6;
@@ -48,6 +50,7 @@ export function ProxyPoolSelect({
   value,
   disabled = false,
   className,
+  accountId,
 }: ProxyPoolSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -122,15 +125,14 @@ export function ProxyPoolSelect({
 
   // 空闲(bound_count=0)优先,其余按绑定数升序,负载最轻的排前面。
   const sorted = useMemo(
-    () => [...proxies].sort((a, b) => (a.bound_count ?? 0) - (b.bound_count ?? 0)),
-    [proxies],
+    () => proxies.filter((proxy) => proxyIsSelectable(proxy, accountId)).sort((a, b) => (a.bound_count ?? 0) - (b.bound_count ?? 0)),
+    [proxies, accountId],
   );
   const selected = useMemo(
     () => (value ? proxies.find((p) => p.url === value.trim()) : undefined),
     [proxies, value],
   );
 
-  if (proxies.length === 0) return null;
 
   const IdleBadge = () => (
     <span className="inline-flex shrink-0 items-center rounded-full bg-emerald-500/12 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
@@ -150,6 +152,7 @@ export function ProxyPoolSelect({
   );
 
   const selectedLoc = selected?.test_location?.trim();
+  const selectedUnavailable = selected && !proxyIsSelectable(selected, accountId);
 
   const dropdown =
     open && position
@@ -158,6 +161,7 @@ export function ProxyPoolSelect({
             ref={dropdownRef}
             data-select-dropdown="true"
             role="listbox"
+            aria-label={t("proxies.selectFromPool")}
             className="pointer-events-auto fixed z-[1000] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-1 shadow-lg [scrollbar-width:thin]"
             style={
               position.openUp
@@ -175,10 +179,11 @@ export function ProxyPoolSelect({
                   }
             }
           >
+            {sorted.length === 0 && <div role="status" className="px-3 py-2 text-sm text-muted-foreground">{t("proxies.noSelectable")}</div>}
             {sorted.map((proxy) => {
               const count = proxy.bound_count ?? 0;
               const loc = proxy.test_location?.trim();
-              const name = proxy.label?.trim() || proxy.url;
+              const name = formatProxyIdentity(proxy);
               const active = selected?.url === proxy.url;
               return (
                 <button
@@ -186,6 +191,7 @@ export function ProxyPoolSelect({
                   type="button"
                   role="option"
                   aria-selected={active}
+                  title={`${name}\n${formatProxyDisplayURL(proxy.url)}\n${t("proxies.boundCount", { count })}`}
                   onClick={() => {
                     onSelect(proxy.url);
                     setOpen(false);
@@ -200,12 +206,12 @@ export function ProxyPoolSelect({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
+                      <span className="break-words text-[13px] font-medium text-foreground">{name}</span>
                       {count === 0 ? <IdleBadge /> : <BoundBadge count={count} />}
                     </span>
                     <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       {loc ? <LocationTag loc={loc} /> : null}
-                      <span className="truncate font-mono opacity-80">{proxy.url}</span>
+                      <span className="truncate font-mono opacity-80">{formatProxyDisplayURL(proxy.url)}</span>
                     </span>
                   </span>
                 </button>
@@ -221,7 +227,8 @@ export function ProxyPoolSelect({
       <button
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { if (!open) window.dispatchEvent(new Event(PROXY_POOL_CHANGED)); setOpen((v) => !v); }}
+        title={selected ? `${formatProxyIdentity(selected)}\n${formatProxyDisplayURL(selected.url)}` : t("proxies.selectFromPool")}
         aria-expanded={open}
         aria-haspopup="listbox"
         className={cn(
@@ -232,9 +239,10 @@ export function ProxyPoolSelect({
         <span className="flex min-w-0 items-center gap-1.5">
           {selected ? (
             <>
-              <span className="truncate text-foreground">{selected.label?.trim() || selected.url}</span>
+              <span className="shrink-0 font-mono">#{selected.id}</span>
+              <span className="truncate text-foreground">{selected.label?.trim() || formatProxyDisplayURL(selected.url)}</span>
               {selectedLoc ? <LocationTag loc={selectedLoc} /> : null}
-              {(selected.bound_count ?? 0) === 0 ? <IdleBadge /> : <BoundBadge count={selected.bound_count ?? 0} />}
+              {selectedUnavailable ? <span className="shrink-0 text-xs text-destructive">{t("proxies.unavailableSelection")}</span> : (selected.bound_count ?? 0) === 0 ? <IdleBadge /> : <BoundBadge count={selected.bound_count ?? 0} />}
             </>
           ) : (
             <span className="truncate text-muted-foreground">{t("proxies.selectFromPool")}</span>

@@ -13431,11 +13431,14 @@ func (h *Handler) ListProxies(c *gin.Context) {
 	if proxies == nil {
 		proxies = []*database.ProxyRow{}
 	}
-	// 绑定数服务端聚合;失败不阻断列表(前端把 0 当"无绑定"展示)。
-	if boundCounts, err := h.db.CountAccountsByProxyURL(ctx); err == nil {
-		for _, p := range proxies {
-			p.BoundCount = boundCounts[strings.TrimSpace(p.URL)]
-		}
+	// Unknown occupancy must not be reported as zero/free to account selectors.
+	boundCounts, err := h.db.CountAccountsByProxyURL(ctx)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "获取代理绑定数量失败，请刷新重试")
+		return
+	}
+	for _, p := range proxies {
+		p.BoundCount = boundCounts[strings.TrimSpace(p.URL)]
 	}
 	c.JSON(http.StatusOK, gin.H{"proxies": proxies})
 }

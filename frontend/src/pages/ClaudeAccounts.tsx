@@ -1,3 +1,4 @@
+import { useProxyPool } from "../hooks/useProxyPool";
 import { useIntelligenceBars } from "../hooks/useIntelligenceBars";
 import AccountIntelligenceBar, { AccountIntelligenceActions } from "../components/AccountIntelligenceBar";
 import type { IntelligenceBar } from "../lib/intelligenceCheck";
@@ -607,7 +608,7 @@ export default function ClaudeAccounts({ headerSlot }: { headerSlot?: ReactNode 
   const [statsState, setStatsState] = useState<"ready" | "stale" | "warming">("warming");
   const [disabledSorts, setDisabledSorts] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [proxyPool, setProxyPool] = useState<ProxyRow[]>([]);
+  const proxyPool = useProxyPool();
   // 代理池开关 + 全局代理:代理徽章要靠这两个才能把"未自绑"的账号判成继承池/全局/直连。
   const [proxyPoolEnabled, setProxyPoolEnabled] = useState(false);
   const [globalProxyURL, setGlobalProxyURL] = useState("");
@@ -1163,14 +1164,6 @@ export default function ClaudeAccounts({ headerSlot }: { headerSlot?: ReactNode 
   useEffect(() => {
     void reloadGroups();
     let cancelled = false;
-    void api
-      .listProxies()
-      .then((res) => {
-        if (!cancelled) setProxyPool(res.proxies ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setProxyPool([]);
-      });
     void api
       .getSettings()
       .then((settings) => {
@@ -3156,7 +3149,7 @@ function EditAccountModal({
           </div>
           {field(
             t("claude.proxyLabel"),
-            <ProxyField value={proxyUrl} onChange={setProxyUrl} proxies={proxies} label="" />,
+            <ProxyField value={proxyUrl} onChange={setProxyUrl} proxies={proxies} label="" accountId={account.id} />,
             t("claude.proxyHint"),
           )}
           {isAPIKeyAccount ? <>

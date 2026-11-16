@@ -8,6 +8,8 @@ import {
   formatProxyShortName,
   isManagedProxyUnavailable,
   proxyIsUsable,
+  proxyIsSelectable,
+  formatProxyIdentity,
   resolveAccountProxyBinding,
 } from "./accountProxyBinding.ts";
 
@@ -233,4 +235,16 @@ test("resin overrides every layer of the proxy chain for codex accounts", () => 
   const plain = buildProxyBindingContext({ proxies: [healthy], poolEnabled: true });
   assert.equal(plain.resinEnabled, false);
   assert.equal(resolveAccountProxyBinding({}, plain).kind, "pool");
+});
+
+test("selector rejects disabled, failed and unauthorized nodes, not occupied shared nodes", () => {
+  assert.equal(proxyIsSelectable(disabled, 11), false);
+  assert.equal(proxyIsSelectable(failed, 11), false);
+  assert.equal(proxyIsSelectable({ ...healthy, bound_count: 2 }, 11), true);
+  const exclusive = { ...healthy, exclusive: true, allowed_account_ids: [11] };
+  assert.equal(proxyIsSelectable(exclusive), false);
+  assert.equal(proxyIsSelectable(exclusive, 12), false);
+  assert.equal(proxyIsSelectable(exclusive, 11), true);
+  assert.equal(formatProxyIdentity(healthy), "#1 · HK-01");
+  assert.equal(formatProxyIdentity({ ...healthy, label: "", url: "http://user:secret@proxy.example:8080" }), "#1 · proxy.example:8080");
 });

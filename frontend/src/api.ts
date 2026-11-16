@@ -224,6 +224,8 @@ function extractAdminErrorMessage(body: string, status: number): string {
   return body
 }
 
+export const PROXY_POOL_CHANGED = 'codex2api:proxy-pool-changed'
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers)
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
@@ -270,6 +272,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     let details: unknown
     try { details = JSON.parse(body) } catch { /* Non-JSON errors retain their message. */ }
     throw new AdminAPIError(res.status, extractAdminErrorMessage(body, res.status), details)
+  }
+
+  if (options.method && options.method !== 'GET' && /^\/(accounts|proxies|proxy-subscriptions)(\/|$)/.test(path)) {
+    window.dispatchEvent(new Event(PROXY_POOL_CHANGED))
   }
 
   if (res.status === 204) {

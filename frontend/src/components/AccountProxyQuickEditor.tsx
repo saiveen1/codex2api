@@ -125,7 +125,11 @@ export default function AccountProxyQuickEditor({
           ? t("accounts.proxyQuickSaveDone")
           : t("accounts.proxyQuickUnbindDone"),
       );
-      await onSaved();
+      try {
+        await onSaved();
+      } catch {
+        showToast(t("accounts.proxyQuickRefreshFailed"), "error");
+      }
       onClose();
     } catch (error) {
       showToast(
@@ -179,7 +183,7 @@ export default function AccountProxyQuickEditor({
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="text-xs">{t("accounts.proxyQuickCurrent")}</span>
-            <AccountProxyBadge account={account} ctx={ctx} />
+            <AccountProxyBadge account={account} ctx={ctx} details />
           </div>
           <div className="mt-2 text-xs">{t("accounts.proxyQuickDesc")}</div>
         </div>
@@ -212,9 +216,12 @@ export default function AccountProxyQuickEditor({
           <ProxyPoolSelect
             className="w-full"
             proxies={proxies}
+            value={value}
+            accountId={account?.id}
             disabled={busy}
             onSelect={setValue}
           />
+          {dirty && trimmed && <div className="rounded-md border bg-muted/20 p-3"><AccountProxyBadge account={{ proxy_url: trimmed }} ctx={ctx} details /></div>}
         </div>
       </div>
     </Modal>

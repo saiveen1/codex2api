@@ -5,6 +5,7 @@ import {
   formatProxyDisplayURL,
   formatProxyEgressSummary,
   formatProxyShortName,
+  formatProxyIdentity,
   resolveAccountProxyBinding,
   type AccountProxyBindingKind,
   type ProxyBindingAccount,
@@ -37,6 +38,7 @@ interface AccountProxyBadgeProps {
   ctx: ProxyBindingContext;
   onClick?: () => void;
   className?: string;
+  details?: boolean;
 }
 
 export default function AccountProxyBadge({
@@ -44,6 +46,7 @@ export default function AccountProxyBadge({
   ctx,
   onClick,
   className,
+  details = false,
 }: AccountProxyBadgeProps) {
   const { t } = useTranslation();
   const binding = resolveAccountProxyBinding(account, ctx);
@@ -104,6 +107,9 @@ export default function AccountProxyBadge({
       break;
   }
 
+  if (binding.proxy) {
+    tip = [formatProxyIdentity(binding.proxy), t("proxies.boundCount", { count: binding.proxy.bound_count ?? 0 }), !binding.proxy.enabled ? t("proxies.filterDisabled") : "", tip].filter(Boolean).join("\n");
+  }
   const title = onClick ? `${tip}\n${t("accounts.proxyTipEdit")}` : tip;
   const Icon =
     binding.kind === "bound_unusable" || binding.kind === "direct_blocked"
@@ -121,11 +127,14 @@ export default function AccountProxyBadge({
       )}
     >
       <Icon className="size-2.5 shrink-0" />
+      {binding.proxy && <span className="shrink-0 font-mono">#{binding.proxy.id}</span>}
       <span className="truncate">{text}</span>
+      {binding.proxy && <span className="shrink-0">· {binding.proxy.bound_count ?? 0}</span>}
     </span>
   );
 
   if (!onClick) {
+    if (details) return <div className={cn("whitespace-pre-line break-words text-xs leading-relaxed", className)}>{title}</div>;
     return (
       <span className={cn("inline-flex min-w-0 max-w-full", className)} title={title}>
         {body}
