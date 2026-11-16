@@ -650,6 +650,16 @@ async def test_asset_url_ssrf_rejected(url):
     assert error.value.code == "image_download_failed"
 
 
+
+async def test_upstream_chatgpt_download_host_is_allowed(monkeypatch):
+    # Upstream serves generated images from chatgpt.com itself; rejecting that
+    # host left every successful generation undownloadable.
+    async def lookup(*args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("2.16.10.20", 443))]
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", lookup)
+    host, addresses = await public_destination("https://chatgpt.com/backend-api/files/file_x/download")
+    assert host == "chatgpt.com" and addresses == ["2.16.10.20"]
+
 @pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fc00::1", "::ffff:127.0.0.1"])
 async def test_private_dns_rejected(monkeypatch, address):
     async def lookup(*args, **kwargs):

@@ -12,7 +12,7 @@ from curl_cffi.requests import AsyncSession
 
 from contract import SafeError
 
-ASSET_HOSTS = frozenset({"files.oaiusercontent.com", "oaiusercontent.com",
+ASSET_HOSTS = frozenset({"chatgpt.com", "files.oaiusercontent.com", "oaiusercontent.com",
                          "oaidalleapiprodscus.blob.core.windows.net",
                          "prod-files-secure.s3.us-west-2.amazonaws.com"})
 
