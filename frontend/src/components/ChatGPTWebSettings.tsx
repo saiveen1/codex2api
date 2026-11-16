@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import ChatGPTWebAccountBadge from './ChatGPTWebAccountBadge'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api, type ChatGPTWebDeployment, type ChatGPTWebExecution, type ChatGPTWebState } from '../api'
@@ -44,6 +45,7 @@ export default function ChatGPTWebSettings() {
         const state = states.find(s => s.account_id === account.id)
         return <div key={account.id} className="space-y-2 rounded-md border p-3 text-sm">
           <p className="font-medium">{t('chatgptWeb.account')} #{account.id} {account.name || account.email}</p>
+          <ChatGPTWebAccountBadge accountID={account.id} accountName={account.name || account.email} state={state ?? null} onStateChange={next => setStates(previous => next ? [...previous.filter(item => item.account_id !== account.id), next] : previous.filter(item => item.account_id !== account.id))} />
           <p>{t('chatgptWeb.status')}: {t(webAccountStatusMessage(state ?? null))} · {t(state?.enabled ? 'chatgptWeb.enabled' : 'chatgptWeb.disabled')}</p>
           <p>{t('chatgptWeb.capabilities')}: {state?.capabilities?.join(', ') || t('chatgptWeb.unknown')} · {t('chatgptWeb.quota')}: {state?.image_quota_remaining ?? t('chatgptWeb.unknown')}</p>
           <p>{t('chatgptWeb.reset')}: {state?.quota_reset_at || '—'} · {t('chatgptWeb.observed')}: {state?.observed_at || '—'} · {t('chatgptWeb.error')}: {state?.error_code || '—'}</p>

@@ -1178,6 +1178,7 @@ function useCountdownRemaining(until?: string): string {
 const AccountTableRow = memo(function AccountTableRow({
   account,
   webState,
+  onWebStateChange,
   channelMonitorBilling,
   sequence,
   selected,
@@ -1197,6 +1198,7 @@ const AccountTableRow = memo(function AccountTableRow({
 }: {
   account: AccountRow;
   webState?: ChatGPTWebState | null;
+  onWebStateChange: (accountID: number, state: ChatGPTWebState | null) => void;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -1562,7 +1564,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                           }
                                           errorMessage={account.error_message}
                                         />
-                                        {isOAuthAccount(account) && <ChatGPTWebAccountBadge state={webState} />}
+                                        {isOAuthAccount(account) && <ChatGPTWebAccountBadge accountID={account.id} accountName={account.name || account.email} state={webState} onStateChange={next => onWebStateChange(account.id, next)} />}
                                         <AccountIntelligenceActions bar={intelligenceBar} accountID={account.id} accountName={account.email || account.name} />
                                       </div>
                                       <UsingCreditsBadge account={account} />
@@ -1728,6 +1730,7 @@ const AccountTableRow = memo(function AccountTableRow({
 const AccountCardItem = memo(function AccountCardItem({
   account,
   webState,
+  onWebStateChange,
   channelMonitorBilling,
   sequence,
   selected,
@@ -1748,6 +1751,7 @@ const AccountCardItem = memo(function AccountCardItem({
 }: {
   account: AccountRow;
   webState?: ChatGPTWebState | null;
+  onWebStateChange: (accountID: number, state: ChatGPTWebState | null) => void;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -1770,6 +1774,7 @@ const AccountCardItem = memo(function AccountCardItem({
     <AccountMobileCard
       account={account}
       webState={webState}
+      onWebStateChange={onWebStateChange}
       channelMonitorBilling={channelMonitorBilling}
       sequence={sequence}
       selected={selected}
@@ -1866,6 +1871,15 @@ export default function Accounts() {
     }).catch(() => { if (!cancelled) setWebStates(null); });
     return () => { cancelled = true; };
   }, [providerView]);
+  const updateWebState = useCallback((accountID: number, state: ChatGPTWebState | null) => {
+    setWebStates(previous => {
+      if (previous === null) return previous;
+      const next = { ...previous };
+      if (state) next[accountID] = state;
+      else delete next[accountID];
+      return next;
+    });
+  }, []);
   const { channels: visibleChannels, isChannelVisible } = useVisibleChannels();
   // 设置页隐藏了某个渠道后，直接打开它的账号路由要回落到 Codex 视图。
   useEffect(() => {
@@ -7699,6 +7713,7 @@ export default function Accounts() {
                         key={account.id}
                         account={account}
                         webState={webStates ? webStates[account.id] ?? null : undefined}
+                        onWebStateChange={updateWebState}
                         channelMonitorBilling={channelMonitorBillingByAccount[account.id]}
                         sequence={(currentPage - 1) * pageSize + index + 1}
                         selected={selected.has(account.id)}
@@ -7984,6 +7999,7 @@ export default function Accounts() {
                           key={account.id}
                           account={account}
                           webState={webStates ? webStates[account.id] ?? null : undefined}
+                          onWebStateChange={updateWebState}
                           channelMonitorBilling={channelMonitorBillingByAccount[account.id]}
                           sequence={(currentPage - 1) * pageSize + index + 1}
                           selected={selected.has(account.id)}
@@ -13957,6 +13973,7 @@ function GroupChipList({
 function AccountMobileCard({
   account,
   webState,
+  onWebStateChange,
   channelMonitorBilling,
   sequence,
   selected,
@@ -13997,6 +14014,7 @@ function AccountMobileCard({
 }: {
   account: AccountRow;
   webState?: ChatGPTWebState | null;
+  onWebStateChange: (accountID: number, state: ChatGPTWebState | null) => void;
   channelMonitorBilling?: ChannelMonitorBillingSnapshot;
   sequence: number;
   selected: boolean;
@@ -14241,11 +14259,11 @@ function AccountMobileCard({
               <AccountConcurrencyBadge account={account} />
             </div>
           ) : null}
-          {isOAuthAccount(account) && <ChatGPTWebAccountBadge state={webState} />}
         </div>
       </header>
 
       <div className="codex-account-card__notices">
+        {isOAuthAccount(account) && <ChatGPTWebAccountBadge accountID={account.id} accountName={account.name || account.email} state={webState} onStateChange={next => onWebStateChange(account.id, next)} />}
         {overlayKind === "overload" && (
           <div className="codex-account-card__notice">
             {renderAccountStateOverlay(account, t, {

@@ -17,3 +17,8 @@ export function webAccountStatusMessage(state?: ChatGPTWebState | null): string 
   }
   return `chatgptWeb.${keys[webAccountStatus(state)]}`
 }
+
+export function webImageQuotaRemaining(state?: ChatGPTWebState | null): number | null {
+  const value = state?.image_quota_remaining
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
