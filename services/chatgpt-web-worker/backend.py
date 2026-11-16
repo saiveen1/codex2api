@@ -266,7 +266,10 @@ class Backend:
                 path = "/backend-api/files/" + safe_id(asset) + "/download"
             resolved = await self.api("GET", path)
             url = resolved.get("download_url") or resolved.get("url")
-            async with self.transport.open("GET", url, headers={}, timeout=self.remaining(), asset=True) as response:
+            # The signed asset URL still requires this account's bearer token;
+            # sending no headers made every download return 403.
+            asset_headers = {"Authorization": "Bearer " + self.raw["access_token"]}
+            async with self.transport.open("GET", url, headers=asset_headers, timeout=self.remaining(), asset=True) as response:
                 data = await read_bounded(response, MAX_OUTPUT)
             mime, width, height = image_info(data)
             desired = "image/" + self.raw.get("output_format", "png")

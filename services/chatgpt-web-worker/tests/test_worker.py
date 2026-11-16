@@ -119,7 +119,13 @@ class Script:
         if url in self.failures:
             raise self.failures[url]
         if kwargs.get("asset"):
-            assert "Authorization" not in kwargs["headers"]
+            # Downloads of signed assets need this account's bearer token
+            # (verified live: 403 without it, 200 with it). Uploads go to a
+            # pre-signed blob URL and must not carry it. Cookies are never sent.
+            if method == "GET":
+                assert kwargs["headers"].get("Authorization", "").startswith("Bearer ")
+            else:
+                assert "Authorization" not in kwargs["headers"]
             assert "Cookie" not in kwargs["headers"]
             if method == "GET" and self.fail_download:
                 raise RuntimeError("sensitive signed URL and token must not leak")
