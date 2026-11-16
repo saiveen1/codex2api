@@ -2849,6 +2849,10 @@ func (h *Handler) UpdateAccountScheduler(c *gin.Context) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
+		if errors.Is(err, database.ErrProxyAccessDenied) {
+			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
+			return
+		}
 		writeError(c, http.StatusInternalServerError, "更新账号调度配置失败: "+err.Error())
 		return
 	}
@@ -7002,6 +7006,10 @@ func (h *Handler) BatchUpdateAccounts(c *gin.Context) {
 		CredentialUpdates:       schedulerUpdate.CredentialUpdates,
 	})
 	if err != nil {
+		if errors.Is(err, database.ErrProxyAccessDenied) {
+			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
+			return
+		}
 		writeError(c, http.StatusInternalServerError, "批量更新账号失败: "+err.Error())
 		return
 	}
