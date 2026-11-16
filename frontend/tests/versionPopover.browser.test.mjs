@@ -89,7 +89,9 @@ test('custom build popover has no update dot or action on desktop, including a c
     assert.equal(await badge.locator('span[aria-hidden="true"]').count(), 0)
     assert.equal(await popover.getByRole('button', { name: '立即更新', exact: true }).count(), 0)
     assert.equal(await popover.getByText('已是最新版本', { exact: true }).count(), 0)
-    assert.equal(await popover.getByRole('link', { name: '查看更新内容' }).getAttribute('href'), 'https://example.test/releases/v3.1.6')
+    assert.equal(await popover.getByRole('link', { name: '查看更新内容' }).getAttribute('href'), cached
+      ? 'https://github.com/james-6-23/codex2api/releases/tag/v3.1.6'
+      : 'https://example.test/releases/v3.1.6')
   }
 })
 
