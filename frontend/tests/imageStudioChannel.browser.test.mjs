@@ -25,11 +25,12 @@ before(async () => {
         import Portal from ${JSON.stringify(path.join(root, 'src/pages/ImageStudioPortal.tsx'))};
         import {ToastProvider} from ${JSON.stringify(path.join(root, 'src/components/ToastProvider.tsx'))};
         import {BrandingProvider} from ${JSON.stringify(path.join(root, 'src/branding.tsx'))};
+        import {ThemeProvider} from ${JSON.stringify(path.join(root, 'src/hooks/useTheme.tsx'))};
         import {MemoryRouter} from 'react-router-dom';
         import ${JSON.stringify(path.join(root, 'src/i18n.ts'))}; import ${JSON.stringify(path.join(root, 'src/index.css'))};
         createRoot(document.getElementById('root')).render(
-          React.createElement(MemoryRouter,null,React.createElement(BrandingProvider,null,
-            React.createElement(ToastProvider,null,React.createElement(window.__portal ? Portal : Studio)))));`
+          React.createElement(MemoryRouter,null,React.createElement(ThemeProvider,null,React.createElement(BrandingProvider,null,
+            React.createElement(ToastProvider,null,React.createElement(window.__portal ? Portal : Studio))))));`
     },
   }], resolve: { alias: { '@': path.join(root, 'src') } }, define: { 'process.env.NODE_ENV': '"production"' }, build: {
     write: false, minify: false, rollupOptions: { input: 'virtual:image-channel-harness' },
