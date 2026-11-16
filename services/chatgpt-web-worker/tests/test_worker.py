@@ -492,7 +492,12 @@ async def test_unsupported_challenge_fails_before_generation(tmp_path, challenge
     script = Script()
     script.challenge = {challenge: {"required": True, "dx": "not-executed"}}
     events, _ = await execute(tmp_path, script)
-    assert events[-1]["code"] == "environment_challenge" and not script.submits()
+    if challenge == "arkose":
+        assert events[-1]["code"] == "environment_challenge" and not script.submits()
+    else:
+        # Turnstile is advisory: the run must reach upstream submission, and
+        # only an upstream refusal may fail it (never a local pre-submit abort).
+        assert script.submits(), events[-1]
 
 
 def test_json_patches_and_trust_boundary():

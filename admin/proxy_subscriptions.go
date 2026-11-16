@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -68,18 +69,60 @@ func (h *Handler) StartProxySubscriptions(parent context.Context, directory stri
 		runtime.mu.Unlock()
 	})
 	// Do not install or launch a core on instances that have never enabled a feed.
+	// A container recreate leaves no child process behind while the enabled feed
+	// and its listeners stay configured, so startup must retry until the core is
+	// actually serving. Bounded retries keep a broken binary from looping.
 	for _, subscription := range manager.View().Subscriptions {
 		if subscription.Enabled {
-			runtime.start("starting", func(ctx context.Context) error {
-				if err := manager.Ensure(ctx); err != nil {
-					return err
-				}
-				return h.syncSubscriptionProxies(ctx)
-			})
+			go h.autostartProxyEngine(runtime, manager, backgroundRetryDelay)
 			break
 		}
 	}
 	return nil
+}
+
+// backgroundRetryDelay is a test seam for the restore loop; production waits a
+// few seconds so the core can bind its listeners before the first retry.
+const backgroundRetryDelay = 3 * time.Second
+const backgroundRetryLimit = 10
+
+// autostartProxyEngine restores a previously enabled managed core after a
+// container recreate. It retries with a bounded budget and reports every failed
+// round, so a broken install is visible instead of silently leaving dead
+// loopback listeners behind.
+func (h *Handler) autostartProxyEngine(runtime *proxySubscriptionRuntime, manager subscriptionManager, retryDelay time.Duration) {
+	for attempt := 1; attempt <= backgroundRetryLimit; attempt++ {
+		view := manager.View()
+		if view.Running {
+			log.Printf("订阅代理引擎已在运行: version=%s", view.Version)
+			return
+		}
+		err := func() error {
+			ctx, cancel := context.WithTimeout(runtime.ctx, 5*time.Minute)
+			defer cancel()
+			if ensureErr := manager.Ensure(ctx); ensureErr != nil {
+				return ensureErr
+			}
+			return h.syncSubscriptionProxies(ctx)
+		}()
+		if err == nil {
+			log.Printf("订阅代理引擎自动恢复成功: attempt=%d", attempt)
+			return
+		}
+		runtime.mu.Lock()
+		runtime.syncError = "订阅配置已应用，但代理池同步失败，请重试刷新"
+		runtime.mu.Unlock()
+		log.Printf("订阅代理引擎自动恢复失败: attempt=%d error=%v", attempt, err)
+		if attempt == backgroundRetryLimit || runtime.ctx.Err() != nil {
+			log.Printf("订阅代理引擎自动恢复放弃: attempts=%d", attempt)
+			return
+		}
+		select {
+		case <-runtime.ctx.Done():
+			return
+		case <-time.After(retryDelay):
+		}
+	}
 }
 
 func (h *Handler) CloseProxySubscriptions() error {

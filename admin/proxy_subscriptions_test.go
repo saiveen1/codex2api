@@ -189,3 +189,50 @@ func TestProxySubscriptionLabelIsRuneBounded(t *testing.T) {
 		t.Fatalf("invalid label boundary: %d", utf8.RuneCountInString(got))
 	}
 }
+
+type stubAutostartManager struct {
+	fakeSubscriptionManager
+	calls        int
+	fail         int
+	runningAfter int
+}
+
+func (m *stubAutostartManager) Ensure(context.Context) error {
+	m.calls++
+	if m.calls <= m.fail {
+		return errors.New("core not ready")
+	}
+	return nil
+}
+func (m *stubAutostartManager) View() managedproxy.View {
+	view := m.fakeSubscriptionManager.View()
+	view.Running = m.calls > m.fail && m.calls >= m.runningAfter
+	return view
+}
+
+func TestProxyEngineAutostartRestoresAfterContainerRecreate(t *testing.T) {
+	manager := &stubAutostartManager{fail: 2, runningAfter: 3}
+	manager.fakeSubscriptionManager.view = managedproxy.View{Subscriptions: []managedproxy.Subscription{{ID: "s1", Enabled: true}}}
+	runtime := subscriptionTestRuntime(t, manager)
+	handler := &Handler{proxySubscriptions: runtime}
+	handler.autostartProxyEngine(runtime, manager, 0)
+	if manager.calls != 3 {
+		t.Fatalf("expected bounded retries until recovery, got calls=%d", manager.calls)
+	}
+}
+
+func TestProxyEngineAutostartStopsAtBoundedLimit(t *testing.T) {
+	manager := &stubAutostartManager{fail: backgroundRetryLimit + 5, runningAfter: backgroundRetryLimit + 1}
+	manager.fakeSubscriptionManager.view = managedproxy.View{Subscriptions: []managedproxy.Subscription{{ID: "s1", Enabled: true}}}
+	runtime := subscriptionTestRuntime(t, manager)
+	handler := &Handler{proxySubscriptions: runtime}
+	handler.autostartProxyEngine(runtime, manager, 0)
+	if manager.calls != backgroundRetryLimit {
+		t.Fatalf("retry loop not bounded: calls=%d limit=%d", manager.calls, backgroundRetryLimit)
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.syncError == "" {
+		t.Fatal("failed restore was not reported")
+	}
+}

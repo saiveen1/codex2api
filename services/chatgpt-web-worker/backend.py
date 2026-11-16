@@ -104,9 +104,11 @@ class Backend:
 
     @staticmethod
     def supported_challenge(data):
-        for name in ("arkose", "turnstile"):
-            if (data.get(name) or {}).get("required"):
-                raise SafeError("environment_challenge", 403)
+        # arkose needs an interactive VM we never run. Turnstile is advisory in
+        # practice: finalize still issues a token with an empty turnstile_token,
+        # so let upstream judge it instead of aborting before submission.
+        if (data.get("arkose") or {}).get("required"):
+            raise SafeError("environment_challenge", 403)
 
     async def prepare_requirements(self, resources):
         path = "/backend-api/sentinel/chat-requirements"
