@@ -251,7 +251,11 @@ func (h *Handler) SubmitAccountPortalCode(c *gin.Context) {
 // upsertSelfServiceAccount 以「待审核」状态入库：enabled=false + note(联系人) + tag self-service，
 // 不加入运行时调度池（管理员批准后再启用）。重复账号返回 errDuplicateOAuthIdentity。
 func (h *Handler) upsertSelfServiceAccount(ctx context.Context, name, proxyURL string, seed tokenCredentialSeed, contactEmail string) (int64, error) {
-	seed = normalizeTokenCredentialSeed(seed)
+	var identityErr error
+	seed, identityErr = h.prepareTokenCredentialSeed(ctx, seed, proxyURL, 0)
+	if identityErr != nil {
+		return 0, identityErr
+	}
 	if seed.email != "" && effectiveWorkspaceIDFromSeed(seed) != "" {
 		h.mergeDuplicateMu.Lock()
 		defer h.mergeDuplicateMu.Unlock()

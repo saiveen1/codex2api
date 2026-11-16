@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codex2api/database"
 	"github.com/codex2api/managedweb"
 )
 
@@ -130,6 +128,7 @@ type chatGPTWebAccountRequest struct {
 	AccountID           int64                 `json:"account_id"`
 	AccessToken         string                `json:"access_token"`
 	ChatGPTAccountID    string                `json:"chatgpt_account_id"`
+	ExpectedEmail       string                `json:"expected_email,omitempty"`
 	CredentialRevision  string                `json:"credential_revision"`
 	EnvironmentRevision int64                 `json:"environment_revision"`
 	ProxyURL            string                `json:"proxy_url"`
@@ -231,107 +230,7 @@ func chatGPTWebPost(ctx context.Context, client *http.Client, cfg chatGPTWebConf
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, errors.New("worker connection failed")
+		return nil, fmt.Errorf("worker connection failed: %w", err)
 	}
 	return resp, nil
-}
-
-// CheckChatGPTWebAccount observes the web channel only. Credential refresh is
-// owned by the existing account lifecycle, never by the protocol service.
-func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (*database.ChatGPTWebAccountState, error) {
-	cfg, err := h.loadChatGPTWebConfig()
-	if err != nil {
-		return nil, err
-	}
-	if h.db == nil || h.store == nil {
-		return nil, errors.New("account state is unavailable")
-	}
-	state, err := h.db.GetChatGPTWebAccountState(ctx, accountID)
-	if err != nil || !state.Enabled {
-		return nil, errors.New("enable this account for ChatGPT Web before checking")
-	}
-	account := h.store.FindByID(accountID)
-	if account == nil || account.IsRelayStyle() {
-		return nil, errors.New("account is not eligible for ChatGPT Web")
-	}
-	token, workspace := account.ChatGPTWebCredentials()
-	if token == "" {
-		return nil, errors.New("account has no access token")
-	}
-	proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
-	if !usable {
-		return nil, errors.New("ChatGPT Web account has no usable egress")
-	}
-	owner := "check-" + NewUpstreamSessionUUID()
-	lease, err := h.db.AcquireChatGPTWebAccountLease(ctx, accountID, owner, time.Now().Add(40*time.Second))
-	if err != nil || !lease {
-		return nil, errors.New("account web environment is busy")
-	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = h.db.ReleaseChatGPTWebAccountLease(cleanup, accountID, owner)
-	}()
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	request := chatGPTWebAccountRequest{AccountID: accountID, AccessToken: token, ChatGPTAccountID: workspace, CredentialRevision: chatGPTWebHash(token), EnvironmentRevision: state.EnvironmentRevision, ProxyURL: proxyURL, Environment: chatGPTWebEnvironment{state.DeviceID, state.SessionID}, TimeoutSeconds: 30}
-	client := newChatGPTWebHTTPClient()
-	defer client.CloseIdleConnections()
-	resp, err := chatGPTWebPost(checkCtx, client, cfg, "/v1/accounts/check", request)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("web environment check failed")
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
-	if err != nil || len(data) > 65536 {
-		return nil, errors.New("invalid web environment observation")
-	}
-	var observation struct {
-		Status              string     `json:"status"`
-		Capabilities        []string   `json:"capabilities"`
-		ImageQuotaRemaining *int       `json:"image_quota_remaining"`
-		QuotaResetAt        *time.Time `json:"quota_reset_at"`
-		ErrorCode           string     `json:"error_code"`
-	}
-	if json.Unmarshal(data, &observation) != nil {
-		return nil, errors.New("invalid web environment observation")
-	}
-	switch observation.Status {
-	case "ready", "unverified", "auth_required", "challenge", "quota_exhausted":
-	default:
-		return nil, errors.New("invalid web environment state")
-	}
-	caps := []string{}
-	for _, capability := range observation.Capabilities {
-		if capability == "generate" || capability == "edit" {
-			caps = append(caps, capability)
-		}
-	}
-	if observation.Status == "ready" && len(caps) == 0 {
-		observation.Status = "unverified"
-	}
-	if observation.ImageQuotaRemaining != nil && *observation.ImageQuotaRemaining < 0 {
-		return nil, errors.New("invalid web quota observation")
-	}
-	now := time.Now().UTC()
-	state.Status = observation.Status
-	state.Capabilities = caps
-	state.ImageQuotaRemaining = observation.ImageQuotaRemaining
-	state.QuotaResetAt = observation.QuotaResetAt
-	state.ObservedAt = &now
-	state.CredentialRevision = request.CredentialRevision
-	state.WorkspaceFingerprint = chatGPTWebHash(workspace)
-	state.ProxyFingerprint = chatGPTWebHash(proxyURL)
-	state.ErrorCode = ""
-	if observation.ErrorCode != "" {
-		state.ErrorCode = chatGPTWebSafeCode(observation.ErrorCode)
-	}
-	saved, err := h.db.SaveChatGPTWebAccountObservation(ctx, state, token)
-	if err != nil || !saved {
-		return nil, fmt.Errorf("web observation changed concurrently; check again")
-	}
-	return state, nil
 }

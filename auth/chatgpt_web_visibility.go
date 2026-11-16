@@ -25,16 +25,22 @@ func (s *Store) ChatGPTWebAccountVisibleToKey(apiKeyID int64, account *Account) 
 	return account.chatGPTWebDispatchEligibleLocked(time.Now())
 }
 
-// ChatGPTWebCredentials snapshots the token and effective workspace together.
+// ChatGPTWebCredentials returns the requested route; an empty workspace means
+// authenticated default discovery, never an invented workspace from a user ID.
 func (a *Account) ChatGPTWebCredentials() (string, string) {
-	if a == nil {
+	token, workspace, _, _, err := a.ChatGPTWebIdentity()
+	if err != nil {
 		return "", ""
+	}
+	return token, workspace
+}
+
+func (a *Account) ChatGPTWebIdentity() (token, workspace, email string, expired bool, err error) {
+	if a == nil {
+		return
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	workspace := strings.TrimSpace(a.AccountID)
-	if override := openaiidentity.WorkspaceOverrideFromHeaders(a.CustomHeaders); override != "" {
-		workspace = override
-	}
-	return strings.TrimSpace(a.AccessToken), workspace
+	workspace, err = openaiidentity.RequestedWebWorkspace(a.AccountID, a.CustomHeaders)
+	return strings.TrimSpace(a.AccessToken), workspace, strings.TrimSpace(a.Email), !a.ExpiresAt.IsZero() && !a.ExpiresAt.After(time.Now()), err
 }

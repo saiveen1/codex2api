@@ -96,16 +96,36 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 	workspace := openaiidentity.NormalizeWorkspaceID(c.ChatGPTAccountID)
 	user := strings.TrimSpace(c.ChatGPTUserID)
 	tokenEmail, tokenWorkspace := openaiidentity.TokenIdentity(c.IDToken, c.AccessToken)
-	if tokenEmail != "" && (!strings.EqualFold(tokenEmail, seed.email) || tokenWorkspace != workspace) {
+	if tokenEmail != "" && (!strings.EqualFold(tokenEmail, seed.email) || (workspace != "" && tokenWorkspace != workspace)) {
 		return oauthGatewayImportFailure("gateway_identity_mismatch")
 	}
-	if workspace == "" || user == "" || seed.email == "" || (seed.workspaceID != "" && seed.workspaceID != workspace) || (seed.userID != "" && seed.userID != user) {
+	if (seed.workspaceID != "" && workspace != "" && seed.workspaceID != workspace) || (seed.userID != "" && user != "" && seed.userID != user) {
 		return oauthGatewayImportFailure("gateway_identity_mismatch")
 	}
-	seed.accountID, seed.workspaceID, seed.userID = workspace, workspace, user
 	if err := t.h.validateOAuthGatewayDestination(ctx, groupIDs, runtimeProxy); err != nil {
 		return oauthGatewayImportFailure("invalid_import_destination")
 	}
+	if workspace == "" || user == "" {
+		if workspace != "" {
+			seed.accountID, seed.workspaceID = workspace, workspace
+		}
+		if user != "" {
+			seed.userID = user
+		}
+		var identityErr error
+		seed, identityErr = t.h.prepareTokenCredentialSeed(ctx, seed, runtimeProxy, 0)
+		if identityErr != nil {
+			return oauthGatewayImportFailure("gateway_identity_mismatch")
+		}
+		if seed.workspaceDiagnostic != "" || !openaiidentity.ValidWebWorkspaceID(seed.workspaceID) || seed.userID == "" {
+			return oauthGatewayImportFailure("gateway_identity_unverified")
+		}
+		workspace, user = seed.workspaceID, seed.userID
+	}
+	if !openaiidentity.ValidWebWorkspaceID(workspace) || user == "" || seed.email == "" {
+		return oauthGatewayImportFailure("gateway_identity_mismatch")
+	}
+	seed.accountID, seed.workspaceID, seed.userID = workspace, workspace, user
 	t.h.mergeDuplicateMu.Lock()
 	defer t.h.mergeDuplicateMu.Unlock()
 	duplicateID, err := t.h.findOAuthIdentityDuplicate(ctx, seed, 0)

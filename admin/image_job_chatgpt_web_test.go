@@ -85,7 +85,15 @@ func TestChatGPTWebPublicPipelineEditNoReplay(t *testing.T) {
 	png := base64.StdEncoding.EncodeToString(tinyPNG(t))
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/accounts/check" {
-			fmt.Fprint(w, `{"status":"ready","capabilities":["generate","edit"],"image_quota_remaining":10}`)
+			var check struct {
+				WorkspaceID string `json:"chatgpt_account_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&check); err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			fmt.Fprintf(w, `{"status":"ready","capabilities":["generate","edit"],"image_quota_remaining":10,"workspace_id":%q,"stage":"complete","upstream_status":200}`, check.WorkspaceID)
 			return
 		}
 		var payload struct {

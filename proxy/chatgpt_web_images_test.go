@@ -41,7 +41,7 @@ func newWebFixture(t *testing.T, respond func(http.ResponseWriter, *http.Request
 		}
 		if r.URL.Path == "/v1/accounts/check" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"status":"ready","capabilities":["generate","edit"],"image_quota_remaining":10}`)
+			fmt.Fprint(w, `{"status":"ready","capabilities":["generate","edit"],"image_quota_remaining":10,"workspace_id":"fixture-upstream-account","stage":"complete","upstream_status":200}`)
 			return
 		}
 		f.calls.Add(1)

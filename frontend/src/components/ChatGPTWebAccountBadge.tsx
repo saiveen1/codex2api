@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Eye, RefreshCw } from 'lucide-react'
 import { api, type ChatGPTWebDeployment, type ChatGPTWebState } from '../api'
 import { webAccountStatus, webAccountStatusMessage, webImageQuotaRemaining } from '../lib/chatgptWebStatus'
+import { webActionError, webFailureSnapshot } from '../lib/chatgptWebActions'
 import { formatBeijingTime } from '../utils/time'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
@@ -45,22 +46,25 @@ export default function ChatGPTWebAccountBadge({ accountID, accountName, state, 
     finally { setLoading(false) }
   }
 
-  const refreshQuota = async () => {
-    if (!canRefresh || busy) return
+  const accountAction = async (check: boolean, enabled: boolean) => {
+    if (busy || (check && !canRefresh)) return
     setRefreshing(true)
     setError('')
     try {
-      const result = await api.checkChatGPTWebAccount(accountID)
+      const result = check ? await api.checkChatGPTWebAccount(accountID) : await api.setChatGPTWebAccount(accountID, enabled)
       if (result.account_id !== accountID) throw new Error('Account state mismatch')
       setSnapshot(result)
       onStateChange?.(result)
-    } catch { setError(t('chatgptWeb.quotaRefreshError')) }
-    finally { setRefreshing(false) }
+    } catch (cause) {
+      setError(webActionError(cause, t(check ? 'chatgptWeb.quotaRefreshError' : 'chatgptWeb.actionError')))
+      const next = await webFailureSnapshot(cause, accountID)
+      if (next !== undefined) { setSnapshot(next); onStateChange?.(next) }
+    } finally { setRefreshing(false) }
   }
 
   return <Dialog open={open} onOpenChange={next => { setOpen(next); if (next) void loadSnapshot() }}>
     <DialogTrigger asChild>
-      <button type="button" aria-label={t('chatgptWeb.viewQuotaFor', { account: label })} title={t('chatgptWeb.viewQuotaFor', { account: label })} className="inline-flex max-w-full flex-wrap items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={event => event.stopPropagation()}>
+      <button type="button" aria-label={t('chatgptWeb.viewQuotaFor', { account: label })} title={t('chatgptWeb.viewQuotaFor', { account: label })} className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1 whitespace-normal break-words rounded border border-border px-1.5 py-0.5 text-left text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={event => event.stopPropagation()}>
         <span>{t('chatgptWeb.accountBadge', { status: t(`chatgptWeb.states.${status}`) })}</span>
         <span>· {t('chatgptWeb.quota')}: {remaining === null ? t('chatgptWeb.unknown') : remaining}</span>
         <Eye className="size-3 shrink-0" aria-hidden="true" />
@@ -80,14 +84,22 @@ export default function ChatGPTWebAccountBadge({ accountID, accountName, state, 
         <div><dt className="text-muted-foreground">{t('chatgptWeb.observed')}</dt><dd className="mt-1 break-words">{snapshot?.observed_at ? formatBeijingTime(snapshot.observed_at) : '—'}</dd></div>
       </dl>
       <p className="text-sm text-muted-foreground">{t(webAccountStatusMessage(snapshot))}</p>
+      <section className="min-w-0 space-y-1 break-words rounded-md border p-3 text-xs" data-testid="web-last-check">
+        <h4 className="font-medium">{t('chatgptWeb.lastCheck')}</h4>
+        <p>{t('chatgptWeb.observed')}: {snapshot?.last_check_at ? formatBeijingTime(snapshot.last_check_at) : '—'}</p>
+        <p>{t('chatgptWeb.checkStage')}: {snapshot?.last_check_stage || '—'} · {t('chatgptWeb.error')}: {snapshot?.last_check_error_code || '—'} · {t('chatgptWeb.upstreamStatus')}: {snapshot?.last_check_http_status || '—'}</p>
+        <p>{t('chatgptWeb.workspace')}: {snapshot?.workspace_id || '—'}</p>
+      </section>
       {!loading && deployment && !serviceReady && <p className="text-sm text-muted-foreground">{t('chatgptWeb.serviceNotReady')}</p>}
       <p className="text-xs leading-relaxed text-muted-foreground">{t('chatgptWeb.quotaSnapshotHint')}</p>
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
       <DialogFooter className="flex-wrap gap-2 sm:justify-between">
         <Link to="/settings#settings-codex-images" className="self-center text-sm text-primary underline">{t('chatgptWeb.openSettings')}</Link>
         <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" disabled={busy || snapshot?.enabled === true} onClick={() => void accountAction(false, true)}>{t('chatgptWeb.enable')}</Button>
+          <Button type="button" variant="outline" disabled={busy || !snapshot?.enabled} onClick={() => void accountAction(false, false)}>{t('chatgptWeb.disable')}</Button>
           <Button type="button" variant="outline" disabled={busy} onClick={() => void loadSnapshot()}>{t('chatgptWeb.reloadQuotaState')}</Button>
-          <Button type="button" disabled={busy || !canRefresh} onClick={() => void refreshQuota()}>
+          <Button type="button" disabled={busy || !canRefresh} onClick={() => void accountAction(true, true)}>
             <RefreshCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />{t('chatgptWeb.refreshQuota')}
           </Button>
         </div>

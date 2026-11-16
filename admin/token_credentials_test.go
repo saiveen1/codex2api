@@ -126,3 +126,29 @@ func TestTokenCredentialMapRejectsWorkspaceFromDifferentEmail(t *testing.T) {
 		t.Fatalf("mismatched JWT email supplied workspace_id: %#v", credentials)
 	}
 }
+
+func TestNormalizeTokenCredentialSeedSeparatesLegacyLoginFromWorkspace(t *testing.T) {
+	for _, seed := range []tokenCredentialSeed{
+		{accountID: " user-legacy ", email: "legacy@example.com"},
+		{workspaceID: " user-legacy ", email: "legacy@example.com"},
+	} {
+		seed = normalizeTokenCredentialSeed(seed)
+		credentials := tokenCredentialMap(seed)
+		if seed.accountID != "" || seed.workspaceID != "" || seed.userID != "user-legacy" || credentials["account_id"] != "" || credentials["workspace_id"] != "" || credentials["user_id"] != "user-legacy" {
+			t.Fatalf("legacy login persisted as workspace: %#v", credentials)
+		}
+	}
+}
+
+func TestNormalizeTokenCredentialSeedPrefersTokenWorkspaceAndPreservesExplicitRoute(t *testing.T) {
+	idToken := makeAdminTestJWT(t, map[string]interface{}{"email": "legacy@example.com", "https://api.openai.com/auth": map[string]interface{}{"chatgpt_account_id": "workspace-token"}})
+	headers := map[string]string{"ChatGPT-Account-ID": "workspace-route"}
+	seed := normalizeTokenCredentialSeed(tokenCredentialSeed{accountID: "user-legacy", workspaceID: "workspace-supplied", email: "LEGACY@example.com", idToken: idToken, customHeaders: headers})
+	if seed.workspaceID != "workspace-token" || seed.accountID != "workspace-token" || seed.userID != "user-legacy" || effectiveWorkspaceIDFromSeed(seed) != "workspace-route" || headers["ChatGPT-Account-ID"] != "workspace-route" {
+		t.Fatalf("normalization damaged identity/routing: %#v", seed)
+	}
+	seed = normalizeTokenCredentialSeed(tokenCredentialSeed{workspaceID: " workspace-supplied ", email: "legacy@example.com"})
+	if seed.workspaceID != "workspace-supplied" || seed.accountID != "workspace-supplied" {
+		t.Fatalf("supplied workspace lost: %#v", seed)
+	}
+}

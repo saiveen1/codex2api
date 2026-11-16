@@ -50,14 +50,14 @@ def check_status(response, asset=False):
     if 200 <= status < 300:
         return
     if asset:
-        raise SafeError("image_download_failed")
+        raise SafeError("image_download_failed", upstream_status=status)
     if status == 401:
-        raise SafeError("auth_required", 401)
+        raise SafeError("auth_required", 401, upstream_status=status)
     if status == 403:
-        raise SafeError("environment_challenge", 403)
+        raise SafeError("environment_challenge", 403, upstream_status=status)
     if status == 429:
-        raise SafeError("quota_exhausted", 429)
-    raise SafeError("upstream_error")
+        raise SafeError("quota_exhausted", 429, upstream_status=status)
+    raise SafeError("upstream_error", upstream_status=status)
 
 
 class CurlTransport:

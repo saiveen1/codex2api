@@ -37,6 +37,9 @@ type tokenCredentialSeed struct {
 	codex5HUsageUpdatedAt string
 	codexUsageUpdatedAt   string
 	customHeaders         map[string]string
+	workspaceDiagnostic   string
+	identityPrepared      bool
+	invalidWorkspace      bool
 }
 
 func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed {
@@ -46,7 +49,10 @@ func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed 
 	seed.accessTokenType = strings.TrimSpace(seed.accessTokenType)
 	seed.idToken = strings.TrimSpace(seed.idToken)
 	seed.accountID = strings.TrimSpace(seed.accountID)
-	seed.workspaceID = openaiidentity.NormalizeWorkspaceID(seed.workspaceID)
+	seed.workspaceID = strings.TrimSpace(seed.workspaceID)
+	if value := openaiidentity.NormalizeWorkspaceID(seed.workspaceID); value != "" && !openaiidentity.ValidWebWorkspaceID(value) {
+		seed.invalidWorkspace = true
+	}
 	seed.userID = strings.TrimSpace(seed.userID)
 	seed.email = strings.TrimSpace(seed.email)
 	seed.planType = strings.TrimSpace(seed.planType)
@@ -76,7 +82,7 @@ func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed 
 			}
 		}
 	}
-	if info := accountInfoFromTokens(seed.idToken, accessTokenForJWT); info != nil {
+	if info := accountInfoFromTokens(seed.idToken, accessTokenForJWT); info != nil && (seed.email == "" || info.Email == "" || strings.EqualFold(seed.email, info.Email)) {
 		if tokenWorkspaceID != "" {
 			info.Email = tokenEmail
 			info.ChatGPTAccountID = tokenWorkspaceID
@@ -117,6 +123,10 @@ func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed 
 		seed.expiresAt = time.Now().Add(time.Hour)
 	}
 
+	identity := auth.NormalizeCodexWorkspaceIdentity(auth.CodexWorkspaceIdentity{
+		AccountID: seed.accountID, WorkspaceID: seed.workspaceID, UserID: seed.userID, Email: seed.email, Headers: seed.customHeaders,
+	}, seed.idToken, accessTokenForJWT)
+	seed.accountID, seed.workspaceID, seed.userID, seed.email = identity.AccountID, identity.WorkspaceID, identity.UserID, identity.Email
 	return seed
 }
 
@@ -125,8 +135,54 @@ func effectiveWorkspaceIDFromSeed(seed tokenCredentialSeed) string {
 	return openaiidentity.EffectiveWorkspaceID(seed.workspaceID, seed.customHeaders)
 }
 
-// patWhoAmIHydrateTimeout 是单枚 PAT 的 whoami 预算。它不从批量导入的 30s 上下文里扣：
-// 一批一百枚 token 串行补全，几枚慢请求就能把整批的落库预算烧光。
+// prepareTokenCredentialSeed is the shared import boundary, before dedupe or writes.
+// Metadata outages remain visible pending diagnostics, not native account failures.
+func (h *Handler) prepareTokenCredentialSeed(ctx context.Context, seed tokenCredentialSeed, proxyURL string, accountID int64) (tokenCredentialSeed, error) {
+	seed = normalizeTokenCredentialSeed(seed)
+	if seed.invalidWorkspace {
+		return seed, errors.New("workspace identity: invalid_supplied_workspace")
+	}
+	if seed.identityPrepared {
+		return seed, nil
+	}
+	seed.identityPrepared = true
+	identity := auth.NormalizeCodexWorkspaceIdentity(auth.CodexWorkspaceIdentity{AccountID: seed.accountID, WorkspaceID: seed.workspaceID, UserID: seed.userID, Email: seed.email, Headers: seed.customHeaders}, seed.idToken, seed.accessToken)
+	if _, err := openaiidentity.RequestedWebWorkspace(identity.WorkspaceID, identity.Headers); err != nil {
+		return seed, errors.New("workspace identity: invalid_target")
+	}
+	if seed.accessTokenType == accessTokenTypeCodexAT {
+		return seed, nil
+	}
+	// Fixture/RT-only imports cannot authenticate metadata and must remain offline.
+	info := auth.ParseAccessToken(seed.accessToken)
+	if info == nil || info.ExpiresAt.IsZero() {
+		return seed, nil
+	}
+	if h == nil || h.store == nil {
+		seed.workspaceDiagnostic = "workspace identity: proxy_policy_unavailable"
+		return seed, nil
+	}
+	selected, usable := h.store.ResolveUsableProxyForAccount(&auth.Account{DBID: accountID, ProxyURL: proxyURL})
+	if !usable {
+		seed.workspaceDiagnostic = "workspace identity: proxy_denied"
+		log.Printf("Codex import identity pending: %s", seed.workspaceDiagnostic)
+		return seed, nil
+	}
+	proxyURL = selected
+	identity, err := auth.HydrateCodexWorkspaceIdentity(ctx, identity, seed.accessToken, proxyURL)
+	if err != nil {
+		if auth.WorkspaceIdentityRejected(err) {
+			return seed, err
+		}
+		seed.workspaceDiagnostic = err.Error()
+		log.Printf("Codex import identity pending: %s", seed.workspaceDiagnostic)
+		return seed, nil
+	}
+	seed.accountID, seed.workspaceID, seed.userID, seed.email = identity.AccountID, identity.WorkspaceID, identity.UserID, identity.Email
+	return seed, nil
+}
+
+// PAT keeps its existing per-token timeout but now also obeys the import budget.
 const patWhoAmIHydrateTimeout = 6 * time.Second
 
 // patWhoAmIHydrator 在一次批量导入内为 PAT 补全工作区身份。网络层失败（超时 / 代理不通）
@@ -135,12 +191,39 @@ const patWhoAmIHydrateTimeout = 6 * time.Second
 type patWhoAmIHydrator struct {
 	proxyURL string
 	tripped  bool
+	deadline time.Time
+	attempts int
+}
+
+func (h *Handler) newImportPATWhoAmIHydrator(proxyURL string) *patWhoAmIHydrator {
+	w := &patWhoAmIHydrator{proxyURL: proxyURL}
+	if h == nil || h.store == nil {
+		w.tripped = true
+		return w
+	}
+	selected, usable := h.store.ResolveUsableProxyForAccount(&auth.Account{ProxyURL: proxyURL})
+	w.proxyURL, w.tripped = selected, !usable
+	return w
 }
 
 func (w *patWhoAmIHydrator) hydrate(ctx context.Context, seed tokenCredentialSeed) tokenCredentialSeed {
+	if seed.accessTokenType != accessTokenTypeCodexAT {
+		return seed
+	}
+	if w != nil {
+		if w.deadline.IsZero() {
+			w.deadline = time.Now().Add(8 * time.Second)
+		}
+		if w.attempts >= 16 || !time.Now().Before(w.deadline) {
+			w.tripped = true
+		}
+	}
 	if w == nil || w.tripped {
 		return seed
 	}
+	w.attempts++
+	ctx, cancel := context.WithDeadline(ctx, w.deadline)
+	defer cancel()
 	seed, err := hydrateSeedWithWhoAmI(ctx, seed, w.proxyURL)
 	if err == nil {
 		return seed
@@ -164,7 +247,7 @@ func hydrateSeedWithWhoAmI(ctx context.Context, seed tokenCredentialSeed, proxyU
 	if seed.workspaceID != "" && seed.email != "" && seed.planType != "" {
 		return seed, nil
 	}
-	whoamiCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), patWhoAmIHydrateTimeout)
+	whoamiCtx, cancel := context.WithTimeout(ctx, patWhoAmIHydrateTimeout)
 	defer cancel()
 	meta, err := QueryPersonalAccessTokenMetadata(whoamiCtx, seed.accessToken, proxyURL)
 	if err != nil {
@@ -228,6 +311,8 @@ func accountInfoFromTokens(idToken, accessToken string) *auth.AccountInfo {
 func tokenCredentialMap(seed tokenCredentialSeed) map[string]interface{} {
 	seed = normalizeTokenCredentialSeed(seed)
 	credentials := make(map[string]interface{})
+	// Empty diagnostics clear a previous pending result on a successful reimport.
+	credentials["codex_workspace_error"] = seed.workspaceDiagnostic
 	if seed.refreshToken != "" {
 		credentials["refresh_token"] = seed.refreshToken
 	}
@@ -246,10 +331,11 @@ func tokenCredentialMap(seed tokenCredentialSeed) map[string]interface{} {
 	if !seed.expiresAt.IsZero() {
 		credentials["expires_at"] = seed.expiresAt.Format(time.RFC3339)
 	}
-	if seed.accountID != "" {
+	// Empty values clear a legacy user-ID workspace on credential replacement.
+	if seed.accountID != "" || seed.userID != "" {
 		credentials["account_id"] = seed.accountID
 	}
-	if seed.workspaceID != "" {
+	if seed.workspaceID != "" || seed.userID != "" {
 		credentials["workspace_id"] = seed.workspaceID
 	}
 	if seed.userID != "" {
@@ -397,4 +483,54 @@ func parseCredentialExpiresAt(raw string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func mergeImportCustomHeaders(base, overrides map[string]string) map[string]string {
+	result := cloneCustomHeaders(base)
+	if len(overrides) == 0 {
+		return result
+	}
+	if result == nil {
+		result = make(map[string]string)
+	}
+	for name, value := range overrides {
+		for old := range result {
+			if strings.EqualFold(strings.TrimSpace(old), strings.TrimSpace(name)) {
+				delete(result, old)
+			}
+		}
+		result[name] = value
+	}
+	return result
+}
+
+func (h *Handler) prepareImportedTokenSeeds(ctx context.Context, tokens []importToken, settings importSettings) ([]importToken, error) {
+	conflicts := conflictingImportChatGPTIDs(tokens)
+	for i := range tokens {
+		if tokens[i].isAgentIdentity() {
+			continue
+		}
+		seed := importTokenSeed(tokens[i], conflicts)
+		headers, err := normalizeCustomHeaders(mergeImportCustomHeaders(seed.customHeaders, settings.customHeaders))
+		if err != nil {
+			return nil, errors.New("import identity: invalid custom headers")
+		}
+		seed.customHeaders = headers
+		seed, err = h.prepareTokenCredentialSeed(ctx, seed, settings.proxyForToken(tokens[i]), 0)
+		if err != nil {
+			return nil, err
+		}
+		tokens[i].preparedSeed = &seed
+	}
+	return tokens, nil
+}
+
+func joinImportWorkspaceWarnings(warnings ...string) string {
+	var nonempty []string
+	for _, warning := range warnings {
+		if warning != "" {
+			nonempty = append(nonempty, warning)
+		}
+	}
+	return strings.Join(nonempty, "; ")
 }

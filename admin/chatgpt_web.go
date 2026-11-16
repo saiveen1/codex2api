@@ -84,7 +84,16 @@ func (h *Handler) CheckChatGPTWebAccount(c *gin.Context) {
 	}
 	state, err := h.imageProxy.CheckChatGPTWebAccount(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(502, gin.H{"error": "Web environment check failed"})
+		var detail *proxy.ChatGPTWebCheckError
+		if errors.As(err, &detail) {
+			body := gin.H{"error": detail.Error(), "code": detail.Code, "stage": detail.Stage, "upstream_status": detail.UpstreamStatus, "recorded": detail.Recorded}
+			if detail.Recorded && state != nil {
+				body["state"] = state
+			}
+			c.JSON(detail.HTTPStatus, body)
+		} else {
+			c.JSON(500, gin.H{"error": "Unable to complete the Web environment check", "code": "internal_error", "stage": "admission"})
+		}
 		return
 	}
 	c.JSON(200, state)

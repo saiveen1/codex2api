@@ -149,6 +149,7 @@ func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force boo
 		return errors.New(message)
 	}
 	updates := codexRefreshedCredentials(acc, td, info, warning)
+	s.hydrateCodexRefreshedWorkspace(ctx, acc, td, updates, proxyURL)
 	if st != "" {
 		updates["session_token"] = st
 	}
@@ -235,8 +236,13 @@ func codexRefreshedCredentials(acc *Account, td *TokenData, info *AccountInfo, w
 		if info.Email != "" {
 			updates["email"] = info.Email
 		}
-		if info.ChatGPTAccountID != "" {
-			updates["account_id"] = info.ChatGPTAccountID
+		if info.UserID != "" {
+			updates["user_id"] = info.UserID
+		}
+		if id := openaiidentity.NormalizeWorkspaceID(info.ChatGPTAccountID); id != "" {
+			updates["account_id"] = id
+		} else if strings.HasPrefix(strings.ToLower(info.ChatGPTAccountID), "user-") {
+			updates["user_id"] = info.ChatGPTAccountID
 		}
 		acc.mu.RLock()
 		planSnapshot := Account{PlanType: acc.PlanType, UsagePercent7dValid: acc.UsagePercent7dValid, Reset7dAt: acc.Reset7dAt}
@@ -261,8 +267,35 @@ func codexRefreshedCredentials(acc *Account, td *TokenData, info *AccountInfo, w
 			updates["subscription_expires_at"] = ""
 		}
 	}
-	if email, workspace := openaiidentity.TokenIdentity(td.IDToken, td.AccessToken); workspace != "" {
-		updates["email"], updates["account_id"], updates["workspace_id"] = email, workspace, workspace
+	acc.mu.RLock()
+	identity := CodexWorkspaceIdentity{AccountID: acc.AccountID, Email: acc.Email, Headers: acc.CustomHeaders}
+	acc.mu.RUnlock()
+	if identity.AccountID == "" {
+		identity.AccountID, _ = updates["account_id"].(string)
+	}
+	if identity.Email == "" {
+		identity.Email, _ = updates["email"].(string)
+	}
+	if value, ok := updates["user_id"].(string); ok {
+		identity.UserID = value
+	}
+	// Keep an already valid native workspace if the fresh token omits it.
+	identity.WorkspaceID = openaiidentity.NormalizeWorkspaceID(identity.AccountID)
+	identity = NormalizeCodexWorkspaceIdentity(identity, td.IDToken, td.AccessToken)
+	if identity.TrustedWorkspace {
+		identity.AccountID = identity.WorkspaceID
+	}
+	if identity.AccountID != "" || identity.UserID != "" {
+		updates["account_id"] = identity.AccountID
+	}
+	if identity.WorkspaceID != "" || identity.UserID != "" {
+		updates["workspace_id"] = identity.WorkspaceID
+	}
+	if identity.UserID != "" {
+		updates["user_id"] = identity.UserID
+	}
+	if identity.Email != "" {
+		updates["email"] = identity.Email
 	}
 	return updates
 }
@@ -284,8 +317,8 @@ func applyCodexCredentialValues(acc *Account, credentials map[string]any, genera
 	if email := row.GetCredential("email"); email != "" {
 		acc.Email = email
 	}
-	if id := row.GetCredential("account_id"); id != "" {
-		acc.AccountID = id
+	if _, present := credentials["account_id"]; present {
+		acc.AccountID = openaiidentity.NormalizeWorkspaceID(row.GetCredential("account_id"))
 	}
 	if expiry, ok := credentials["subscription_expires_at"]; ok {
 		acc.SubscriptionExpiresAt = parseOAuthCredentialExpiry(fmt.Sprint(expiry))

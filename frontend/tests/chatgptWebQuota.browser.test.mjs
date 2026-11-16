@@ -39,7 +39,7 @@ before(async () => {
 })
 after(async () => { await browser?.close() })
 
-async function fixture(t, { remaining = null, serviceReady = true, enabled = true, refreshFail = false } = {}) {
+async function fixture(t, { remaining = null, serviceReady = true, enabled = true, refreshFail = false, recorded = false, reloadFail = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   page.setDefaultTimeout(5000)
   const errors = []
@@ -48,7 +48,7 @@ async function fixture(t, { remaining = null, serviceReady = true, enabled = tru
   t.after(() => page.close())
   await page.route('http://quota.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }))
   await page.goto('http://quota.test/')
-  await page.evaluate(({ remaining, serviceReady, enabled, refreshFail }) => {
+  await page.evaluate(({ remaining, serviceReady, enabled, refreshFail, recorded, reloadFail }) => {
     localStorage.setItem('lang', 'zh')
     let state = { account_id: 7, enabled, status: remaining === null ? 'unverified' : 'ready', capabilities: [], image_quota_remaining: remaining,
       observed_at: remaining === null ? null : '2026-11-16T08:00:00Z', quota_reset_at: remaining === null ? null : '2026-11-17T08:00:00Z' }
@@ -56,20 +56,32 @@ async function fixture(t, { remaining = null, serviceReady = true, enabled = tru
     window.__writes = []
     window.__stateChanges = []
     window.__rowClicks = 0
+    window.__stateReads = 0
     window.fetch = async (url, options = {}) => {
       const pathname = new URL(String(url), location.origin).pathname
       const method = options.method || 'GET'
       let body, status = 200
       if (method !== 'GET') window.__writes.push({ pathname, method })
       if (pathname === '/api/admin/chatgpt-web' && method === 'GET') body = { enabled: serviceReady, configured: serviceReady, protocol_version: 'fixture', supported_models: ['gpt-image-2'] }
-      else if (pathname === '/api/admin/chatgpt-web/accounts' && method === 'GET') body = { accounts: [state] }
+      else if (pathname === '/api/admin/chatgpt-web/accounts' && method === 'GET') {
+        window.__stateReads++
+        if (reloadFail && window.__stateReads > 1) throw new Error('Synthetic reload failure')
+        body = { accounts: [state] }
+      }
+      else if (pathname === '/api/admin/chatgpt-web/accounts/7' && method === 'PUT') {
+        state = { ...state, enabled: JSON.parse(options.body).enabled }; body = state
+      }
       else if (pathname === '/api/admin/chatgpt-web/accounts/7/check' && method === 'POST') {
-        if (refreshFail) { status = 502; body = { error: 'Synthetic check failure' } }
+        if (refreshFail) {
+          state = { ...state, status: 'unverified', last_check_at: '2026-11-16T12:00:00Z', last_check_stage: 'identity', last_check_error_code: 'token_expired', last_check_http_status: 401 }
+          status = 422
+          body = { error: 'Synthetic check failure', code: 'token_expired', stage: 'identity', upstream_status: 401, recorded, state: recorded ? state : { ...state, image_quota_remaining: 999 } }
+        }
         else { state = { ...state, status: 'quota_exhausted', image_quota_remaining: 0, observed_at: '2026-11-16T12:00:00Z', quota_reset_at: '2026-11-17T12:00:00Z' }; body = state }
       } else throw new Error('Unexpected request: ' + method + ' ' + pathname)
       return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
     }
-  }, { remaining, serviceReady, enabled, refreshFail })
+  }, { remaining, serviceReady, enabled, refreshFail, recorded, reloadFail })
   await page.addStyleTag({ content: css })
   await page.addScriptTag({ content: script })
   await page.getByRole('button', { name: '查看 quota-fixture 的网页生图额度', exact: true }).click()
@@ -118,4 +130,44 @@ test('unconfigured service or disabled account never enables itself or submits a
     assert.deepEqual(await page.evaluate(() => window.__writes), [])
     assert.equal(await dialog.getByRole('link', { name: '查看 Web 设置', exact: true }).isVisible(), true)
   }
+})
+
+test('explicit enable and disable only update saved state, without checking upstream', async t => {
+  const page = await fixture(t, { remaining: 12, enabled: false, serviceReady: false })
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: '启用', exact: true }).click()
+  await page.waitForFunction(() => window.__stateChanges.at(-1)?.enabled === true)
+  assert.equal(await dialog.getByRole('button', { name: '启用', exact: true }).isDisabled(), true)
+  await dialog.getByRole('button', { name: '停用', exact: true }).click()
+  await page.waitForFunction(() => window.__stateChanges.at(-1)?.enabled === false)
+  assert.deepEqual(await page.evaluate(() => window.__writes.map(item => item.method)), ['PUT', 'PUT'])
+  assert.equal(await dialog.getByTestId('web-image-quota-remaining').textContent(), '12')
+  await page.keyboard.press('Escape')
+  assert.match(await page.getByRole('button', { name: '查看 quota-fixture 的网页生图额度', exact: true }).textContent(), /未启用/)
+})
+
+test('structured failures retain quota, show diagnostics and only trust recorded state', async t => {
+  for (const recorded of [true, false]) {
+    const page = await fixture(t, { remaining: 12, refreshFail: true, recorded })
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('button', { name: '刷新额度（不生成图片）', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('dl[aria-busy]')?.getAttribute('aria-busy') === 'false' && document.querySelector('[role=alert]'))
+    assert.match(await dialog.getByRole('alert').textContent(), /Synthetic check failure.*code: token_expired.*stage: identity.*upstream_status: 401/)
+    assert.match(await dialog.getByTestId('web-last-check').textContent(), /identity.*token_expired.*401/)
+    assert.equal(await dialog.getByTestId('web-image-quota-remaining').textContent(), '12')
+    assert.equal(await page.evaluate(() => window.__stateReads), recorded ? 1 : 2)
+    assert.equal(await page.evaluate(() => window.__stateChanges.at(-1).status), 'unverified')
+    await page.keyboard.press('Escape')
+    assert.match(await page.getByRole('button', { name: '查看 quota-fixture 的网页生图额度', exact: true }).textContent(), /待检查/)
+  }
+})
+
+test('snapshot reload failure never replaces the original check error or quota', async t => {
+  const page = await fixture(t, { remaining: 12, refreshFail: true, reloadFail: true })
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: '刷新额度（不生成图片）', exact: true }).click()
+  await page.waitForFunction(() => window.__stateReads === 2 && document.querySelector('dl[aria-busy]')?.getAttribute('aria-busy') === 'false')
+  assert.match(await dialog.getByRole('alert').textContent(), /Synthetic check failure/)
+  assert.doesNotMatch(await dialog.getByRole('alert').textContent(), /Synthetic reload failure/)
+  assert.equal(await dialog.getByTestId('web-image-quota-remaining').textContent(), '12')
 })

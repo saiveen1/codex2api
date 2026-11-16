@@ -1167,6 +1167,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/chatgpt-web", h.GetChatGPTWebStatus)
 	api.PUT("/chatgpt-web/config", h.ConfigureChatGPTWeb)
 	api.GET("/chatgpt-web/accounts", h.ListChatGPTWebAccounts)
+	api.POST("/chatgpt-web/accounts/batch", h.BatchSetChatGPTWebAccounts)
 	api.PUT("/chatgpt-web/accounts/:id", h.SetChatGPTWebAccount)
 	api.POST("/chatgpt-web/accounts/:id/check", h.CheckChatGPTWebAccount)
 	api.GET("/chatgpt-web/executions", h.ListChatGPTWebExecutions)
@@ -3757,6 +3758,11 @@ func (h *Handler) AddAccount(c *gin.Context) {
 		} else if len(sessionTokens) > 1 {
 			seed.sessionToken = sessionTokens[i]
 		}
+		seed, identityErr := h.prepareTokenCredentialSeed(c.Request.Context(), seed, req.ProxyURL, 0)
+		if identityErr != nil {
+			writeError(c, http.StatusBadRequest, identityErr.Error())
+			return
+		}
 		seeds = append(seeds, seed)
 	}
 
@@ -4040,6 +4046,7 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	ctx = auth.WithCodexWorkspaceHydration(ctx)
 	successCount := 0
 	failCount := 0
 	updatedCount := 0
@@ -4062,7 +4069,8 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 		}
 	}
 
-	whoami := &patWhoAmIHydrator{proxyURL: req.ProxyURL}
+	whoami := h.newImportPATWhoAmIHydrator(req.ProxyURL)
+	identityWarning := ""
 	for i, at := range tokens {
 		name := req.Name
 		if name == "" {
@@ -4076,6 +4084,16 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 			allowDuplicate: req.AllowDuplicate,
 			customHeaders:  customHeaders,
 		})
+		seed, identityErr := h.prepareTokenCredentialSeed(ctx, seed, req.ProxyURL, 0)
+		if identityErr != nil {
+			identityWarning = identityErr.Error()
+			log.Printf("AT import rejected: %v", identityErr)
+			failCount++
+			continue
+		}
+		if seed.workspaceDiagnostic != "" {
+			identityWarning = seed.workspaceDiagnostic
+		}
 		// codex_at 不走 OAuth 身份去重：whoami 补出来的 email+工作区会撞上同工作区的
 		// OAuth 账号，把 PAT 合并进去等于用 PAT 覆盖它的 access_token。PAT 始终按 token 路由键去重。
 		if seed.accessTokenType != accessTokenTypeCodexAT && seed.email != "" && effectiveWorkspaceIDFromSeed(seed) != "" {
@@ -4159,6 +4177,7 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 		"duplicate":    duplicateCount,
 		"failed":       failCount,
 		"bound_groups": boundGroups,
+		"warning":      identityWarning,
 		"group_ids":    groupIDs,
 	})
 }
@@ -4180,6 +4199,7 @@ func (h *Handler) streamAddATAccounts(c *gin.Context, req addATAccountReq, token
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	ctx = auth.WithCodexWorkspaceHydration(ctx)
 	existingATRoutes := make(map[string]int64)
 	seenATRoutes := make(map[string]bool)
 	workspaceOverrideKnown := openaiidentity.WorkspaceOverrideFromHeaders(req.CustomHeaders) != ""
@@ -4200,7 +4220,8 @@ func (h *Handler) streamAddATAccounts(c *gin.Context, req addATAccountReq, token
 	createdIDs := &importedAccountIDs{}
 	pending := make([]*auth.Account, 0, len(tokens))
 
-	whoami := &patWhoAmIHydrator{proxyURL: req.ProxyURL}
+	whoami := h.newImportPATWhoAmIHydrator(req.ProxyURL)
+	identityWarning := ""
 	for i, at := range tokens {
 		name := req.Name
 		if name == "" {
@@ -4210,6 +4231,17 @@ func (h *Handler) streamAddATAccounts(c *gin.Context, req addATAccountReq, token
 		}
 
 		seed := normalizeTokenCredentialSeed(tokenCredentialSeed{accessToken: at, allowDuplicate: req.AllowDuplicate, customHeaders: req.CustomHeaders})
+		seed, identityErr := h.prepareTokenCredentialSeed(ctx, seed, req.ProxyURL, 0)
+		if identityErr != nil {
+			identityWarning = identityErr.Error()
+			log.Printf("AT import rejected: %v", identityErr)
+			failCount++
+			progress(i + 1)
+			continue
+		}
+		if seed.workspaceDiagnostic != "" {
+			identityWarning = seed.workspaceDiagnostic
+		}
 		// 同 AddATAccount：codex_at 不进 OAuth 身份去重，见上方注释。
 		if seed.accessTokenType != accessTokenTypeCodexAT && seed.email != "" && effectiveWorkspaceIDFromSeed(seed) != "" {
 			id, updated, newAcc, err := h.upsertOAuthIdentityAccountDeferred(ctx, name, req.ProxyURL, seed, "manual_at", overwriteAccountProxy)
@@ -4275,6 +4307,7 @@ func (h *Handler) streamAddATAccounts(c *gin.Context, req addATAccountReq, token
 	sendImportEvent(c, importEvent{
 		Type: "complete", Current: total, Total: total,
 		Success: successCount, Updated: updatedCount, Duplicate: duplicateCount, Failed: failCount,
+		Warning: identityWarning,
 	})
 }
 
@@ -4900,6 +4933,9 @@ type importToken struct {
 	idToken               string
 	accountID             string
 	chatgptAccountID      string // sub2api 等导出格式中的 ChatGPT 账号唯一标识，用于精确去重
+	workspaceID           string
+	customHeaders         map[string]string
+	preparedSeed          *tokenCredentialSeed
 	planType              string
 	expiresAt             string
 	codex7DUsedPercent    string
@@ -5037,6 +5073,9 @@ type jsonAccountEntry struct {
 	IDTokenCamel          string                 `json:"idToken"`
 	AccountID             string                 `json:"account_id"`
 	ChatGPTAccountID      string                 `json:"chatgpt_account_id"`
+	WorkspaceID           string                 `json:"workspace_id"`
+	UserID                string                 `json:"user_id"`
+	CustomHeaders         map[string]string      `json:"custom_headers"`
 	Email                 string                 `json:"email"`
 	Name                  string                 `json:"name"`
 	PlanType              string                 `json:"plan_type"`
@@ -5109,6 +5148,9 @@ type sub2apiAccountCredentials struct {
 	IDTokenCamel          string                 `json:"idToken"`
 	AccountID             string                 `json:"account_id"`
 	ChatGPTAccountID      string                 `json:"chatgpt_account_id"`
+	WorkspaceID           string                 `json:"workspace_id"`
+	UserID                string                 `json:"user_id"`
+	CustomHeaders         map[string]string      `json:"custom_headers"`
 	Email                 string                 `json:"email"`
 	PlanType              string                 `json:"plan_type"`
 	PlanTypeCamel         string                 `json:"planType"`
@@ -5333,6 +5375,9 @@ func jsonAccountEntriesToTokens(entries []jsonAccountEntry) []importToken {
 				idToken:               idTok,
 				accountID:             strings.TrimSpace(entry.AccountID),
 				chatgptAccountID:      firstNonEmpty(entry.ChatGPTAccountID, accID),
+				workspaceID:           strings.TrimSpace(entry.WorkspaceID),
+				chatgptUserID:         firstNonEmpty(entry.UserID, entry.ChatGPTUserID, entry.User.ID),
+				customHeaders:         cloneCustomHeaders(entry.CustomHeaders),
 				planType:              planType,
 				expiresAt:             expiresAt,
 				codex7DUsedPercent:    strings.TrimSpace(entry.Codex7DUsedPercent.String()),
@@ -5407,6 +5452,9 @@ func sub2apiAccountEntryToTokens(account sub2apiAccountEntry) []importToken {
 				idToken:               idTok,
 				accountID:             strings.TrimSpace(c.AccountID),
 				chatgptAccountID:      firstNonEmpty(c.ChatGPTAccountID, accID),
+				workspaceID:           strings.TrimSpace(c.WorkspaceID),
+				chatgptUserID:         firstNonEmpty(c.UserID, c.ChatGPTUserID, c.User.ID),
+				customHeaders:         cloneCustomHeaders(c.CustomHeaders),
 				planType:              planType,
 				expiresAt:             expiresAt,
 				codex7DUsedPercent:    strings.TrimSpace(c.Codex7DUsedPercent.String()),
@@ -5449,7 +5497,7 @@ func importTokenCredentialFingerprint(t importToken, conflicts map[string]bool) 
 
 func importTokenCredentialWorkspaceRouteKeys(t importToken, conflicts map[string]bool, customHeaders map[string]string) []string {
 	seed := importTokenSeed(t, conflicts)
-	seed.customHeaders = cloneCustomHeaders(customHeaders)
+	seed.customHeaders = mergeImportCustomHeaders(seed.customHeaders, customHeaders)
 	return tokenCredentialSeedWorkspaceRouteKeys(seed)
 }
 
@@ -5508,12 +5556,18 @@ func importStoredAccountID(t importToken, conflicts map[string]bool) string {
 }
 
 func importTokenSeed(t importToken, conflicts map[string]bool) tokenCredentialSeed {
+	if t.preparedSeed != nil {
+		return *t.preparedSeed
+	}
 	return normalizeTokenCredentialSeed(tokenCredentialSeed{
 		refreshToken:          t.refreshToken,
 		sessionToken:          t.sessionToken,
 		accessToken:           t.accessToken,
 		idToken:               t.idToken,
 		accountID:             importStoredAccountID(t, conflicts),
+		workspaceID:           t.workspaceID,
+		userID:                t.chatgptUserID,
+		customHeaders:         cloneCustomHeaders(t.customHeaders),
 		email:                 t.email,
 		planType:              t.planType,
 		expiresAtRaw:          t.expiresAt,
@@ -5529,7 +5583,7 @@ func importTokenSeed(t importToken, conflicts map[string]bool) tokenCredentialSe
 func importTokenOAuthIdentityKey(t importToken, conflicts map[string]bool) string {
 	seed := importTokenSeed(t, conflicts)
 	email := strings.ToLower(strings.TrimSpace(seed.email))
-	workspaceID := strings.TrimSpace(seed.workspaceID)
+	workspaceID := effectiveWorkspaceIDFromSeed(seed)
 	if email == "" || workspaceID == "" {
 		return ""
 	}
@@ -5858,6 +5912,22 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 		}
 		proxyOutcome = outcome
 	}
+	// Authenticate missing workspace metadata before either file or DB identity dedupe.
+	// One request-scoped circuit bounds the entire batch; pure fixture imports stay offline.
+	identityCtx := auth.WithCodexWorkspaceHydration(c.Request.Context())
+	preparedTokens, identityErr := h.prepareImportedTokenSeeds(identityCtx, tokens, settings)
+	if identityErr != nil {
+		writeError(c, http.StatusBadRequest, identityErr.Error())
+		return
+	}
+	tokens = preparedTokens
+	identityWarning := ""
+	for _, token := range tokens {
+		if token.preparedSeed != nil && token.preparedSeed.workspaceDiagnostic != "" {
+			identityWarning = token.preparedSeed.workspaceDiagnostic
+			break
+		}
+	}
 
 	// Agent Identity 条目单独处理（无 RT/ST/AT，按 runtime_id 去重、动态签名），
 	// 从常规 token 流里拆出，计数在收尾时并入总响应。
@@ -6007,7 +6077,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 			if importTokenOAuthIdentityKey(t, conflictingChatGPTIDs) != "" {
 				knownUniqueCount++
 				seed := importTokenSeed(t, conflictingChatGPTIDs)
-				seed.customHeaders = cloneCustomHeaders(importCustomHeaders)
+				seed.customHeaders = mergeImportCustomHeaders(seed.customHeaders, importCustomHeaders)
 				if duplicateID, err := h.findOAuthIdentityDuplicate(dedupeCtx, seed, 0); err != nil {
 					log.Printf("查询已有 OAuth 身份失败: %v", err)
 				} else if duplicateID > 0 {
@@ -6033,7 +6103,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 
 		for _, t := range unique {
 			seed := importTokenSeed(t, conflictingChatGPTIDs)
-			seed.customHeaders = cloneCustomHeaders(importCustomHeaders)
+			seed.customHeaders = mergeImportCustomHeaders(seed.customHeaders, importCustomHeaders)
 			if seed.email != "" && effectiveWorkspaceIDFromSeed(seed) != "" {
 				if duplicateID, err := h.findOAuthIdentityDuplicate(dedupeCtx, seed, 0); err != nil {
 					log.Printf("查询已有 OAuth 身份失败: %v", err)
@@ -6106,6 +6176,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 				response["warning"] = warning
 			}
 		}
+		response["warning"] = joinImportWorkspaceWarnings(proxyOutcome.warning(), identityWarning)
 		c.JSON(http.StatusOK, response)
 		return
 	}
@@ -6197,7 +6268,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 
 			seed := importTokenSeed(tok, conflictingChatGPTIDs)
 			seed.allowDuplicate = allowDuplicate
-			seed.customHeaders = cloneCustomHeaders(importCustomHeaders)
+			seed.customHeaders = mergeImportCustomHeaders(seed.customHeaders, importCustomHeaders)
 			importSource := "import"
 			if tok.accessToken != "" && tok.refreshToken == "" {
 				importSource = "import_at"
@@ -6350,7 +6421,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 		CreatedIDs:      newAccountIDs,
 		ProxiesImported: proxyOutcome.inserted,
 		ProxiesSkipped:  proxyOutcome.skipped,
-		Warning:         proxyOutcome.warning(),
+		Warning:         joinImportWorkspaceWarnings(proxyOutcome.warning(), identityWarning),
 	})
 
 	log.Printf("导入完成: success=%d, updated=%d, duplicate=%d, failed=%d, total=%d", suc, upd, duplicateCount, fai, total)
@@ -6692,6 +6763,7 @@ func tokenCredentialSeedFromAccountRow(row *database.AccountRow) tokenCredential
 		accountID:             firstNonEmpty(row.GetCredential("account_id"), row.GetCredential("chatgpt_account_id")),
 		workspaceID:           row.GetCredential("workspace_id"),
 		customHeaders:         row.GetCredentialStringMap("custom_headers"),
+		userID:                row.GetCredential("user_id"),
 		email:                 row.GetCredential("email"),
 		planType:              row.GetCredential("plan_type"),
 		expiresAtRaw:          row.GetCredential("expires_at"),

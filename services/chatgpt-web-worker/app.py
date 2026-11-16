@@ -30,7 +30,8 @@ def create_app(secret=None, state_dir=None, backend_factory=Backend):
             supplied = request.headers.get("authorization", "").encode()
             expected = ("Bearer " + secret).encode()
             if not hmac.compare_digest(supplied, expected):
-                return JSONResponse({"error_code": "auth_required"}, status_code=401)
+                diagnostics = {"stage": "admission", "upstream_status": 0} if request.url.path == "/v1/accounts/check" else {}
+                return JSONResponse({"error_code": "auth_required", **diagnostics}, status_code=401)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -38,6 +39,8 @@ def create_app(secret=None, state_dir=None, backend_factory=Backend):
 
     @app.exception_handler(SafeError)
     async def safe_error(request, error):
+        if request.url.path == "/v1/accounts/check":
+            return JSONResponse(error.event("admission") | {"upstream_status": 0}, status_code=error.status)
         return JSONResponse(error.event("preparing"), status_code=error.status)
 
     async def payload(request, execute=False):

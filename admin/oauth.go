@@ -401,7 +401,11 @@ func (h *Handler) upsertOAuthIdentityAccountDeferred(ctx context.Context, name, 
 }
 
 func (h *Handler) upsertOAuthIdentityAccountWithRuntime(ctx context.Context, name, proxyURL string, seed tokenCredentialSeed, source string, loadRuntime bool, proxyPolicy proxyOverwritePolicy) (int64, bool, *auth.Account, error) {
-	seed = normalizeTokenCredentialSeed(seed)
+	var identityErr error
+	seed, identityErr = h.prepareTokenCredentialSeed(ctx, seed, proxyURL, 0)
+	if identityErr != nil {
+		return 0, false, nil, identityErr
+	}
 	if seed.email == "" || effectiveWorkspaceIDFromSeed(seed) == "" {
 		id, err := h.db.InsertAccountWithCredentials(ctx, name, h.newCodexAccountCredentials(seed), proxyURL)
 		if err != nil {
@@ -663,6 +667,11 @@ func (h *Handler) UpdateOAuthAccountCode(c *gin.Context) {
 		expiresIn:     tokenResp.ExpiresIn,
 		customHeaders: row.GetCredentialStringMap("custom_headers"),
 	})
+	seed, identityErr := h.prepareTokenCredentialSeed(ctx, seed, proxyURL, id)
+	if identityErr != nil {
+		writeError(c, http.StatusBadRequest, identityErr.Error())
+		return
+	}
 	if seed.email != "" && effectiveWorkspaceIDFromSeed(seed) != "" {
 		h.mergeDuplicateMu.Lock()
 		defer h.mergeDuplicateMu.Unlock()

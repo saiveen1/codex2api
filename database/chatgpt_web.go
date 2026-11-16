@@ -27,21 +27,27 @@ var (
 // Ready observations must also match the current AT fingerprint and egress at
 // dispatch time; a stored observation is not an authorization grant.
 type ChatGPTWebAccountState struct {
-	AccountID            int64      `json:"account_id"`
-	Enabled              bool       `json:"enabled"`
-	EnvironmentRevision  int64      `json:"environment_revision"`
-	DeviceID             string     `json:"device_id"`
-	SessionID            string     `json:"session_id"`
-	Status               string     `json:"status"`
-	Capabilities         []string   `json:"capabilities"`
-	ImageQuotaRemaining  *int       `json:"image_quota_remaining"`
-	QuotaResetAt         *time.Time `json:"quota_reset_at"`
-	ObservedAt           *time.Time `json:"observed_at"`
-	CredentialRevision   string     `json:"credential_revision"`
-	WorkspaceFingerprint string     `json:"workspace_fingerprint"`
-	ProxyFingerprint     string     `json:"proxy_fingerprint"`
-	ErrorCode            string     `json:"error_code"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	AccountID                   int64      `json:"account_id"`
+	Enabled                     bool       `json:"enabled"`
+	EnvironmentRevision         int64      `json:"environment_revision"`
+	DeviceID                    string     `json:"device_id"`
+	SessionID                   string     `json:"session_id"`
+	Status                      string     `json:"status"`
+	Capabilities                []string   `json:"capabilities"`
+	ImageQuotaRemaining         *int       `json:"image_quota_remaining"`
+	QuotaResetAt                *time.Time `json:"quota_reset_at"`
+	ObservedAt                  *time.Time `json:"observed_at"`
+	CredentialRevision          string     `json:"credential_revision"`
+	WorkspaceFingerprint        string     `json:"workspace_fingerprint"`
+	ProxyFingerprint            string     `json:"proxy_fingerprint"`
+	ErrorCode                   string     `json:"error_code"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
+	WorkspaceID                 string     `json:"workspace_id"`
+	WorkspaceBindingFingerprint string     `json:"workspace_binding_fingerprint"`
+	LastCheckAt                 *time.Time `json:"last_check_at"`
+	LastCheckStage              string     `json:"last_check_stage"`
+	LastCheckErrorCode          string     `json:"last_check_error_code"`
+	LastCheckHTTPStatus         int        `json:"last_check_http_status"`
 }
 
 type ChatGPTWebExecution struct {
@@ -113,12 +119,15 @@ func (db *DB) ensureChatGPTWebSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	// A legacy ready observation lacks workspace evidence and must be rechecked.
-	_, err = db.conn.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET status='unverified' WHERE status='ready' AND workspace_fingerprint=''`)
+	if err := db.ensureChatGPTWebCheckSchema(ctx); err != nil {
+		return err
+	}
+	// Legacy readiness has no authenticated resolved workspace and must be rechecked.
+	_, err = db.conn.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET status='unverified' WHERE status='ready' AND (workspace_fingerprint='' OR workspace_id='' OR workspace_binding_fingerprint='')`)
 	return err
 }
 
-const chatGPTWebStateColumns = `account_id, enabled, environment_revision, device_id, session_id, status, capabilities, image_quota_remaining, quota_reset_at, observed_at, credential_revision, proxy_fingerprint, workspace_fingerprint, error_code, updated_at`
+const chatGPTWebStateColumns = `account_id, enabled, environment_revision, device_id, session_id, status, capabilities, image_quota_remaining, quota_reset_at, observed_at, credential_revision, proxy_fingerprint, workspace_fingerprint, error_code, updated_at, workspace_id, workspace_binding_fingerprint, last_check_at, last_check_stage, last_check_error_code, last_check_http_status`
 const chatGPTWebExecutionColumns = `id, api_key_id, account_id, request_hash, credential_revision, environment_revision, proxy_fingerprint, workspace_fingerprint, operation, stage, conversation_id, task_id, asset_ids, error_code, result_unknown, lease_owner, lease_until, created_at, updated_at`
 
 type chatGPTWebScanner interface{ Scan(...any) error }
@@ -126,9 +135,9 @@ type chatGPTWebScanner interface{ Scan(...any) error }
 func scanChatGPTWebState(row chatGPTWebScanner) (*ChatGPTWebAccountState, error) {
 	var s ChatGPTWebAccountState
 	var caps string
-	var quota, reset, observed sql.NullInt64
+	var quota, reset, observed, checked sql.NullInt64
 	var updated int64
-	if err := row.Scan(&s.AccountID, &s.Enabled, &s.EnvironmentRevision, &s.DeviceID, &s.SessionID, &s.Status, &caps, &quota, &reset, &observed, &s.CredentialRevision, &s.ProxyFingerprint, &s.WorkspaceFingerprint, &s.ErrorCode, &updated); err != nil {
+	if err := row.Scan(&s.AccountID, &s.Enabled, &s.EnvironmentRevision, &s.DeviceID, &s.SessionID, &s.Status, &caps, &quota, &reset, &observed, &s.CredentialRevision, &s.ProxyFingerprint, &s.WorkspaceFingerprint, &s.ErrorCode, &updated, &s.WorkspaceID, &s.WorkspaceBindingFingerprint, &checked, &s.LastCheckStage, &s.LastCheckErrorCode, &s.LastCheckHTTPStatus); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(caps), &s.Capabilities); err != nil {
@@ -142,6 +151,7 @@ func scanChatGPTWebState(row chatGPTWebScanner) (*ChatGPTWebAccountState, error)
 		s.ImageQuotaRemaining = &n
 	}
 	s.QuotaResetAt, s.ObservedAt = chatGPTWebTimePtr(reset), chatGPTWebTimePtr(observed)
+	s.LastCheckAt = chatGPTWebTimePtr(checked)
 	s.UpdatedAt = time.Unix(0, updated).UTC()
 	return &s, nil
 }
@@ -221,7 +231,7 @@ func (db *DB) SetChatGPTWebAccountEnabled(ctx context.Context, id int64, enabled
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET enabled=$2, environment_revision=environment_revision+1,
 			status=$3, capabilities='[]', image_quota_remaining=NULL, quota_reset_at=NULL, observed_at=NULL,
-			credential_revision='', proxy_fingerprint='', workspace_fingerprint='', error_code='', updated_at=$4 WHERE account_id=$1 AND enabled <> $2`, id, enabled, status, now)
+			credential_revision='', proxy_fingerprint='', workspace_fingerprint='', workspace_id='', workspace_binding_fingerprint='', last_check_at=NULL, last_check_stage='', last_check_error_code='', last_check_http_status=0, error_code='', updated_at=$4 WHERE account_id=$1 AND enabled <> $2`, id, enabled, status, now)
 		if err != nil {
 			return err
 		}
@@ -255,6 +265,8 @@ func chatGPTWebSafeID(s string, allowEmpty bool) bool {
 }
 func chatGPTWebSafeError(code string) bool {
 	switch code {
+	case "workspace_unavailable", "identity_mismatch", "quota_unknown", "token_expired", "account_disabled", "account_busy", "account_ineligible", "egress_unavailable", "observation_stale":
+		return true
 	case "", "invalid_request", "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "upstream_text_reply", "upstream_error", "execution_conflict", "worker_unavailable", "worker_timeout", "worker_protocol_error", "cancelled", "internal_error":
 		return true
 	}
@@ -269,7 +281,7 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 		return false, errors.New("missing chatgpt web observation binding")
 	}
 	s := *state
-	if s.EnvironmentRevision <= 0 || !chatGPTWebIsHash(s.ProxyFingerprint) || !chatGPTWebIsHash(s.WorkspaceFingerprint) || !chatGPTWebSafeError(s.ErrorCode) {
+	if s.EnvironmentRevision <= 0 || !chatGPTWebIsHash(s.ProxyFingerprint) || !openaiidentity.ValidWebWorkspaceID(s.WorkspaceID) || s.WorkspaceFingerprint != chatGPTWebHash(s.WorkspaceID) || !chatGPTWebIsHash(s.WorkspaceBindingFingerprint) || !chatGPTWebSafeError(s.ErrorCode) {
 		return false, errors.New("invalid chatgpt web observation")
 	}
 	revision := chatGPTWebHash(expectedAT)
@@ -304,6 +316,13 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 	if observed.IsZero() || observed.After(now.Add(time.Minute)) {
 		return false, errors.New("invalid chatgpt web observation time")
 	}
+	checked := observed
+	if s.LastCheckAt != nil {
+		checked = s.LastCheckAt.UTC()
+	}
+	if checked.IsZero() || checked.After(now.Add(time.Minute)) || !chatGPTWebCheckStage(s.LastCheckStage) || !chatGPTWebSafeError(s.LastCheckErrorCode) || s.LastCheckHTTPStatus < 0 || s.LastCheckHTTPStatus > 599 {
+		return false, errors.New("invalid web check diagnostic")
+	}
 	if caps == nil {
 		caps = []string{}
 	}
@@ -317,26 +336,15 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 		if credentialStringFromMap(creds, "access_token") != expectedAT {
 			return nil
 		}
-		baseWorkspace := openaiidentity.NormalizeWorkspaceID(credentialStringFromMap(creds, "account_id"))
-		if baseWorkspace == "" {
-			return nil
-		}
-		headers := (&AccountRow{Credentials: creds}).GetCredentialStringMap("custom_headers")
-		override, err := openaiidentity.WorkspaceOverrideFromHeadersChecked(headers)
-		if err != nil {
-			return nil // ambiguous effective workspace fails closed
-		}
-		workspace := override
-		if workspace == "" {
-			workspace = baseWorkspace
-		}
-		if workspace == "" || chatGPTWebHash(workspace) != s.WorkspaceFingerprint {
+		requested, err := requestedChatGPTWebWorkspace(creds)
+		if err != nil || chatGPTWebHash(requested) != s.WorkspaceBindingFingerprint || (requested != "" && requested != s.WorkspaceID) {
 			return nil
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET status=$3, capabilities=$4,
-			image_quota_remaining=$5, quota_reset_at=$6, observed_at=$7, credential_revision=$8, proxy_fingerprint=$9, workspace_fingerprint=$10, error_code=$11, updated_at=$12
-			WHERE account_id=$1 AND environment_revision=$2 AND enabled=TRUE AND (observed_at IS NULL OR observed_at < $7)`,
-			s.AccountID, s.EnvironmentRevision, s.Status, string(encoded), s.ImageQuotaRemaining, chatGPTWebTimeArg(s.QuotaResetAt), observed.UnixNano(), revision, s.ProxyFingerprint, s.WorkspaceFingerprint, s.ErrorCode, now.UnixNano())
+			image_quota_remaining=$5, quota_reset_at=$6, observed_at=$7, credential_revision=$8, proxy_fingerprint=$9, workspace_fingerprint=$10, error_code=$11, updated_at=$12,
+			workspace_id=$13, workspace_binding_fingerprint=$14, last_check_at=$15, last_check_stage=$16, last_check_error_code=$17, last_check_http_status=$18
+			WHERE account_id=$1 AND environment_revision=$2 AND enabled=TRUE AND (observed_at IS NULL OR observed_at < $7) AND (last_check_at IS NULL OR last_check_at <= $15)`,
+			s.AccountID, s.EnvironmentRevision, s.Status, string(encoded), s.ImageQuotaRemaining, chatGPTWebTimeArg(s.QuotaResetAt), observed.UnixNano(), revision, s.ProxyFingerprint, s.WorkspaceFingerprint, s.ErrorCode, now.UnixNano(), s.WorkspaceID, s.WorkspaceBindingFingerprint, checked.UnixNano(), s.LastCheckStage, s.LastCheckErrorCode, s.LastCheckHTTPStatus)
 		if err != nil {
 			return err
 		}

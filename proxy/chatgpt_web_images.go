@@ -13,6 +13,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/openaiidentity"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/sjson"
 )
@@ -39,11 +40,17 @@ func chatGPTWebExecutionBase(c *gin.Context) (string, error) {
 	return chatGPTWebHash(fmt.Sprintf("%d\x00%s", requestAPIKeyID(c), id)), nil
 }
 
+func chatGPTWebStateMatches(state database.ChatGPTWebAccountState, token, requested, proxyURL string) bool {
+	return openaiidentity.ValidWebWorkspaceID(state.WorkspaceID) && state.WorkspaceFingerprint == chatGPTWebHash(state.WorkspaceID) &&
+		state.WorkspaceBindingFingerprint == chatGPTWebHash(requested) && (requested == "" || requested == state.WorkspaceID) &&
+		state.CredentialRevision == chatGPTWebHash(token) && state.ProxyFingerprint == chatGPTWebHash(proxyURL)
+}
+
 func chatGPTWebStateReady(state database.ChatGPTWebAccountState, operation string, now time.Time) bool {
 	if !state.Enabled || state.Status != "ready" || state.ObservedAt == nil || now.Sub(*state.ObservedAt) > 30*time.Minute || state.ObservedAt.After(now.Add(time.Minute)) {
 		return false
 	}
-	if state.ImageQuotaRemaining != nil && *state.ImageQuotaRemaining <= 0 {
+	if state.ImageQuotaRemaining == nil || *state.ImageQuotaRemaining <= 0 || state.ErrorCode != "" || !openaiidentity.ValidWebWorkspaceID(state.WorkspaceID) {
 		return false
 	}
 	for _, capability := range state.Capabilities {
@@ -77,9 +84,9 @@ func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIK
 		if account == nil || account.IsRelayStyle() || !h.store.ChatGPTWebAccountVisibleToKey(row.ID, account) {
 			continue
 		}
-		token, workspace := account.ChatGPTWebCredentials()
+		token, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
 		proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
-		if !usable || state.CredentialRevision != chatGPTWebHash(token) || state.WorkspaceFingerprint != chatGPTWebHash(workspace) || state.ProxyFingerprint != chatGPTWebHash(proxyURL) {
+		if !usable || expired || identityErr != nil || !chatGPTWebStateMatches(state, token, requested, proxyURL) {
 			continue
 		}
 		addScopedModel(records, "gpt-image-2", modelBackingCodex, time.Time{}, false)
@@ -107,8 +114,8 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 			continue
 		}
 		proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
-		token, workspace := account.ChatGPTWebCredentials()
-		if !usable || state.CredentialRevision != chatGPTWebHash(token) || state.WorkspaceFingerprint != chatGPTWebHash(workspace) || state.ProxyFingerprint != chatGPTWebHash(proxyURL) {
+		token, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
+		if !usable || expired || identityErr != nil || !chatGPTWebStateMatches(state, token, requested, proxyURL) {
 			h.store.Release(account)
 			continue
 		}
@@ -352,12 +359,12 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			_ = h.db.ReleaseChatGPTWebAccountLease(cleanup, account.ID(), owner)
 		}
 	}()
-	token, workspace := account.ChatGPTWebCredentials()
-	if chatGPTWebHash(token) != state.CredentialRevision || chatGPTWebHash(workspace) != state.WorkspaceFingerprint {
+	token, requested, email, expired, identityErr := account.ChatGPTWebIdentity()
+	if expired || identityErr != nil || !chatGPTWebStateMatches(*state, token, requested, proxyURL) {
 		return result, &chatGPTWebFailure{"auth_required", 409, false}
 	}
 	remaining := time.Until(until.Add(-30 * time.Second))
-	req.chatGPTWebAccountRequest = chatGPTWebAccountRequest{AccountID: account.ID(), AccessToken: token, ChatGPTAccountID: workspace, CredentialRevision: state.CredentialRevision, EnvironmentRevision: state.EnvironmentRevision, ProxyURL: proxyURL, Environment: chatGPTWebEnvironment{state.DeviceID, state.SessionID}, TimeoutSeconds: int((remaining + time.Second - 1) / time.Second)}
+	req.chatGPTWebAccountRequest = chatGPTWebAccountRequest{AccountID: account.ID(), AccessToken: token, ChatGPTAccountID: state.WorkspaceID, ExpectedEmail: email, CredentialRevision: state.CredentialRevision, EnvironmentRevision: state.EnvironmentRevision, ProxyURL: proxyURL, Environment: chatGPTWebEnvironment{state.DeviceID, state.SessionID}, TimeoutSeconds: int((remaining + time.Second - 1) / time.Second)}
 	if req.TimeoutSeconds < 10 {
 		return result, context.DeadlineExceeded
 	}
@@ -414,6 +421,7 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 				updated.Status = map[string]string{"auth_required": "auth_required", "quota_exhausted": "quota_exhausted", "environment_challenge": "challenge"}[code]
 				observed := time.Now().UTC()
 				updated.ObservedAt = &observed
+				updated.LastCheckAt, updated.LastCheckStage, updated.LastCheckErrorCode = &observed, "complete", code
 				_, _ = h.db.SaveChatGPTWebAccountObservation(cleanup, &updated, token)
 			}
 			cancel()

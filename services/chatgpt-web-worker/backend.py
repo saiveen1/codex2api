@@ -8,9 +8,10 @@ import time
 import uuid
 from datetime import datetime
 
+from curl_cffi import CurlECode, CurlError
 from PIL import Image
 
-from contract import MAX_OUTPUT, SafeError, image_info, safe_id
+from contract import ID, MAX_OUTPUT, SafeError, image_info, safe_id, valid_workspace
 from conversation import Conversation, sse_events
 from proof import Resources, proof_token, requirements_token
 from transport import CurlTransport, json_response, read_bounded
@@ -32,6 +33,9 @@ class Backend:
         self.transport = transport_factory(account)
         self.deadline = time.monotonic() + account.timeout
         self.requirements = {}
+        self.workspace_id = self.raw.get("chatgpt_account_id", "")
+        self.upstream_status = 0
+        self.identity_verified = False
 
     def remaining(self):
         value = self.deadline - time.monotonic()
@@ -39,8 +43,9 @@ class Backend:
             raise TimeoutError()
         return value
 
-    def headers(self, path):
-        return {"Authorization": "Bearer " + self.raw["access_token"], "ChatGPT-Account-ID": self.raw["chatgpt_account_id"],
+    def headers(self, path, workspace=True):
+        scope = {"ChatGPT-Account-ID": self.workspace_id} if workspace and self.workspace_id else {}
+        return {"Authorization": "Bearer " + self.raw["access_token"], **scope,
                 "User-Agent": UA, "OAI-Device-Id": self.raw["environment"]["device_id"],
                 "OAI-Session-Id": self.raw["environment"]["session_id"], "OAI-Client-Version": VERSION,
                 "OAI-Client-Build-Number": BUILD, "OAI-Language": "en-US", "Origin": BASE, "Referer": BASE + "/",
@@ -49,13 +54,49 @@ class Backend:
                 "Content-Type": "application/json", "Accept": "application/json",
                 "X-OpenAI-Target-Path": path, "X-OpenAI-Target-Route": path, **self.requirements}
 
-    async def api(self, method, path, **kwargs):
-        async with self.transport.open(method, BASE + path, headers=self.headers(path), timeout=self.remaining(), **kwargs) as response:
+    async def api(self, method, path, *, workspace=True, **kwargs):
+        self.upstream_status = 0
+        async with self.transport.open(method, BASE + path, headers=self.headers(path, workspace), timeout=self.remaining(), **kwargs) as response:
+            self.upstream_status = response.status_code
             return await json_response(response)
 
+    async def verify_identity(self):
+        me = await self.api("GET", "/backend-api/me", workspace=False)
+        if not isinstance(me.get("id"), str) or not ID.fullmatch(me["id"]):
+            raise SafeError("worker_protocol_error")
+        expected = self.raw.get("expected_email")
+        email = me.get("email")
+        if expected and (not isinstance(email, str) or email.strip().casefold() != expected.casefold()):
+            raise SafeError("identity_mismatch", 403)
+        self.identity_verified = True
+
+    async def guard_identity(self):
+        if self.raw.get("expected_email") and not self.identity_verified:
+            await self.verify_identity()
+
+    async def resolve_workspace(self):
+        data = await self.api("GET", "/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480", workspace=False)
+        accounts = data.get("accounts")
+        if not isinstance(accounts, dict):
+            raise SafeError("worker_protocol_error")
+        requested = self.raw.get("chatgpt_account_id", "")
+        candidates = accounts.values() if requested else [accounts.get("default")]
+        for entry in candidates:
+            account = entry.get("account") if isinstance(entry, dict) else None
+            if not isinstance(account, dict):
+                continue
+            workspace = account.get("account_id")
+            if (valid_workspace(workspace) and account.get("is_deactivated") is False
+                    and (not requested or workspace == requested)):
+                self.workspace_id = workspace
+                return workspace
+        raise SafeError("workspace_unavailable", 403)
+
     async def bootstrap(self):
+        self.upstream_status = 0
         async with self.transport.open("GET", BASE + "/", headers={"User-Agent": UA, "Accept": "text/html"},
                                        timeout=self.remaining()) as response:
+            self.upstream_status = response.status_code
             html = (await read_bounded(response, 4 * 1024 * 1024)).decode("utf-8", errors="replace")
         if "cf-chl-" in html or "Just a moment..." in html:
             raise SafeError("environment_challenge", 403)
@@ -87,20 +128,26 @@ class Backend:
 
     async def check(self):
         result = {"status": "unverified", "capabilities": [], "image_quota_remaining": None,
-                  "quota_reset_at": None, "error_code": None}
+                  "quota_reset_at": None, "error_code": None, "workspace_id": "",
+                  "stage": "bootstrap", "upstream_status": 0}
         try:
             async with asyncio.timeout(self.account.timeout):
                 await self.bootstrap()
-                me = await self.api("GET", "/backend-api/me")
-                if not isinstance(me.get("id"), str) or not me["id"]:
-                    raise SafeError("auth_required", 401)
+                result["stage"] = "identity"
+                await self.verify_identity()
+                result["stage"] = "workspace"
+                result["workspace_id"] = await self.resolve_workspace()
+                result["stage"] = "quota"
                 init = await self.api("POST", "/backend-api/conversation/init", json={"gizmo_id": None,
                                       "requested_default_model": None, "conversation_id": None, "timezone_offset_min": -480})
-                facts = {p.get("feature_name"): p for p in init.get("limits_progress", []) if isinstance(p, dict)}
+                progress = init.get("limits_progress")
+                if not isinstance(progress, list):
+                    raise SafeError("quota_unknown")
+                facts = {p.get("feature_name"): p for p in progress if isinstance(p, dict) and isinstance(p.get("feature_name"), str)}
                 image = facts.get("image_gen", {})
                 remaining = image.get("remaining")
                 if type(remaining) is not int or remaining < 0:
-                    return result
+                    raise SafeError("quota_unknown")
                 result["image_quota_remaining"] = remaining
                 reset = image.get("reset_after")
                 if isinstance(reset, str):
@@ -115,13 +162,23 @@ class Backend:
                     result.update(status="ready", capabilities=["generate"])
                     if type(facts.get("image_edit", {}).get("remaining")) is int and facts["image_edit"]["remaining"] > 0:
                         result["capabilities"].append("edit")
+                result["stage"] = "complete"
         except SafeError as error:
             result["status"] = {"auth_required": "auth_required", "environment_challenge": "challenge",
                                 "quota_exhausted": "quota_exhausted"}.get(error.code, "unverified")
             result["error_code"] = error.code
+            if error.code == "upstream_error" and 200 <= self.upstream_status < 300 and not error.upstream_status:
+                result["error_code"] = "worker_protocol_error"
+            result["upstream_status"] = error.upstream_status or self.upstream_status
+        except TimeoutError:
+            result["error_code"] = "worker_timeout"
+        except CurlError as error:
+            result["error_code"] = "worker_timeout" if error.code == CurlECode.OPERATION_TIMEDOUT else "worker_unavailable"
         except Exception:
-            result["error_code"] = "upstream_error"
+            result["error_code"] = "worker_unavailable"
         finally:
+            if not result["upstream_status"]:
+                result["upstream_status"] = self.upstream_status
             await self.transport.close()
         return result
 
@@ -132,6 +189,7 @@ class Backend:
         return prompt
 
     async def prepare(self):
+        await self.guard_identity()
         resources = await self.bootstrap()
         await self.prepare_requirements(resources)
         references = []
@@ -190,6 +248,7 @@ class Backend:
                     break
 
     async def recover(self, state):
+        await self.guard_identity()
         # One bounded, explicit recovery probe. Pending tasks return a safe error, not blind polling.
         if state.conversation_id:
             state.conversation(await self.api("GET", "/backend-api/conversation/" + safe_id(state.conversation_id)))
@@ -197,6 +256,7 @@ class Backend:
             state.tasks(await self.api("GET", "/backend-api/tasks"))
 
     async def download(self, asset, state):
+        await self.guard_identity()
         try:
             if asset.startswith("sediment://"):
                 path = "/backend-api/conversation/" + safe_id(state.conversation_id) + "/attachment/" + safe_id(asset[11:]) + "/download"

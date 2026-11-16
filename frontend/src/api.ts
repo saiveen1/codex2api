@@ -598,7 +598,13 @@ export interface ModelTraceBankUpdateResult extends ModelTraceBankStatus {
   removed_models?: string[]
 }
 
-export interface ChatGPTWebState { account_id: number; enabled: boolean; status: string; capabilities: string[]; image_quota_remaining: number | null; quota_reset_at?: string | null; observed_at?: string | null; error_code?: string }
+export interface ChatGPTWebState { account_id: number; enabled: boolean; status: string; capabilities: string[]; image_quota_remaining: number | null; quota_reset_at?: string | null; observed_at?: string | null; error_code?: string; workspace_id?: string; workspace_binding_fingerprint?: string; last_check_at?: string | null; last_check_stage?: string; last_check_error_code?: string; last_check_http_status?: number }
+export type ChatGPTWebBatchRequest = { enabled: boolean } & (
+  | { scope: 'accounts'; account_ids: number[] }
+  | { scope: 'group'; group_id: number }
+  | { scope: 'api_key'; api_key_id: number }
+)
+export interface ChatGPTWebBatchResult { matched: number; updated: number; unchanged: number; failed: number; results: { account_id: number; state?: ChatGPTWebState; code?: string; error?: string; changed: boolean }[] }
 export interface ChatGPTWebExecution { id: string; account_id: number; operation: string; stage: string; error_code?: string; result_unknown: boolean; updated_at: string }
 export interface ChatGPTWebConfig { enabled: boolean; mode: 'managed' | 'external'; worker_url: string; worker_secret?: string; timeout_seconds: number }
 export interface ChatGPTWebControl { config: ChatGPTWebConfig; secret_set: boolean; available: boolean; running: boolean; stage: string; last_error: string }
@@ -608,6 +614,7 @@ export const api = {
   getChatGPTWebStatus: () => request<ChatGPTWebDeployment>('/chatgpt-web'),
   configureChatGPTWeb: (config: ChatGPTWebConfig) => request<ChatGPTWebDeployment>('/chatgpt-web/config', { method: 'PUT', body: JSON.stringify(config) }),
   getChatGPTWebAccounts: () => request<{accounts: ChatGPTWebState[]}>('/chatgpt-web/accounts'),
+  batchSetChatGPTWebAccounts: (data: ChatGPTWebBatchRequest) => request<ChatGPTWebBatchResult>('/chatgpt-web/accounts/batch', { method: 'POST', body: JSON.stringify(data) }),
   setChatGPTWebAccount: (id: number, enabled: boolean) => request<ChatGPTWebState>(`/chatgpt-web/accounts/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
   checkChatGPTWebAccount: (id: number) => request<ChatGPTWebState>(`/chatgpt-web/accounts/${id}/check`, { method: 'POST' }),
   getChatGPTWebExecutions: () => request<{executions: ChatGPTWebExecution[]}>('/chatgpt-web/executions'),

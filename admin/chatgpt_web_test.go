@@ -22,6 +22,7 @@ func TestChatGPTWebAdminRoutesRequireAuthAndRejectUnknownFields(t *testing.T) {
 	h.RegisterRoutes(r)
 	for i, route := range []struct{ method, path string }{
 		{"GET", "/api/admin/chatgpt-web"}, {"GET", "/api/admin/chatgpt-web/accounts"},
+		{"POST", "/api/admin/chatgpt-web/accounts/batch"},
 		{"PUT", "/api/admin/chatgpt-web/accounts/1"}, {"POST", "/api/admin/chatgpt-web/accounts/1/check"},
 		{"GET", "/api/admin/chatgpt-web/executions"}, {"PUT", "/api/admin/chatgpt-web/config"},
 	} {

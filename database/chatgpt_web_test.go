@@ -89,6 +89,7 @@ func TestChatGPTWebStateEnableAndCAS(t *testing.T) {
 	observed := time.Now().UTC().Add(-time.Second)
 	s.Status, s.Capabilities, s.ImageQuotaRemaining, s.ObservedAt, s.ProxyFingerprint = "ready", []string{"edit", "generate"}, &quota, &observed, chatGPTWebHash("direct")
 	s.WorkspaceFingerprint = chatGPTWebHash("workspace-base")
+	s.WorkspaceID, s.WorkspaceBindingFingerprint = "workspace-base", chatGPTWebHash("workspace-base")
 	forged := *s
 	forged.ImageQuotaRemaining = nil
 	if ok, err := db.SaveChatGPTWebAccountObservation(ctx, &forged, "test-AT"); ok || err == nil {
@@ -177,6 +178,7 @@ func TestChatGPTWebWorkspaceObservationCAS(t *testing.T) {
 	t0 := time.Now().Add(-time.Minute)
 	s.Status, s.Capabilities, s.ImageQuotaRemaining, s.ObservedAt = "ready", []string{"generate"}, &quota, &t0
 	s.ProxyFingerprint, s.WorkspaceFingerprint = chatGPTWebHash("direct"), chatGPTWebHash("workspace-A")
+	s.WorkspaceID, s.WorkspaceBindingFingerprint = "workspace-A", chatGPTWebHash("workspace-A")
 	if ok, err := db.SaveChatGPTWebAccountObservation(ctx, s, "test-AT"); !ok || err != nil {
 		t.Fatalf("workspace A: %v %v", ok, err)
 	}
@@ -203,6 +205,7 @@ func TestChatGPTWebWorkspaceObservationCAS(t *testing.T) {
 		t.Fatal("stale workspace overwrote existing observation")
 	}
 	s.WorkspaceFingerprint = chatGPTWebHash("workspace-B")
+	s.WorkspaceID, s.WorkspaceBindingFingerprint = "workspace-B", chatGPTWebHash("workspace-B")
 	if ok, err := db.SaveChatGPTWebAccountObservation(ctx, s, "test-AT"); !ok || err != nil {
 		t.Fatalf("workspace B: %v %v", ok, err)
 	}
@@ -220,8 +223,8 @@ func TestChatGPTWebWorkspaceObservationCAS(t *testing.T) {
 	if err := db.UpdateCredentials(ctx, id, map[string]any{"account_id": ""}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := db.SaveChatGPTWebAccountObservation(ctx, s, "test-AT"); ok || err != nil {
-		t.Fatalf("empty base account_id accepted: %v %v", ok, err)
+	if ok, err := db.SaveChatGPTWebAccountObservation(ctx, s, "test-AT"); !ok || err != nil {
+		t.Fatalf("verified explicit workspace should not require a legacy base account_id: %v %v", ok, err)
 	}
 }
 

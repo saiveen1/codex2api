@@ -24,6 +24,12 @@ MESSAGES = {
     "auth_required": "Upstream authentication required.",
     "environment_challenge": "Unsupported upstream environment challenge.",
     "quota_exhausted": "Upstream image quota exhausted.",
+    "workspace_unavailable": "Requested upstream workspace is unavailable.",
+    "identity_mismatch": "Upstream identity does not match the expected account.",
+    "quota_unknown": "Upstream image quota could not be verified.",
+    "worker_timeout": "Upstream account check timed out.",
+    "worker_unavailable": "Upstream account check is unavailable.",
+    "worker_protocol_error": "Upstream account check returned an invalid response.",
     "submission_unknown": "Submission outcome is unknown; generation will not be repeated.",
     "image_stream_interrupted": "Image stream interrupted; original execution may be resumed.",
     "image_poll_timeout": "Original image task is not ready; generation will not be repeated.",
@@ -36,8 +42,9 @@ MESSAGES = {
 }
 
 class SafeError(Exception):
-    def __init__(self, code, status=502, unknown=False):
+    def __init__(self, code, status=502, unknown=False, upstream_status=0):
         self.code, self.status, self.unknown = code, status, unknown
+        self.upstream_status = upstream_status
         super().__init__(MESSAGES[code])
 
     def event(self, stage):
@@ -55,6 +62,10 @@ def safe_id(value):
     if not isinstance(value, str) or not ID.fullmatch(value):
         raise SafeError("upstream_error")
     return value
+
+
+def valid_workspace(value):
+    return isinstance(value, str) and bool(ID.fullmatch(value)) and not value.lower().startswith("user-")
 
 
 def image_info(data):
@@ -85,13 +96,21 @@ class Account:
     @classmethod
     def parse(cls, raw, execute=False):
         account_fields = {"account_id", "access_token", "chatgpt_account_id", "credential_revision",
-                          "environment_revision", "proxy_url", "environment", "timeout_seconds"}
+                          "environment_revision", "proxy_url", "environment", "timeout_seconds", "expected_email"}
         image_fields = {"execution_id", "operation", "model", "prompt", "images", "n", "size", "quality", "output_format"}
         if not isinstance(raw, dict) or set(raw) - (account_fields | (image_fields if execute else set())):
             raise SafeError("invalid_request", 400)
-        for name in ("access_token", "chatgpt_account_id", "credential_revision"):
+        for name in ("access_token", "credential_revision"):
             value = raw.get(name)
             if not isinstance(value, str) or not value or len(value) > 16384 or any(ord(c) < 32 for c in value):
+                raise SafeError("invalid_request", 400)
+        workspace = raw.get("chatgpt_account_id", "")
+        if not isinstance(workspace, str) or (workspace and not valid_workspace(workspace)) or (execute and not workspace):
+            raise SafeError("invalid_request", 400)
+        if "expected_email" in raw:
+            email = raw["expected_email"]
+            if (not isinstance(email, str) or not email or len(email) > 320 or email != email.strip()
+                    or "@" not in email or any(ord(c) < 33 for c in email)):
                 raise SafeError("invalid_request", 400)
         for name in ("account_id", "environment_revision"):
             if type(raw.get(name)) is not int or raw[name] < 1:
@@ -140,7 +159,7 @@ class Account:
                         raise ValueError()
                 except Exception:
                     raise SafeError("invalid_request", 400) from None
-        return cls(dict(raw))
+        return cls(dict(raw, chatgpt_account_id=workspace))
 
     def binding(self):
         raw = self.raw

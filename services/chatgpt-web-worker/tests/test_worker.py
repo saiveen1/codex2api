@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 import pytest
+from curl_cffi import CurlECode, CurlError
 from PIL import Image
 
 from app import create_app
@@ -19,6 +20,10 @@ from conversation import Conversation, sse_events
 from executor import Executor
 from ledger import Ledger
 from transport import CurlTransport, check_status, public_destination
+
+DISCOVERY = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480"
+CHECK_STAGES = [("https://chatgpt.com/", "bootstrap"), ("https://chatgpt.com/backend-api/me", "identity"),
+                (DISCOVERY, "workspace"), ("https://chatgpt.com/backend-api/conversation/init", "quota")]
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +60,14 @@ def account(**changes):
            "size": "auto", "quality": "auto", "output_format": "png", "timeout_seconds": 10}
     raw.update(changes)
     return Account.parse(raw, True)
+
+
+def check_account(**changes):
+    raw = {key: value for key, value in account().raw.items() if key in {
+        "account_id", "access_token", "chatgpt_account_id", "credential_revision", "environment_revision",
+        "proxy_url", "environment", "timeout_seconds"}}
+    raw.update(changes)
+    return Account.parse(raw)
 
 
 def message(role="tool", pointer="file-service://file_out", **changes):
@@ -95,10 +108,16 @@ class Script:
         self.tasks = {"tasks": []}
         self.statuses = {}
         self.submission_assert = None
+        self.me = {"id": "user-mock", "email": "owner@example.com"}
+        self.accounts = {"accounts": {"default": {"account": {"account_id": "mock-account",
+                         "is_deactivated": False, "plan_type": "free"}}}}
+        self.responses, self.failures = {}, {}
 
     @asynccontextmanager
     async def open(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
+        if url in self.failures:
+            raise self.failures[url]
         if kwargs.get("asset"):
             assert "Authorization" not in kwargs["headers"]
             assert "Cookie" not in kwargs["headers"]
@@ -129,7 +148,9 @@ class Script:
         elif url.endswith("/tasks"):
             body = self.tasks
         elif url.endswith("/me"):
-            body = {"id": "mock-user"}
+            body = self.me
+        elif url == DISCOVERY:
+            body = self.accounts
         elif url.endswith("/conversation/init"):
             body = {"plan_type": "plus", "limits_progress": [] if self.quota is None else [
                     {"feature_name": "image_gen", "remaining": self.quota, "reset_after": "2026-11-12T12:00:00Z"}]}
@@ -137,7 +158,7 @@ class Script:
             body = b'<html data-build="test"><script src="/sdk.js"></script></html>'
         else:
             raise AssertionError("Unexpected mock HTTP endpoint")
-        response = Response(body, self.statuses.get(url, 200))
+        response = Response(self.responses.get(url, body), self.statuses.get(url, 200))
         check_status(response, kwargs.get("asset", False))
         try:
             yield response
@@ -175,6 +196,9 @@ async def test_generate_fence_success_and_cache_replay(tmp_path):
     state = json.dumps(ledger.public("exec-1")) + ledger.db.read_bytes().decode(errors="ignore")
     for secret in ("mock-access-token", "mock-pass", "private test prompt", "sig=private", base64.b64encode(png()).decode()):
         assert secret not in state
+    assert all(c[2]["headers"].get("ChatGPT-Account-ID") == "mock-account" for c in script.calls
+               if c[1].startswith("https://chatgpt.com/backend-api/"))
+    assert not any(c[1] == DISCOVERY or c[1].endswith("/me") for c in script.calls)
 
 
 def assert_fenced(ledger):
@@ -203,24 +227,264 @@ async def test_output_format(tmp_path, fmt, mime):
         assert decoded.size == (8, 6)
 
 
-@pytest.mark.parametrize("quota,status", [(2, "ready"), (0, "quota_exhausted"), (None, "unverified"), ("5", "unverified")])
+@pytest.mark.parametrize("quota,status", [(2, "ready"), (0, "quota_exhausted"), (None, "unverified"),
+                                        ("5", "unverified"), (-1, "unverified"), (True, "unverified"), (1.5, "unverified")])
 async def test_account_check_positive_evidence_only(quota, status):
     script = Script()
     script.quota = quota
-    result = await script.backend(account()).check()
+    result = await script.backend(check_account()).check()
     assert result["status"] == status
     assert result["capabilities"] == (["generate"] if status == "ready" else [])
+    assert result["workspace_id"] == "mock-account" and result["upstream_status"] == 200
+    assert result["stage"] == ("quota" if status == "unverified" else "complete")
+    assert result["error_code"] == (None if status == "ready" else "quota_unknown" if status == "unverified" else "quota_exhausted")
+    assert script.closed
     assert not script.submits()
     assert all(not c[1].endswith("/f/conversation/prepare") for c in script.calls)
     assert all("settings" not in c[1] for c in script.calls)
+
+
+@pytest.mark.parametrize("remaining", [0, 1, True, "1"])
+async def test_check_edit_capability_requires_positive_integer(remaining):
+    script = Script()
+    script.responses[CHECK_STAGES[-1][0]] = {"limits_progress": [
+        {"feature_name": "image_gen", "remaining": 3}, {"feature_name": "image_edit", "remaining": remaining}]}
+    result = await script.backend(check_account()).check()
+    assert result["status"] == "ready"
+    assert result["capabilities"] == (["generate", "edit"] if type(remaining) is int and remaining > 0 else ["generate"])
 
 
 @pytest.mark.parametrize("status,expected", [(401, "auth_required"), (403, "challenge"), (429, "quota_exhausted")])
 async def test_account_auth_challenge_quota(status, expected):
     script = Script()
     script.statuses["https://chatgpt.com/backend-api/me"] = status
-    result = await script.backend(account()).check()
+    result = await script.backend(check_account()).check()
     assert result["status"] == expected and not script.submits()
+    assert result["stage"] == "identity" and result["upstream_status"] == status
+    assert result["workspace_id"] == ""
+
+
+@pytest.mark.parametrize("omit_workspace", [False, True])
+async def test_default_workspace_discovery_legacy_token(omit_workspace):
+    raw = check_account(chatgpt_account_id="", expected_email="OWNER@example.com").raw
+    if omit_workspace:
+        raw.pop("chatgpt_account_id")
+    acc = Account.parse(raw)
+    original = copy.deepcopy(acc.raw)
+    script = Script()
+    script.quota = 3
+    script.accounts["accounts"]["team"] = {"account": {"account_id": "unrelated-team", "is_deactivated": False}}
+    result = await script.backend(acc).check()
+    assert result["status"] == "ready" and result["workspace_id"] == "mock-account"
+    assert result["image_quota_remaining"] == 3 and result["stage"] == "complete"
+    assert acc.raw == original and not script.submits()
+    assert [call[1] for call in script.calls] == [url for url, _ in CHECK_STAGES]
+    for _, url, options in script.calls[1:]:
+        assert options["headers"]["Authorization"] == "Bearer mock-access-token"
+        if url.endswith("/conversation/init"):
+            assert options["headers"]["ChatGPT-Account-ID"] == "mock-account"
+        else:
+            assert "ChatGPT-Account-ID" not in options["headers"]
+
+
+async def test_explicit_workspace_membership_not_default():
+    script = Script()
+    script.accounts["accounts"]["team-key"] = {"account": {"account_id": "requested-team", "is_deactivated": False}}
+    result = await script.backend(check_account(chatgpt_account_id="requested-team")).check()
+    assert result["status"] == "ready" and result["workspace_id"] == "requested-team"
+    assert script.calls[-1][2]["headers"]["ChatGPT-Account-ID"] == "requested-team"
+    assert all("ChatGPT-Account-ID" not in c[2]["headers"] for c in script.calls if c[1] == DISCOVERY or c[1].endswith("/me"))
+
+
+@pytest.mark.parametrize("member", [None, {"account_id": "requested-team", "is_deactivated": True},
+                                   {"account_id": "requested-team"}])
+async def test_explicit_workspace_unavailable_never_falls_back(member):
+    script = Script()
+    if member is not None:
+        script.accounts["accounts"]["team"] = {"account": member}
+    result = await script.backend(check_account(chatgpt_account_id="requested-team")).check()
+    assert result["error_code"] == "workspace_unavailable" and result["status"] == "unverified"
+    assert result["workspace_id"] == "" and result["stage"] == "workspace" and result["upstream_status"] == 200
+    assert script.calls[-1][1] == DISCOVERY and script.closed
+
+
+@pytest.mark.parametrize("default", [None, {}, {"account": {"account_id": "user-native", "is_deactivated": False}},
+    {"account": {"account_id": "USER-native", "is_deactivated": False}},
+    {"account": {"account_id": "unsafe/header", "is_deactivated": False}},
+    {"account": {"account_id": "x" * 161, "is_deactivated": False}},
+    {"account": {"account_id": "mock-account", "is_deactivated": True}}])
+async def test_default_discovery_does_not_choose_arbitrary_team(default):
+    script = Script()
+    script.accounts = {"accounts": {"default": default, "team": {"account": {
+        "account_id": "available-team", "is_deactivated": False}}}}
+    result = await script.backend(check_account(chatgpt_account_id="")).check()
+    assert result["error_code"] == "workspace_unavailable" and result["workspace_id"] == ""
+    assert result["stage"] == "workspace" and script.calls[-1][1] == DISCOVERY
+
+
+@pytest.mark.parametrize("email", [None, "someone-else@example.com"])
+async def test_check_identity_mismatch_stops_before_workspace(email):
+    script = Script()
+    script.me["email"] = email
+    result = await script.backend(check_account(expected_email="owner@example.com")).check()
+    assert result["error_code"] == "identity_mismatch" and result["status"] == "unverified"
+    assert result["stage"] == "identity" and result["upstream_status"] == 200 and result["workspace_id"] == ""
+    assert len(script.calls) == 2 and script.closed
+    assert "@" not in json.dumps(result) and "mock-access-token" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("me", [{}, {"id": None}, {"id": "unsafe/user"}, {"id": "user-" + "x" * 160}])
+async def test_check_malformed_identity_stops_before_workspace(me):
+    script = Script()
+    script.me = me
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == "worker_protocol_error" and result["stage"] == "identity"
+    assert result["workspace_id"] == "" and result["upstream_status"] == 200 and len(script.calls) == 2
+
+
+async def test_check_bootstrap_html_challenge_is_staged():
+    script = Script()
+    script.responses["https://chatgpt.com/"] = b"Just a moment... cf-chl-mock"
+    result = await script.backend(check_account()).check()
+    assert result["status"] == "challenge" and result["error_code"] == "environment_challenge"
+    assert result["stage"] == "bootstrap" and result["upstream_status"] == 200
+    assert result["workspace_id"] == "" and len(script.calls) == 1 and script.closed
+
+
+@pytest.mark.parametrize("url,stage", CHECK_STAGES)
+@pytest.mark.parametrize("status,code", [(401, "auth_required"), (403, "environment_challenge"),
+                                      (429, "quota_exhausted"), (503, "upstream_error"), (302, "upstream_error")])
+async def test_check_classified_http_failure_stages(url, stage, status, code):
+    script = Script()
+    script.statuses[url] = status
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == code and result["stage"] == stage and result["upstream_status"] == status
+    assert result["workspace_id"] == ("mock-account" if stage == "quota" else "")
+    assert script.calls[-1][1] == url and script.closed and not script.submits()
+    assert result["capabilities"] == [] and result["image_quota_remaining"] is None
+
+
+@pytest.mark.parametrize("url,stage", CHECK_STAGES)
+@pytest.mark.parametrize("error,code", [(TimeoutError("mock-access-token"), "worker_timeout"),
+                                      (CurlError("mock-access-token", code=CurlECode.OPERATION_TIMEDOUT), "worker_timeout"),
+                                      (CurlError("proxy-password", code=CurlECode.COULDNT_CONNECT), "worker_unavailable"),
+                                      (RuntimeError("mock-access-token proxy-password"), "worker_unavailable")])
+async def test_check_transport_failure_stages(url, stage, error, code):
+    script = Script()
+    script.failures[url] = error
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == code and result["stage"] == stage and result["upstream_status"] == 0
+    assert result["workspace_id"] == ("mock-account" if stage == "quota" else "")
+    assert script.closed and not script.submits() and "mock-access-token" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("url,stage", CHECK_STAGES[1:])
+async def test_check_invalid_json_reports_protocol_failure(url, stage):
+    script = Script()
+    script.responses[url] = b'not-json mock-access-token'
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == "worker_protocol_error" and result["stage"] == stage
+    assert result["upstream_status"] == 200 and script.closed
+    assert "mock-access-token" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("body", [{}, {"accounts": []}, {"accounts": None}])
+async def test_check_malformed_workspace_response(body):
+    script = Script()
+    script.accounts = body
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == "worker_protocol_error" and result["stage"] == "workspace"
+    assert result["workspace_id"] == "" and result["upstream_status"] == 200
+
+
+@pytest.mark.parametrize("progress", [None, {}, "unknown", [], [{"feature_name": [], "remaining": 3}]])
+async def test_check_unknown_quota_shape(progress):
+    script = Script()
+    script.responses[CHECK_STAGES[-1][0]] = {"limits_progress": progress, "plan_type": "plus"}
+    result = await script.backend(check_account()).check()
+    assert result["error_code"] == "quota_unknown" and result["status"] == "unverified"
+    assert result["workspace_id"] == "mock-account" and result["stage"] == "quota" and result["upstream_status"] == 200
+    assert result["capabilities"] == [] and result["image_quota_remaining"] is None
+
+
+@pytest.mark.parametrize("workspace", [None, "user-native", "USER-native", "unsafe/header", "x" * 161, "bad\r\nheader"])
+def test_workspace_input_rejected_for_check_and_execute(workspace):
+    with pytest.raises(SafeError) as error:
+        check_account(chatgpt_account_id=workspace)
+    assert error.value.code == "invalid_request"
+    with pytest.raises(SafeError):
+        account(chatgpt_account_id=workspace)
+
+
+def test_execute_requires_concrete_workspace():
+    with pytest.raises(SafeError):
+        account(chatgpt_account_id="")
+    raw = account().raw
+    raw.pop("chatgpt_account_id")
+    with pytest.raises(SafeError):
+        Account.parse(raw, True)
+
+
+@pytest.mark.parametrize("email", [None, "", "no-at", " owner@example.com", "owner@example.com\n", "x" * 321 + "@example.com"])
+def test_expected_email_input_rejected(email):
+    with pytest.raises(SafeError):
+        check_account(expected_email=email)
+    with pytest.raises(SafeError):
+        account(expected_email=email)
+
+
+async def test_execute_expected_identity_before_submission(tmp_path):
+    script = Script()
+    events, ledger = await execute(tmp_path, script, account(expected_email="other@example.com"))
+    assert events[-1]["code"] == "identity_mismatch" and events[-1]["stage"] == "preparing"
+    assert not script.submits() and len(script.calls) == 1 and ledger.get("exec-1")["stage"] == "failed"
+    assert "ChatGPT-Account-ID" not in script.calls[0][2]["headers"]
+
+
+async def test_execute_expected_identity_keeps_binding_and_cache_replay(tmp_path):
+    script = Script()
+    acc = account(expected_email="OWNER@example.com")
+    assert acc.binding() == account().binding()
+    original = copy.deepcopy(acc.raw)
+    events, ledger = await execute(tmp_path, script, acc)
+    assert events[-1]["type"] == "completed" and len(script.submits()) == 1
+    assert acc.raw == original and script.submits()[0][2]["headers"]["ChatGPT-Account-ID"] == "mock-account"
+    assert not any(call[1] == DISCOVERY for call in script.calls)
+    assert sum(call[1].endswith("/me") for call in script.calls) == 1
+    count = len(script.calls)
+    events = [event async for event in Executor(ledger, script.backend).events(acc)]
+    assert events[-1]["type"] == "completed" and len(script.calls) == count
+
+
+async def test_resume_expected_identity_never_resubmits(tmp_path):
+    ledger = Ledger(tmp_path)
+    acc = account(expected_email="owner@example.com")
+    ledger.claim(acc)
+    ledger.update("exec-1", stage="submitting", conversation_id="conv-1")
+    script = Script()
+    script.me["email"] = "other@example.com"
+    events = [event async for event in Executor(ledger, script.backend).events(acc)]
+    assert events[-1]["code"] == "identity_mismatch" and not script.submits()
+    assert all(call[0] == "GET" for call in script.calls)
+    assert ledger.get("exec-1")["stage"] == "submitting"
+
+
+async def test_check_http_discovery_and_admission_diagnostics(tmp_path):
+    script = Script()
+    app = create_app("worker-secret", tmp_path, script.backend)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://worker") as client:
+        denied = await client.post("/v1/accounts/check", json={})
+        assert denied.status_code == 401 and denied.json()["stage"] == "admission"
+        assert denied.json()["upstream_status"] == 0 and not script.calls
+        headers = {"Authorization": "Bearer worker-secret"}
+        raw = check_account(chatgpt_account_id="", expected_email="owner@example.com").raw
+        response = await client.post("/v1/accounts/check", json=raw, headers=headers)
+        assert response.status_code == 200 and response.json()["workspace_id"] == "mock-account"
+        assert response.json()["stage"] == "complete" and response.json()["upstream_status"] == 200
+        response = await client.post("/v1/accounts/check", json=dict(raw, chatgpt_account_id="user-native"), headers=headers)
+        assert response.status_code == 400 and response.json()["stage"] == "admission"
+        assert response.json()["code"] == "invalid_request" and response.json()["upstream_status"] == 0
+        assert "mock-access-token" not in response.text
 
 
 @pytest.mark.parametrize("challenge", ["arkose", "turnstile"])

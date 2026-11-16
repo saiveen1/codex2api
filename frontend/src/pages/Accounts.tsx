@@ -1528,7 +1528,7 @@ const AccountTableRow = memo(function AccountTableRow({
                               <TableCell data-account-state-cell="status">
                                 {tableOverlay ?? (
                                   <div
-                                    className="min-w-[168px] max-w-[240px] space-y-1.5"
+                                    className="min-w-0 w-full max-w-[240px] space-y-1.5"
                                     title={[
                                       t("accounts.healthSummary", {
                                         health: formatHealthTier(
@@ -1564,7 +1564,6 @@ const AccountTableRow = memo(function AccountTableRow({
                                           }
                                           errorMessage={account.error_message}
                                         />
-                                        {isOAuthAccount(account) && <ChatGPTWebAccountBadge accountID={account.id} accountName={account.name || account.email} state={webState} onStateChange={next => onWebStateChange(account.id, next)} />}
                                         <AccountIntelligenceActions bar={intelligenceBar} accountID={account.id} accountName={account.email || account.name} />
                                       </div>
                                       <UsingCreditsBadge account={account} />
@@ -1573,6 +1572,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                       )}
                                       <AccountConcurrencyBadge account={account} />
                                     </div>
+                                    {isOAuthAccount(account) && <div className="flex min-w-0 max-w-full flex-wrap" data-account-web-row><ChatGPTWebAccountBadge accountID={account.id} accountName={account.name || account.email} state={webState} onStateChange={next => onWebStateChange(account.id, next)} /></div>}
                                     <AccountHealthBar
                                       buckets={healthBuckets}
                                     />
