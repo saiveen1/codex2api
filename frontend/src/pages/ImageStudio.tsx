@@ -1403,10 +1403,10 @@ export default function ImageStudio() {
       <div className="studio-form-scroll">
         <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
           <Field label={t('chatgptWeb.source')}>
-            <Select value={imageSource} onValueChange={value => { setImageSource(value as 'default' | 'web'); setAPIKeyID('') }} options={[{ value: 'default', label: t('chatgptWeb.defaultSource') }, { value: 'web', label: t('chatgptWeb.title') }]} compact />
+            <Select aria-label={t('chatgptWeb.source')} value={imageSource} onValueChange={value => { setImageSource(value as 'default' | 'web'); setAPIKeyID('') }} options={[{ value: 'default', label: t('chatgptWeb.defaultSource') }, { value: 'web', label: t('chatgptWeb.title') }]} compact />
           </Field>
           <Field label={t('images.apiKey')}>
-            <Select value={apiKeyID} onValueChange={setAPIKeyID} options={[
+            <Select aria-label={t('images.apiKey')} value={apiKeyID} onValueChange={setAPIKeyID} options={[
               { label: isWebKey ? t('chatgptWeb.selectKey') : t('images.autoApiKey'), value: '' },
               ...apiKeys.filter(key => (key.limits?.upstream_channel === 'chatgpt_web') === isWebKey).map(key => ({ label: `${key.name ? `${key.name} · ` : ''}${key.key} · ${key.limits?.upstream_channel || t('apiKeys.limits.upstreamChannelAutoTab')}`, value: String(key.id) })),
             ]} compact />

@@ -86,7 +86,7 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
 
 async function chooseWeb(page) {
   await page.getByText('生图来源', { exact: true }).first().waitFor()
-  await page.getByRole('combobox').first().click()
+  await page.getByRole('button', { name: '生图来源', exact: true }).click()
   await page.getByRole('option', { name: /Web 生图（实验性）/ }).click()
 }
 
@@ -103,13 +103,13 @@ test('Web without a dedicated key cannot fall back to automatic native routing',
 test('visible Web source uses only its dedicated key and safe parameters on desktop and mobile', async t => {
   const page = await fixture(t)
   await chooseWeb(page)
-  await page.getByRole('combobox').nth(1).click()
+  await page.getByRole('button', { name: 'API Key', exact: true }).click()
   assert.equal(await page.getByRole('option').filter({ hasText: 'native-fixture' }).count(), 0)
   assert.equal(await page.getByRole('option').filter({ hasText: 'grok-fixture' }).count(), 0)
   await page.getByRole('option').filter({ hasText: 'web-fixture' }).click()
   await page.screenshot({ path: path.join(artifactDir, 'web-source-desktop.png'), fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
-  assert.equal(await page.getByRole('combobox').first().isVisible(), true)
+  assert.equal(await page.getByRole('button', { name: '生图来源', exact: true }).isVisible(), true)
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'mobile layout must not overflow')
   await page.screenshot({ path: path.join(artifactDir, 'web-source-mobile.png'), fullPage: true })
   await page.locator('#image-studio-prompt').fill('A synthetic red square')
@@ -125,7 +125,8 @@ test('visible Web source uses only its dedicated key and safe parameters on desk
 
 test('portal refuses generation when current key channel metadata cannot be read', async t => {
   const page = await fixture(t, { portal: true })
-  await page.getByText(/无法确认 Key 通道，禁止提交；请重试。/).waitFor()
+  try { await page.getByText(/无法确认 Key 通道，禁止提交；请重试。/).waitFor() }
+  catch (error) { console.error('PORTAL_FIXTURE_BODY', await page.locator('body').innerText()); throw error }
   await page.locator('textarea').first().fill('A synthetic red square')
   const submit = page.locator('.portal-generate')
   assert.equal(await submit.isDisabled(), true)
@@ -135,7 +136,7 @@ test('portal refuses generation when current key channel metadata cannot be read
 test('Web source clearly blocks submission until its service is configured', async t => {
   const page = await fixture(t, { serviceReady: false })
   await chooseWeb(page)
-  await page.getByRole('combobox').nth(1).click()
+  await page.getByRole('button', { name: 'API Key', exact: true }).click()
   await page.getByRole('option').filter({ hasText: 'web-fixture' }).click()
   await page.locator('#image-studio-prompt').fill('A synthetic red square')
   await page.getByText('Web 服务未配置或未启用，请先在服务器完成配置。', { exact: false }).waitFor()
