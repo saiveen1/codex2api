@@ -69,15 +69,20 @@ Codex2API 的个人维护分支，提供 OpenAI / Anthropic 兼容网关。本�
 - [文档索引](docs/README.md) · [API](docs/API.md) · [部署说明](docs/DEPLOYMENT.md)
 - [配置说明](docs/CONFIGURATION.md) · [错误诊断](docs/error-diagnostics.md)
 - [ChatGPT Web 图片通道](docs/chatgpt-web-images.md) · [可选 Compose 配置](docker-compose.chatgpt-web.yml)
+- [继承的 Kiro 接入](docs/KIRO.md)
 
 ## Upstream
 
-基于 **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**，当前合入至 **v3.1.5 / `811ad45`**。原有网关及继承的功能、修复归功于上游和贡献者，不计为本 fork 新增；完整记录见[上游更新日志](CHANGELOG.md)。
+基于 **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**，当前合入至 **`af5f94e`（包含 v3.1.6 及后续 Kiro / 客户端兼容更新）**。原有网关及继承的功能、修复归功于上游和贡献者，不计为本 fork 新增；完整记录见[上游更新日志](CHANGELOG.md)。
+
+- **继承的功能**：独立 Kiro 渠道、凭据导入导出与登录、Messages / Responses / Chat 适配，以及 Key 自助页按授权范围查看账号用量和使用重置卡的权限。Kiro 管理与本 fork 的 OAuth 网关各自独立。
+- **继承的修复与优化**：OpenMausBot 客户端指纹兼容，保护代码与 schema 字面量并保留快速无操作路径；Antigravity `-xhigh` 定价别名；自助页标题、共享账号卡片及权限保存修复。
 
 ## 许可证与必要声明
 
 - 网关沿用上游 **MIT License** 声明，保留既有版权与第三方声明；本页不改变其许可归属。
 - 可选的 `services/chatgpt-web-worker/` 子树使用 **AGPL-3.0-only**，包含对 `yukkcat/chatgpt2api` 网页协议的适配。保留其 [LICENSE](services/chatgpt-web-worker/LICENSE)、[NOTICE](services/chatgpt-web-worker/NOTICE) 和 [PROVENANCE](services/chatgpt-web-worker/PROVENANCE.md)；组合分发前按该子树说明核对发布及对应源码提供要求，不默认认为独立进程构成豁免。
 - ModelTrace 的来源声明与 MIT 条款保留于 [NOTICE](third_party/modeltrace/NOTICE) 和 [LICENSE](third_party/modeltrace/LICENSE)。
+- 继承的 Kiro 协议移植自 `ZyphrZero/kiro.rs`，来源声明与 MIT 条款保留于 [NOTICE](third_party/kiro.rs/NOTICE) 和 [LICENSE](third_party/kiro.rs/LICENSE)。
 
 项目不提供担保；生产使用前请自行验证兼容性、数据处理方式及适用条款。

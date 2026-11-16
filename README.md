@@ -69,15 +69,20 @@ Use this fork's source when building these changes; upstream prebuilt images are
 - [Documentation index](docs/README.md) · [API](docs/API.md) · [Deployment](docs/DEPLOYMENT.md)
 - [Configuration](docs/CONFIGURATION.md) · [Error diagnostics](docs/error-diagnostics.md)
 - [ChatGPT Web images](docs/chatgpt-web-images.md) · [Optional Compose overlay](docker-compose.chatgpt-web.yml)
+- [Inherited Kiro integration](docs/KIRO.md)
 
 ## Upstream
 
-Based on **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**; currently integrated through **v3.1.5 / `811ad45`**. The original gateway and inherited features/fixes belong to upstream and its contributors, not to this fork's additions. See the [inherited changelog](CHANGELOG.md).
+Based on **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**; currently integrated through **`af5f94e` (including v3.1.6 and subsequent Kiro/client compatibility updates)**. The original gateway and inherited features/fixes belong to upstream and its contributors, not to this fork's additions. See the [inherited changelog](CHANGELOG.md).
+
+- **Inherited features:** the dedicated Kiro channel, credential import/export and sign-in, Messages / Responses / Chat adapters, and scoped account usage/reset permissions in the Key portal. Kiro management is separate from this fork's OAuth gateway.
+- **Inherited fixes and optimizations:** OpenMausBot client-fingerprint normalization with protected code/schema literals and a fast no-op path; Antigravity `-xhigh` pricing aliases; portal titles, shared account cards and permission-save fixes.
 
 ## License and notices
 
 - The gateway retains the upstream **MIT License** declaration. Existing copyright and third-party notices are retained; this README does not relicense them.
 - The optional `services/chatgpt-web-worker/` subtree is **AGPL-3.0-only**, with protocol adaptations from `yukkcat/chatgpt2api`. Preserve its [LICENSE](services/chatgpt-web-worker/LICENSE), [NOTICE](services/chatgpt-web-worker/NOTICE) and [PROVENANCE](services/chatgpt-web-worker/PROVENANCE.md). Follow that subtree's release and corresponding-source requirements before combined distribution; a separate process is not assumed to exempt it.
 - ModelTrace attribution and MIT terms remain in [NOTICE](third_party/modeltrace/NOTICE) and [LICENSE](third_party/modeltrace/LICENSE).
+- The inherited Kiro protocol is ported from `ZyphrZero/kiro.rs`; its attribution and MIT terms remain in [NOTICE](third_party/kiro.rs/NOTICE) and [LICENSE](third_party/kiro.rs/LICENSE).
 
 Provided without warranty. Verify compatibility, data handling and the applicable terms before production use.

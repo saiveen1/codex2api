@@ -24,6 +24,7 @@ import { Select } from "../components/ui/select";
 import { useToast } from "../hooks/useToast";
 import { getErrorMessage } from "../utils/error";
 import { refreshIntelligenceBars } from "../hooks/useIntelligenceBars";
+import { createUUID } from "../lib/uuid";
 import {
   intelligenceTargetConflict,
   type IntelligenceTargetConflict,
@@ -33,19 +34,6 @@ import {
 
 const fieldClass =
   "w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
-// 非 HTTPS 的 HTTP 站点不是安全上下文，crypto.randomUUID 可能不存在，
-// 退回用 crypto.getRandomValues 生成 UUID v4。
-function createQuestionId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (b) =>
-    b.toString(16).padStart(2, "0"),
-  ).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 const field = (label: string, child: ReactNode, hint?: string) => (
   <label className="flex flex-col gap-2 text-sm">
     <span className="font-medium">{label}</span>
@@ -249,6 +237,7 @@ export default function IntelligenceCheck() {
                     ["claude", "Claude"],
                     ["grok", "Grok"],
                     ["antigravity", "Antigravity"],
+                    ["kiro", "Kiro"],
                   ] as const).map(([channel, label]) => (
                     <label key={channel} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-sm">
                       <span>{label}</span>
@@ -268,6 +257,7 @@ export default function IntelligenceCheck() {
               </div>
               {field("Grok 检测模型", <Input value={settings.grok_model ?? "grok-4.5"} onChange={(e) => change("grok_model", e.target.value)} />)}
               {field("Antigravity 检测模型", <Input value={settings.antigravity_model ?? "gemini-3.8-flash-medium"} onChange={(e) => change("antigravity_model", e.target.value)} />)}
+              {field("Kiro 检测模型", <Input value={settings.kiro_model ?? "claude-sonnet-4.6"} onChange={(e) => change("kiro_model", e.target.value)} />)}
               {field(
                 "GPT / Codex 模型",
                 <Input
@@ -384,10 +374,10 @@ export default function IntelligenceCheck() {
                       }
                       placeholder="选择分组"
                       options={groups
-                        .filter(g => !g.channel || ["codex", "claude", "grok", "antigravity"].includes(g.channel))
+                        .filter(g => !g.channel || ["codex", "claude", "grok", "antigravity", "kiro"].includes(g.channel))
                         .map(g => ({
                           value: String(g.id),
-                          label: `${g.name}（${({ codex: "Codex", claude: "Claude", grok: "Grok", antigravity: "Antigravity" } as Record<string, string>)[g.channel ?? "codex"] ?? g.channel}）`,
+                          label: `${g.name}（${({ codex: "Codex", claude: "Claude", grok: "Grok", antigravity: "Antigravity", kiro: "Kiro" } as Record<string, string>)[g.channel ?? "codex"] ?? g.channel}）`,
                         }))}
                     />,
                   )}
@@ -475,7 +465,7 @@ export default function IntelligenceCheck() {
             <Button
               variant="outline"
               onClick={() => {
-                const id = createQuestionId();
+                const id = createUUID();
                 change("questions", [
                   ...settings.questions,
                   {

@@ -10,6 +10,7 @@ const CHANNEL_NAMES: Record<UpstreamChannel | 'chatgpt_web', string> = {
   antigravity: 'Antigravity',
   claude: 'Claude',
   chatgpt_web: 'ChatGPTWeb',
+  kiro: 'Kiro',
 }
 
 export default function APIKeyChannelBadge({ channel }: { channel?: UpstreamChannel | 'chatgpt_web' }) {
