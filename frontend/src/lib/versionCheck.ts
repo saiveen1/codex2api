@@ -43,12 +43,15 @@ export function resolveBuildVersions(frontendVersion: string, backendVersion?: s
   }
 }
 
+export function isComparableVersion(version: string): boolean {
+  return parseVersion(version) !== null
+}
+
 function compareVersions(a: string, b: string): number {
   const parsedA = parseVersion(a)
   const parsedB = parseVersion(b)
-  if (!parsedA && !parsedB) return normalizeVersion(a).localeCompare(normalizeVersion(b))
-  if (!parsedA) return -1
-  if (!parsedB) return 1
+  // A custom build has no known ordering relative to an upstream release.
+  if (!parsedA || !parsedB) return 0
 
   for (let i = 0; i < 3; i += 1) {
     if (parsedA[i] < parsedB[i]) return -1

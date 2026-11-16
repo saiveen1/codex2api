@@ -64,7 +64,7 @@ before(async () => {
   })
   const bundle = Array.isArray(result) ? result[0] : result
   harnessScript = bundle.output.find((item) => item.type === 'chunk').code
-  browser = await chromium.launch({ headless: true })
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] })
 })
 
 after(async () => { await browser?.close() })
@@ -177,16 +177,31 @@ test('failed, legacy and non-release health responses fall back without retainin
   }
 })
 
-test('dev skips update probes and local frontend builds preserve their label and server update support', async t => {
+test('dev skips update probes and local frontend builds do not claim an upstream update', async t => {
   const devPage = await fixture(t, 'dev', { latest_version: '3.0.5' })
-  await waitState(devPage, { currentVersion: 'dev', latestVersion: null, hasUpdate: false, versionMismatch: false })
+  await waitState(devPage, { currentVersion: 'dev', latestVersion: null, hasUpdate: false, versionMismatch: false, isCustomBuild: true })
   assert.deepEqual(await waitRequests(devPage, 0), [])
 
   const localPage = await fixture(t, 'local-20261002-1234-abc')
   await waitRequests(localPage, 2)
   await settle(localPage, 0, health('3.0.5'))
   await settle(localPage, 1, update('3.0.5', { supported: false, current_version: 'dev', unsupported_reason: 'Development build' }))
-  const state = await waitState(localPage, { currentVersion: 'local-20261002-1234-abc', latestVersion: 'v3.0.5', hasUpdate: true, versionMismatch: false })
+  const state = await waitState(localPage, { currentVersion: 'local-20261002-1234-abc', latestVersion: 'v3.0.5', hasUpdate: false, versionMismatch: false, isCustomBuild: true })
+  assert.equal(state.updateInfo.supported, false)
+})
+
+test('custom deployment builds ignore cached release ordering while keeping release metadata', async t => {
+  const page = await fixture(t, 'custom.abcdef1', { latest_version: '3.1.6' })
+  await waitRequests(page, 1)
+  await settle(page, 0, health('custom.abcdef1'))
+  await waitState(page, { currentVersion: 'custom.abcdef1', latestVersion: 'v3.1.6', hasUpdate: false, isCustomBuild: true })
+  await page.evaluate(() => { void window.__refresh(true) })
+  await waitRequests(page, 3)
+  await settle(page, 1, health('custom.abcdef1'))
+  await settle(page, 2, update('3.1.6', { current_version: 'custom.abcdef1', supported: false, has_update: true }))
+  await page.waitForFunction(() => window.__versionState.updateInfo !== null)
+  const state = await waitState(page, { latestVersion: 'v3.1.6', hasUpdate: false, isCustomBuild: true })
+  assert.equal(state.updateInfo.release_url, 'https://example.test/releases/v3.1.6')
   assert.equal(state.updateInfo.supported, false)
 })
 
