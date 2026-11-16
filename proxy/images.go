@@ -2259,7 +2259,7 @@ func shouldRetryImageStreamError(err error, generalRetries *int, maxGeneralRetri
 	if isImageStreamTerminalLocalError(err) {
 		return false
 	}
-	if isExplicitUpstreamCyberPolicyError(err) {
+	if isExplicitUpstreamCyberPolicyError(err) || isInvalidInputImageRequestError(err) {
 		return false
 	}
 	if payload := imageResponseFailedPayload(err); len(payload) > 0 &&
@@ -2672,6 +2672,9 @@ func imageNoOutputDetails(err error) *imageNoOutputError {
 }
 
 func imageErrorStatusCode(err error) int {
+	if isInvalidInputImageRequestError(err) {
+		return http.StatusBadRequest
+	}
 	if outcome := imageNoOutputDetails(err); outcome != nil && outcome.statusCode > 0 {
 		return outcome.statusCode
 	}
