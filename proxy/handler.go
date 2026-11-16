@@ -46,24 +46,25 @@ func upstreamErrorConsoleBody(body []byte) string {
 
 // Handler API 路由处理器
 type Handler struct {
-	store           *auth.Store
-	configKeys      map[string]bool // 配置文件中的静态 key
-	db              *database.DB
-	cfg             *config.Config       // 全局配置
-	deviceCfg       *DeviceProfileConfig // 设备指纹配置
-	cache           cache.TokenCache     // Redis/Memory 运行态缓存
-	apiKeyLookups   singleflight.Group
-	authCache       *apiKeyAuthCache
-	apiKeyGateMu    sync.Mutex
-	promptRiskMu    sync.Mutex
-	apiKeyGate      *apiKeyConcurrencyLimiter
-	admissionOnce   sync.Once
-	admission       *apiKeyAdmissionLimiter
-	scopeUsageMu    sync.Mutex
-	scopeUsage      *apiKeyScopeUsageTracker
-	scopeDeltaInit  sync.Once
-	scopeDeltaSlots chan struct{}
-	liveStore       *liveCallStore
+	chatGPTWebRuntime func() (chatGPTWebConfig, error)
+	store             *auth.Store
+	configKeys        map[string]bool // 配置文件中的静态 key
+	db                *database.DB
+	cfg               *config.Config       // 全局配置
+	deviceCfg         *DeviceProfileConfig // 设备指纹配置
+	cache             cache.TokenCache     // Redis/Memory 运行态缓存
+	apiKeyLookups     singleflight.Group
+	authCache         *apiKeyAuthCache
+	apiKeyGateMu      sync.Mutex
+	promptRiskMu      sync.Mutex
+	apiKeyGate        *apiKeyConcurrencyLimiter
+	admissionOnce     sync.Once
+	admission         *apiKeyAdmissionLimiter
+	scopeUsageMu      sync.Mutex
+	scopeUsage        *apiKeyScopeUsageTracker
+	scopeDeltaInit    sync.Once
+	scopeDeltaSlots   chan struct{}
+	liveStore         *liveCallStore
 	// Responses WebSocket 同作用域会话的本机抢占注册表；跨实例所有权由 runtime cache 协调。
 	responsesWSSessionPreemptions responsesWSSessionPreemptRegistry
 	// 指纹重放冷却的存在性闸门缓存(见 hasActiveFingerprintReplayLocks)。

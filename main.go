@@ -505,6 +505,10 @@ func main() {
 	deviceCfg := proxy.DeviceProfileConfigFromEnv(os.Getenv)
 	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
 	handler.SetRuntimeCache(tc)
+	if err := adminHandler.StartChatGPTWeb(backgroundCtx, proxySubscriptionDir, handler); err != nil {
+		log.Printf("Web 生图托管初始化失败: %v", err)
+	}
+	defer adminHandler.CloseChatGPTWeb()
 	defer handler.CloseAPIKeyAuthCache()
 	adminHandler.SetAPIKeyAuthCacheHandler(handler)
 

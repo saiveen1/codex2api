@@ -13,7 +13,16 @@ import (
 )
 
 func (h *Handler) GetChatGPTWebStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, proxy.ChatGPTWebDeploymentStatus())
+	status := proxy.ChatGPTWebDeploymentStatus()
+	status["enabled"], status["configured"] = false, false
+	if h.chatGPTWebManager != nil {
+		view := h.chatGPTWebManager.View()
+		_, err := h.chatGPTWebManager.Runtime()
+		status["enabled"] = view.Config.Enabled
+		status["configured"] = err == nil
+		status["control"] = view
+	}
+	c.JSON(http.StatusOK, status)
 }
 
 func (h *Handler) ListChatGPTWebAccounts(c *gin.Context) {

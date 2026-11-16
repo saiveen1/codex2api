@@ -23,7 +23,7 @@ func TestChatGPTWebAdminRoutesRequireAuthAndRejectUnknownFields(t *testing.T) {
 	for i, route := range []struct{ method, path string }{
 		{"GET", "/api/admin/chatgpt-web"}, {"GET", "/api/admin/chatgpt-web/accounts"},
 		{"PUT", "/api/admin/chatgpt-web/accounts/1"}, {"POST", "/api/admin/chatgpt-web/accounts/1/check"},
-		{"GET", "/api/admin/chatgpt-web/executions"},
+		{"GET", "/api/admin/chatgpt-web/executions"}, {"PUT", "/api/admin/chatgpt-web/config"},
 	} {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(route.method, route.path, nil)

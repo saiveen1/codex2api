@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import ChatGPTWebAccountBadge from './ChatGPTWebAccountBadge'
+import ChatGPTWebServiceControl from './ChatGPTWebServiceControl'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api, type ChatGPTWebDeployment, type ChatGPTWebExecution, type ChatGPTWebState } from '../api'
@@ -34,6 +35,7 @@ export default function ChatGPTWebSettings() {
   return <Card className="gap-0 py-0"><CardContent className="space-y-4 p-5">
     <h3 className="font-semibold">{t('chatgptWeb.title')}</h3>
     <p className="text-xs text-muted-foreground">{t('chatgptWeb.config')}</p>
+    {deployment && <ChatGPTWebServiceControl deployment={deployment} onChange={setDeployment} />}
     <p className="text-sm leading-relaxed">{t('chatgptWeb.guide')}</p>
     <div className="flex flex-wrap gap-3 text-sm"><Link className="text-primary underline" to="/api-keys">{t('chatgptWeb.createKey')}</Link><Link className="text-primary underline" to="/images/studio">{t('chatgptWeb.studio')}</Link></div>
     <p className="text-sm">{t('chatgptWeb.deployment')}: {deployment ? `${t(deployment.enabled ? 'chatgptWeb.enabled' : 'chatgptWeb.disabled')} · ${t(deployment.configured ? 'chatgptWeb.configured' : 'chatgptWeb.notConfigured')} · ${deployment.protocol_version || '—'} · ${(deployment.supported_models || []).join(', ') || '—'}` : '—'}</p>

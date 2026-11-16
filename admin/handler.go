@@ -117,6 +117,7 @@ type Handler struct {
 	adminSecretEnv             string
 	adminAuthThrottle          *adminAuthThrottle
 	imageProxy                 *proxy.Handler
+	chatGPTWebManager          chatGPTWebManager
 	antigravitySyncAccount     func(context.Context, int64) antigravityRefreshItem
 	antigravityCapabilityProbe antigravityCapabilityExecutor
 	// Claude / Antigravity 渠道连通性测试配置的进程内缓存（首次读库，PUT 刷新）。
@@ -1164,6 +1165,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	})
 	api.Any("/oauth-gateway/*path", h.handleOAuthGateway)
 	api.GET("/chatgpt-web", h.GetChatGPTWebStatus)
+	api.PUT("/chatgpt-web/config", h.ConfigureChatGPTWeb)
 	api.GET("/chatgpt-web/accounts", h.ListChatGPTWebAccounts)
 	api.PUT("/chatgpt-web/accounts/:id", h.SetChatGPTWebAccount)
 	api.POST("/chatgpt-web/accounts/:id/check", h.CheckChatGPTWebAccount)

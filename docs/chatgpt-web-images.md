@@ -20,12 +20,48 @@ by its license. These files do not assert that process separation settles every
 combined-distribution question. Review release obligations before public
 publication; do not relabel upstream-derived code as MIT.
 
-The default deployment and all existing Keys remain unchanged. Building/running
+The default channel selection and all existing Keys remain unchanged; the gateway
+image now bundles the optional worker but does not enable it automatically. Building/running
 the modified gateway applies additive local schema migrations; review and obtain
 approval before running it against an existing production database. Do not start
 a test gateway using production DATABASE_URL or copied production secrets.
 
 ## Configuration
+
+### Built-in service control (recommended)
+
+The project Dockerfile bundles the existing locked Python worker. In Settings →
+ChatGPT Web → Service control, select **Built-in managed worker**, adjust the
+10–600 second timeout and click **Save and enable**. No worker URL, shared secret,
+server environment edit or gateway restart is needed. The default remains off.
+The manager creates a stable private secret and a loopback-only listener, verifies
+readiness and reports starting/running/draining/error separately from desired
+settings. Refresh the page status after a phase change; saving is not proof of
+successful image generation.
+
+Disable immediately gates new gateway work and gracefully drains the owned
+worker. It does not delete image artifacts, submission fences or account state.
+Switch modes only after disabling and waiting for the owned process to stop.
+Only Linux execution is supported; bare binaries need the same bundled worker
+layout or can use external mode. Container/service shutdown deadlines still
+apply during a full deployment restart, so drain before restarting an instance
+with active image requests.
+
+Configuration is private local state under `chatgpt-web` in the gateway's existing
+data root (`PROXY_SUBSCRIPTION_DATA_DIR`, default `/data`), alongside—not inside—the
+proxy subscription state. Preserve this volume, especially `worker-state`, across
+upgrades. No database schema changes are required. Never expose this directory
+through static routes. A single gateway instance owns its manager and directory.
+
+### External worker compatibility
+
+Select **External worker** to save an existing private origin and secret in the
+same admin UI. A blank secret preserves its saved value and responses never echo
+it. This mode controls gateway admission only, not the external process. Saved
+configuration takes precedence over environment variables. The variables below
+are imported only when no saved configuration exists, preserving older setups;
+subsequent changes belong in the admin UI.
+
 
 | Gateway setting | Default | Meaning |
 |---|---|---|
@@ -60,7 +96,7 @@ or a claim that Docker images have been built or run.
 
 ## 中文快速使用
 
-Web 生图是默认关闭的实验性独立通道，不等同于 Codex 原生生图。先配置私有服务，在设置中启用并检查现有 OAuth 账号，再创建通道为 `chatgpt_web` 的专用 API Key，最后在生图工作台选择 Web 来源和该 Key。检查环境只确认观察到的环境与额度信息，不能代替真实生图验收；Web 失败不会自动回退原生通道。
+Web 生图是默认关闭的实验性独立通道，不等同于 Codex 原生生图。在设置 → ChatGPT Web → 服务控制中选择“内置托管”，点击“保存并启用”并刷新确认运行状态；无需登录服务器填写地址或密钥。随后启用并检查现有 OAuth 账号，再创建通道为 `chatgpt_web` 的专用 API Key，最后在生图工作台选择 Web 来源和该 Key。检查环境只确认观察到的环境与额度信息，不能代替真实生图验收；Web 失败不会自动回退原生通道。
 
 目前仅支持 `gpt-image-2`、自动质量和比例尺寸（不保证像素尺寸），最多两张参考图；不支持蒙版和指定背景等参数。门户通道无法确认时请重试，不要当作原生通道提交。
 

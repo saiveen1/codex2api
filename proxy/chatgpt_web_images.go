@@ -59,7 +59,7 @@ func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIK
 	if h.db == nil || h.store == nil || row == nil {
 		return records
 	}
-	if _, err := loadChatGPTWebConfig(); err != nil {
+	if _, err := h.loadChatGPTWebConfig(); err != nil {
 		return records
 	}
 	if checkAPIKeyModel("gpt-image-2", row.Limits) != "" || row.Limits.ResolveImageGenerationPolicy() != database.ImageGenerationPolicyAllow {
@@ -158,7 +158,7 @@ func chatGPTWebProgress(c *gin.Context, stream bool, id, stage string) error {
 }
 
 func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, prompt string, sourceImages []string, mask, responseFormat string, stream bool) {
-	cfg, err := loadChatGPTWebConfig()
+	cfg, err := h.loadChatGPTWebConfig()
 	if err != nil {
 		c.JSON(503, gin.H{"error": gin.H{"code": "provider_disabled", "message": errChatGPTWebUnavailable.Error()}})
 		return

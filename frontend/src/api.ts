@@ -600,10 +600,13 @@ export interface ModelTraceBankUpdateResult extends ModelTraceBankStatus {
 
 export interface ChatGPTWebState { account_id: number; enabled: boolean; status: string; capabilities: string[]; image_quota_remaining: number | null; quota_reset_at?: string | null; observed_at?: string | null; error_code?: string }
 export interface ChatGPTWebExecution { id: string; account_id: number; operation: string; stage: string; error_code?: string; result_unknown: boolean; updated_at: string }
-export interface ChatGPTWebDeployment { enabled: boolean; configured: boolean; protocol_version: string; supported_models: string[] }
+export interface ChatGPTWebConfig { enabled: boolean; mode: 'managed' | 'external'; worker_url: string; worker_secret?: string; timeout_seconds: number }
+export interface ChatGPTWebControl { config: ChatGPTWebConfig; secret_set: boolean; available: boolean; running: boolean; stage: string; last_error: string }
+export interface ChatGPTWebDeployment { enabled: boolean; configured: boolean; protocol_version: string; supported_models: string[]; control?: ChatGPTWebControl }
 
 export const api = {
   getChatGPTWebStatus: () => request<ChatGPTWebDeployment>('/chatgpt-web'),
+  configureChatGPTWeb: (config: ChatGPTWebConfig) => request<ChatGPTWebDeployment>('/chatgpt-web/config', { method: 'PUT', body: JSON.stringify(config) }),
   getChatGPTWebAccounts: () => request<{accounts: ChatGPTWebState[]}>('/chatgpt-web/accounts'),
   setChatGPTWebAccount: (id: number, enabled: boolean) => request<ChatGPTWebState>(`/chatgpt-web/accounts/${id}`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
   checkChatGPTWebAccount: (id: number) => request<ChatGPTWebState>(`/chatgpt-web/accounts/${id}/check`, { method: 'POST' }),

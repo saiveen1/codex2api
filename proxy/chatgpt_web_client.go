@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/codex2api/database"
+	"github.com/codex2api/managedweb"
 )
 
 const chatGPTWebProtocolVersion = "1"
@@ -31,6 +32,25 @@ type chatGPTWebConfig struct {
 	endpoint string
 	secret   string
 	timeout  time.Duration
+}
+
+// SetChatGPTWebManager is wired once before serving requests. A failed manager
+// initialization fails closed instead of reverting to stale environment settings.
+func (h *Handler) SetChatGPTWebManager(manager *managedweb.Manager) {
+	h.chatGPTWebRuntime = func() (chatGPTWebConfig, error) {
+		if manager == nil {
+			return chatGPTWebConfig{}, errChatGPTWebUnavailable
+		}
+		cfg, err := manager.Runtime()
+		return chatGPTWebConfig{enabled: cfg.Enabled, endpoint: cfg.WorkerURL, secret: cfg.WorkerSecret, timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}, err
+	}
+}
+
+func (h *Handler) loadChatGPTWebConfig() (chatGPTWebConfig, error) {
+	if h.chatGPTWebRuntime != nil {
+		return h.chatGPTWebRuntime()
+	}
+	return loadChatGPTWebConfig()
 }
 
 func loadChatGPTWebConfig() (chatGPTWebConfig, error) {
@@ -219,7 +239,7 @@ func chatGPTWebPost(ctx context.Context, client *http.Client, cfg chatGPTWebConf
 // CheckChatGPTWebAccount observes the web channel only. Credential refresh is
 // owned by the existing account lifecycle, never by the protocol service.
 func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (*database.ChatGPTWebAccountState, error) {
-	cfg, err := loadChatGPTWebConfig()
+	cfg, err := h.loadChatGPTWebConfig()
 	if err != nil {
 		return nil, err
 	}

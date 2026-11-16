@@ -39,12 +39,26 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/codex2api/internal/version.Version=${BUILD_VERSION}" -o /codex2api .
 
-# ============================================================
-# Stage 3: 最终运行镜像
-# ============================================================
-FROM alpine:3.19
+# Bundle the existing locked worker environment; enabling it remains opt-in.
+FROM ghcr.io/astral-sh/uv:0.11.25 AS uv
+FROM python:3.13.7-slim-bookworm AS web-worker-builder
+COPY --from=uv /uv /usr/local/bin/uv
+WORKDIR /opt/chatgpt-web-worker
+COPY services/chatgpt-web-worker/pyproject.toml services/chatgpt-web-worker/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv sync --locked --no-dev --no-managed-python
 
-RUN apk --no-cache add ca-certificates tzdata
+# ============================================================
+# Stage 3: 最终运行镜像（内置可选 Web Worker）
+# ============================================================
+FROM python:3.13.7-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=web-worker-builder /opt/chatgpt-web-worker/.venv /opt/chatgpt-web-worker/.venv
+COPY services/chatgpt-web-worker/*.py services/chatgpt-web-worker/LICENSE services/chatgpt-web-worker/NOTICE services/chatgpt-web-worker/PROVENANCE.md services/chatgpt-web-worker/README.md /opt/chatgpt-web-worker/
+COPY services/chatgpt-web-worker/pyproject.toml services/chatgpt-web-worker/uv.lock /opt/chatgpt-web-worker/
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 COPY --from=go-builder /codex2api /usr/local/bin/codex2api
 
