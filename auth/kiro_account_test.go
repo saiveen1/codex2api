@@ -97,7 +97,10 @@ func TestKiroRefreshUpdatesTokensAndClearsUnauthorized(t *testing.T) {
 	if err := store.RefreshKiroAccount(context.Background(), account); err != nil {
 		t.Fatal(err)
 	}
-	auth := account.KiroRequestAuth()
+	auth, authErr := account.KiroRequestAuth()
+	if authErr != nil {
+		t.Fatal(authErr)
+	}
 	if auth.BearerToken != "new-at" || auth.Credential.ProfileARN != KiroSocialProfileARN || account.HasActiveCooldown() || account.RefreshToken != "rt" {
 		t.Fatalf("refresh not applied: %+v cooldown=%t", auth, account.HasActiveCooldown())
 	}
@@ -114,7 +117,11 @@ func TestKiroRefreshUpdatesTokensAndClearsUnauthorized(t *testing.T) {
 
 func TestKiroAPIKeyAccountUsesKeyAsBearer(t *testing.T) {
 	account := &Account{UpstreamType: UpstreamKiro, APIKey: "ksk_test", Kiro: KiroCredential{AuthKind: KiroAuthKindAPIKey}}
-	if !account.IsKiro() || account.KiroRefreshable() || account.KiroRequestAuth().BearerToken != "ksk_test" {
+	requestAuth, err := account.KiroRequestAuth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !account.IsKiro() || account.KiroRefreshable() || requestAuth.BearerToken != "ksk_test" {
 		t.Fatal("API Key Kiro account must use the key as bearer and never refresh")
 	}
 }

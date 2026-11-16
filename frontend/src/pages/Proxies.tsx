@@ -38,6 +38,8 @@ import {
 } from "@/components/ui/table";
 import { api, type ProxyRow } from "../api";
 import type { AccountRow, CodexEgressSummary, ProxyRiskScoreSnapshot, ProxyRiskScoringJob, ProxyRiskScoringProfile } from "../types";
+import ProxySubscriptions from "../components/ProxySubscriptions";
+import ProxyAccessModal from "../components/ProxyAccessModal";
 import ChannelLogo from "../components/ChannelLogo";
 import Modal from "../components/Modal";
 import PageHeader from "../components/PageHeader";
@@ -463,6 +465,7 @@ export default function Proxies() {
     pageSizeOptions,
   );
   const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+  const [accessProxy, setAccessProxy] = useState<ProxyRow | null>(null);
   const [editingProxy, setEditingProxy] = useState<ProxyRow | null>(null);
   const [editUrl, setEditUrl] = useState("");
   const [editLabel, setEditLabel] = useState("");
@@ -1334,6 +1337,8 @@ export default function Proxies() {
         }
       />
 
+      <ProxySubscriptions onChanged={reload} />
+      <ProxyAccessModal proxy={accessProxy} onClose={() => setAccessProxy(null)} onSaved={reload} />
       {/* 批量测试进度条 */}
       {testAllLoading && testAllTotal > 0 ? (
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-2">
@@ -1847,6 +1852,9 @@ export default function Proxies() {
                           </TableCell>
                           <TableCell className="w-[130px] min-w-[130px]">
                             <ProxyStatusBadge proxy={p} />
+                            <button type="button" onClick={() => setAccessProxy(p)} className="mt-1 block rounded-full border px-2 py-0.5 text-xs hover:bg-muted" title={t("proxySubscriptions.accessTitle")}>
+                              {t(p.exclusive ? "proxySubscriptions.exclusive" : "proxySubscriptions.shared")}
+                            </button>
                           </TableCell>
                           {/* Bound accounts */}
                           <TableCell className="w-[120px] min-w-[120px]">

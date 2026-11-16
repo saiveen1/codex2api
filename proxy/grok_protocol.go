@@ -1790,11 +1790,9 @@ func ExecuteGrokNativeProtocolProbeAtOriginWithHeaders(ctx context.Context, acco
 		body = MinimalGrokProbeBody(protocol, model)
 	}
 	endpoint := auth.OpenAIResponsesEndpoint(baseURL, grokProtocolSuffix(protocol))
-	account.Mu().RLock()
-	proxyURL := account.ProxyURL
-	account.Mu().RUnlock()
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
+	proxyURL, proxyErr := account.ResolveProxyForRequest(proxyOverride)
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -2055,11 +2053,9 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 	if route.Endpoint == "" || bearer == "" {
 		return nil, ErrNoAvailableAccount()
 	}
-	account.Mu().RLock()
-	proxyURL := account.ProxyURL
-	account.Mu().RUnlock()
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
+	proxyURL, proxyErr := account.ResolveProxyForRequest(proxyOverride)
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 	conversationBody := inboundBody
 	if len(conversationBody) == 0 {

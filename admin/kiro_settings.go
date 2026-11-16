@@ -27,7 +27,10 @@ func (h *Handler) ensureKiroBearer(ctx context.Context, account *auth.Account) e
 	if h == nil || h.store == nil || !account.IsKiro() || !account.KiroRefreshable() {
 		return nil
 	}
-	current := account.KiroRequestAuth()
+	current, err := account.KiroRequestAuth()
+	if err != nil {
+		return err
+	}
 	if current.BearerToken != "" && (current.ExpiresAt.IsZero() || time.Until(current.ExpiresAt) > 5*time.Minute) {
 		return nil
 	}

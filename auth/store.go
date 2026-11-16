@@ -182,6 +182,7 @@ type Account struct {
 	Email                string
 	PlanType             string
 	ProxyURL             string
+	proxyStore           *Store // Supplies live access policy to account-only outbound executors.
 	CustomHeaders        map[string]string
 	UpstreamType         string
 	AntigravityProjectID string
@@ -4044,14 +4045,15 @@ type Store struct {
 	wg                          sync.WaitGroup
 
 	// 代理池
-	proxyPoolReloadMu    sync.Mutex
-	proxyPoolLoader      func(context.Context) ([]*database.ProxyRow, error)
-	proxyInventoryLoader func(context.Context) ([]*database.ProxyRow, error)
-	proxyPool            []string // 已启用且测试未失败的代理 URL 列表
-	proxyPoolSet         map[string]struct{}
-	managedProxySet      map[string]struct{} // proxies 表中的全部 URL（含禁用/测挂）
-	proxyPoolEnabled     bool                // 代理池是否开启
-	proxyRoundRobin      atomic.Uint64       // 轮询计数器
+	proxyPoolReloadMu      sync.Mutex
+	proxyPoolLoader        func(context.Context) ([]*database.ProxyRow, error)
+	proxyInventoryLoader   func(context.Context) ([]*database.ProxyRow, error)
+	proxyPool              []string // 已启用且测试未失败的代理 URL 列表
+	proxyPoolSet           map[string]struct{}
+	managedProxySet        map[string]struct{} // proxies 表中的全部 URL（含禁用/测挂）
+	exclusiveProxyAccounts map[string][]int64  // Exclusive URLs are never implicit exits; retained on deletion for stale pins.
+	proxyPoolEnabled       bool                // 代理池是否开启
+	proxyRoundRobin        atomic.Uint64       // 轮询计数器
 
 	// Fast scheduler POC（默认关闭，通过环境变量启用）
 	fastScheduler            atomic.Pointer[FastScheduler]
@@ -4827,7 +4829,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.sessionSlotBufferEnabled.Store(settings.SessionSlotBufferEnabled)
 	s.SetSessionSlotBuffer(time.Duration(database.NormalizeSessionSlotBufferSeconds(settings.SessionSlotBufferSeconds)) * time.Second)
 	if db != nil {
-		s.proxyPoolLoader = db.ListEnabledProxies
+		s.proxyPoolLoader = db.ListEnabledProxyInventory
 		s.proxyInventoryLoader = db.ListProxies
 	}
 	s.testModel.Store(settings.TestModel)
@@ -5474,15 +5476,21 @@ func (s *Store) SetProxyURL(url string) {
 // NextProxy 轮询获取下一个代理 URL
 func (s *Store) NextProxy() string {
 	s.mu.RLock()
-	enabled := s.proxyPoolEnabled
-	pool := s.proxyPool
-	s.mu.RUnlock()
-
-	if !enabled || len(pool) == 0 {
-		return s.GetProxyURL() // fallback 全局单代理
+	defer s.mu.RUnlock()
+	if !s.proxyPoolEnabled || len(s.proxyPool) == 0 {
+		if s.proxyIsExclusiveLocked(s.globalProxy) {
+			return ""
+		}
+		return s.globalProxy
 	}
-	idx := s.proxyRoundRobin.Add(1)
-	return pool[idx%uint64(len(pool))]
+	start := s.proxyRoundRobin.Add(1)
+	for i := 0; i < len(s.proxyPool); i++ {
+		proxy := s.proxyPool[(start+uint64(i))%uint64(len(s.proxyPool))]
+		if !s.proxyIsExclusiveLocked(proxy) {
+			return proxy
+		}
+	}
+	return ""
 }
 
 // ResolveProxyForAccount returns the effective proxy for account-bound internal calls.
@@ -5544,6 +5552,9 @@ func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (stri
 		return !enabled
 	}
 	if accountProxy != "" {
+		if !s.proxyAllowedForAccountLocked(accountID, accountProxy) {
+			return "", false // Access denial must not become direct egress, even with Resin.
+		}
 		if managedProxyUnavailable(accountProxy) {
 			return "", resinCarriesEgress
 		}
@@ -5558,7 +5569,7 @@ func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (stri
 		start := stickyProxyIndex(accountID, len(urls))
 		for i := 0; i < len(urls); i++ {
 			proxy := strings.TrimSpace(urls[(start+i)%len(urls)])
-			if proxy == "" || managedProxyUnavailable(proxy) {
+			if proxy == "" || s.proxyIsExclusiveLocked(proxy) || managedProxyUnavailable(proxy) {
 				continue
 			}
 			return proxy, true
@@ -5568,13 +5579,16 @@ func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (stri
 	if s.proxyPoolEnabled && len(s.proxyPool) > 0 {
 		start := stickyProxyIndex(accountID, len(s.proxyPool))
 		for i := 0; i < len(s.proxyPool); i++ {
-			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" {
+			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" && !s.proxyIsExclusiveLocked(proxy) {
 				return proxy, true
 			}
 		}
 	}
 
 	proxyURL := strings.TrimSpace(s.globalProxy)
+	if s.proxyIsExclusiveLocked(proxyURL) {
+		return "", false
+	}
 	return proxyURL, proxyURL != "" || !s.proxyPoolEnabled || resinCarriesEgress
 }
 
@@ -5597,7 +5611,7 @@ func (s *Store) resolveGroupProxyForAccount(acc *Account) string {
 		start := stickyProxyIndex(accountID, len(urls))
 		for i := 0; i < len(urls); i++ {
 			proxy := strings.TrimSpace(urls[(start+i)%len(urls)])
-			if proxy == "" || s.managedProxyUnavailable(proxy) {
+			if proxy == "" || !s.ProxyAllowedForAccount(0, proxy) || s.managedProxyUnavailable(proxy) {
 				continue
 			}
 			return proxy
@@ -5613,12 +5627,15 @@ func (s *Store) resolveFallbackProxyForAccount(accountID int64) string {
 	if s.proxyPoolEnabled && len(s.proxyPool) > 0 {
 		start := stickyProxyIndex(accountID, len(s.proxyPool))
 		for i := 0; i < len(s.proxyPool); i++ {
-			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" {
+			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" && !s.proxyIsExclusiveLocked(proxy) {
 				return proxy
 			}
 		}
 	}
 
+	if s.proxyIsExclusiveLocked(s.globalProxy) {
+		return ""
+	}
 	return strings.TrimSpace(s.globalProxy)
 }
 
@@ -5757,9 +5774,35 @@ func (s *Store) ReloadProxyPool() error {
 		auditRows = allProxies
 	}
 	s.mu.Lock()
-	s.proxyPool = enabledURLs
+	if s.exclusiveProxyAccounts == nil {
+		s.exclusiveProxyAccounts = make(map[string][]int64)
+	}
+	managedSet := buildProxyPoolSet(managedURLs)
+	for url := range s.exclusiveProxyAccounts {
+		if _, exists := managedSet[url]; !exists {
+			s.exclusiveProxyAccounts[url] = []int64{} // Deleted/renamed exclusive URLs must not turn into custom pins.
+		}
+	}
+	for _, row := range auditRows {
+		if row == nil {
+			continue
+		}
+		url := proxyRowURL(row)
+		if row.Exclusive {
+			s.exclusiveProxyAccounts[url] = append([]int64{}, row.AllowedAccountIDs...)
+		} else {
+			delete(s.exclusiveProxyAccounts, url)
+		}
+	}
+	publicURLs := make([]string, 0, len(enabledURLs))
+	for _, url := range enabledURLs {
+		if !s.proxyIsExclusiveLocked(url) {
+			publicURLs = append(publicURLs, url)
+		}
+	}
+	s.proxyPool = publicURLs
 	s.proxyPoolSet = buildProxyPoolSet(enabledURLs)
-	s.managedProxySet = buildProxyPoolSet(managedURLs)
+	s.managedProxySet = managedSet
 	s.proxyAuditLabels = make(map[string]ProxyAuditLabel, len(auditRows))
 	for _, row := range auditRows {
 		if row != nil {
@@ -5771,6 +5814,7 @@ func (s *Store) ReloadProxyPool() error {
 		}
 	}
 	s.mu.Unlock()
+	s.invalidateExclusiveProxyAffinity()
 	log.Printf("代理池已重新加载: %d 个活跃代理", len(enabledURLs))
 	return nil
 }
@@ -5827,7 +5871,12 @@ func (s *Store) RemoveProxyURLs(proxyURLs []string) {
 		}
 	}
 	s.proxyPool = filtered
-	s.proxyPoolSet = buildProxyPoolSet(filtered)
+	for proxyURL := range removeSet {
+		delete(s.proxyPoolSet, proxyURL)
+		if s.proxyIsExclusiveLocked(proxyURL) {
+			s.exclusiveProxyAccounts[proxyURL] = []int64{} // Retired exclusive URLs must not become custom exits.
+		}
+	}
 	s.mu.Unlock()
 	s.proxyPoolReloadMu.Unlock()
 
@@ -6086,6 +6135,7 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			continue
 		}
 		account.grokRuntimeSink = s
+		account.proxyStore = s
 		s.accounts = append(s.accounts, account)
 	}
 
@@ -8055,6 +8105,9 @@ func (s *Store) affinityProxyStillValid(accountID int64, proxyURL string) bool {
 		return false
 	}
 	proxyURL = strings.TrimSpace(proxyURL)
+	if !s.ProxyAllowedForAccount(accountID, proxyURL) {
+		return false
+	}
 
 	s.mu.RLock()
 	account := s.lookupByIDLocked(accountID)
@@ -8086,6 +8139,9 @@ func (s *Store) affinityProxyStillValid(accountID int64, proxyURL string) bool {
 		}
 		return proxyURL == accountProxy
 	}
+	if !s.ProxyAllowedForAccount(0, proxyURL) {
+		return false // No pin: exclusive exits cannot survive via an old sticky binding.
+	}
 	// 组代理变更(改列表/移组/删组)时,粘住旧代理的会话在此判失效并重绑。
 	if groupProxy := s.resolveGroupProxyForAccount(account); groupProxy != "" {
 		return proxyURL == groupProxy
@@ -8097,6 +8153,80 @@ func (s *Store) affinityProxyStillValid(accountID int64, proxyURL string) bool {
 		return false
 	}
 	return proxyURL == globalProxy
+}
+
+// ProxyAllowedForAccount checks access only. Pass accountID=0 for implicit/global/group routes.
+// A true result does not check proxy health or authorize a non-pinned exclusive exit.
+func (s *Store) ProxyAllowedForAccount(accountID int64, proxyURL string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.proxyAllowedForAccountLocked(accountID, proxyURL)
+}
+
+func (s *Store) proxyIsExclusiveLocked(proxyURL string) bool {
+	_, exclusive := s.exclusiveProxyAccounts[strings.TrimSpace(proxyURL)]
+	return exclusive
+}
+
+func (s *Store) proxyAllowedForAccountLocked(accountID int64, proxyURL string) bool {
+	ids, exclusive := s.exclusiveProxyAccounts[strings.TrimSpace(proxyURL)]
+	if !exclusive {
+		return true
+	}
+	for _, id := range ids {
+		if accountID > 0 && id == accountID {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateProxyAccess commits and publishes under the selection/reload locks. Even if a
+// subsequent inventory reload fails, the new restriction already governs routing.
+func (s *Store) UpdateProxyAccess(ctx context.Context, id int64, exclusive bool, allowed []int64) (*database.ProxyRow, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("proxy access store is not configured")
+	}
+	s.proxyPoolReloadMu.Lock()
+	s.mu.Lock()
+	row, err := s.db.UpdateProxyAccess(ctx, id, exclusive, allowed)
+	if err == nil {
+		if s.exclusiveProxyAccounts == nil {
+			s.exclusiveProxyAccounts = make(map[string][]int64)
+		}
+		proxyURL := proxyRowURL(row)
+		if row.Exclusive {
+			s.exclusiveProxyAccounts[proxyURL] = append([]int64{}, row.AllowedAccountIDs...)
+			public := make([]string, 0, len(s.proxyPool))
+			for _, candidate := range s.proxyPool {
+				if strings.TrimSpace(candidate) != proxyURL {
+					public = append(public, candidate)
+				}
+			}
+			s.proxyPool = public
+		} else {
+			delete(s.exclusiveProxyAccounts, proxyURL)
+		}
+	}
+	s.mu.Unlock()
+	s.proxyPoolReloadMu.Unlock()
+	if err == nil {
+		s.invalidateExclusiveProxyAffinity()
+	}
+	return row, err
+}
+
+func (s *Store) invalidateExclusiveProxyAffinity() {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	for key, binding := range s.sessionBindings {
+		if !s.ProxyAllowedForAccount(0, binding.proxyURL) {
+			delete(s.sessionBindings, key)
+		}
+	}
 }
 
 func buildProxyPoolSet(urls []string) map[string]struct{} {
@@ -8145,6 +8275,13 @@ func (s *Store) getCachedSessionAffinity(key string) (sessionAffinity, bool) {
 		return sessionAffinity{}, false
 	}
 	if !ok || binding.AccountID == 0 {
+		return sessionAffinity{}, false
+	}
+	if !s.ProxyAllowedForAccount(0, binding.ProxyURL) && !s.affinityProxyStillValid(binding.AccountID, binding.ProxyURL) {
+		// Cached bindings from before a restriction change must not resurrect an exit.
+		if err := s.tokenCache.DeleteSessionAffinity(ctx, key, binding.AccountID); err != nil {
+			log.Printf("删除受限代理缓存粘性失败: account=%d err=%v", binding.AccountID, err)
+		}
 		return sessionAffinity{}, false
 	}
 	now := time.Now()
@@ -9841,6 +9978,7 @@ func (s *Store) AddAccounts(accounts []*Account) {
 		}
 		acc.mu.Lock()
 		acc.grokRuntimeSink = s
+		acc.proxyStore = s
 		acc.recomputeEffectiveIgnoreUsageLimitStatus(ignoreUsageLimit)
 		acc.recomputeEffectiveGroupBaseConcurrency(s)
 		acc.recomputeSchedulerLocked(maxConcurrency)
@@ -10616,6 +10754,8 @@ func (s *Store) ApplyAccountModels(dbID int64, models []string) bool {
 	return true
 }
 
+// ApplyAccountProxyURL mirrors persisted state, including a denied pin so it fails closed.
+// Request handlers must validate ProxyAllowedForAccount BEFORE persisting a new pin.
 func (s *Store) ApplyAccountProxyURL(dbID int64, proxyURL string) bool {
 	acc := s.FindByID(dbID)
 	if acc == nil {
@@ -12460,6 +12600,7 @@ func (s *Store) RefreshGrokAccountByID(ctx context.Context, dbID int64) error {
 	}
 	account.mu.Lock()
 	account.grokRuntimeSink = s
+	account.proxyStore = s
 	account.mu.Unlock()
 	return s.refreshGrokAccount(ctx, account, true)
 }
@@ -12481,6 +12622,7 @@ func (s *Store) BuildGrokAdministrativeAccountByID(ctx context.Context, dbID int
 	}
 	account.mu.Lock()
 	account.grokRuntimeSink = s
+	account.proxyStore = s
 	account.mu.Unlock()
 	return account, nil
 }
@@ -12603,6 +12745,9 @@ func (s *Store) refreshAccountForced(ctx context.Context, acc *Account) error {
 
 // refreshAccountWithOptions 刷新单个账号的 AT（带缓存锁与 token 缓存）
 func (s *Store) refreshAccountWithOptions(ctx context.Context, acc *Account, forceRefresh bool) error {
+	if _, usable := s.ResolveUsableProxyForAccount(acc); !usable {
+		return database.ErrProxyAccessDenied
+	}
 	if acc.IsAntigravityAPI() {
 		acc.mu.RLock()
 		apiKey := strings.TrimSpace(acc.APIKey)
@@ -13371,4 +13516,32 @@ func (s *Store) propagateSharedOAuthCredentials(
 	if sourcePlanType != "" {
 		s.invalidateRoutingSchedulers()
 	}
+}
+
+// ResolveProxyForRequest is the checked bridge for executors with only an Account.
+// Detached/transient accounts have no store policy; their creator must validate their proxy first.
+func (a *Account) ResolveProxyForRequest(override string) (string, error) {
+	if a == nil {
+		return "", database.ErrProxyAccessDenied
+	}
+	a.mu.RLock()
+	s, accountID, pin := a.proxyStore, a.DBID, strings.TrimSpace(a.ProxyURL)
+	a.mu.RUnlock()
+	if s == nil {
+		if strings.TrimSpace(override) != "" {
+			return strings.TrimSpace(override), nil
+		}
+		return pin, nil
+	}
+	resolved, usable := s.ResolveUsableProxyForAccount(a)
+	if !usable {
+		return "", database.ErrProxyAccessDenied
+	}
+	if override = strings.TrimSpace(override); override != "" {
+		if !s.ProxyAllowedForAccount(accountID, override) || (override != pin && !s.ProxyAllowedForAccount(0, override)) {
+			return "", database.ErrProxyAccessDenied
+		}
+		return override, nil
+	}
+	return resolved, nil
 }

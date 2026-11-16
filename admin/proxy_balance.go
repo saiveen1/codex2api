@@ -209,6 +209,15 @@ func (h *Handler) AutoBalanceProxies(c *gin.Context) {
 	// 待分配账号集合只包含可刷新的 OAuth 账号。unbound 模式只挑未绑定的;
 	// all 模式重排全部 OAuth，非 OAuth 账号不参与但其已有绑定仍计入 baseline。
 	targets := selectOAuthProxyBalanceTargets(rows, mode)
+	// Exclusive pins are manual assignments, including in all-mode reshuffles.
+	manual := targets[:0]
+	for _, target := range targets {
+		if h.store != nil && !h.store.ProxyAllowedForAccount(0, target.current) {
+			continue
+		}
+		manual = append(manual, target)
+	}
+	targets = manual
 	if len(targets) == 0 {
 		c.JSON(http.StatusOK, gin.H{"message": "没有需要分配的 OAuth 账号", "assigned": 0, "kept": 0, "skipped": 0})
 		return
@@ -288,7 +297,7 @@ func (h *Handler) candidateProxiesForBalance(ctx context.Context, ids []int64) (
 	}
 	out := make([]*database.ProxyRow, 0, len(proxies))
 	for _, p := range proxies {
-		if !p.Enabled || p.TestStatus == "error" || strings.TrimSpace(p.URL) == "" {
+		if p.Exclusive || !p.Enabled || p.TestStatus == "error" || strings.TrimSpace(p.URL) == "" {
 			continue
 		}
 		out = append(out, p)

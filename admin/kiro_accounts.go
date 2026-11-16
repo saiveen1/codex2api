@@ -656,7 +656,10 @@ func (h *Handler) syncKiroAccount(ctx context.Context, id int64) (*auth.KiroUsag
 			return nil, nil, err
 		}
 	}
-	requestAuth := account.KiroRequestAuth()
+	requestAuth, authErr := account.KiroRequestAuth()
+	if authErr != nil {
+		return nil, nil, authErr
+	}
 	usage, usageErr := auth.KiroFetchUsage(ctx, requestAuth.Credential, requestAuth.BearerToken, requestAuth.ProxyURL)
 	models, modelErr := auth.KiroFetchModels(ctx, requestAuth.Credential, requestAuth.BearerToken, requestAuth.ProxyURL)
 	if usageErr != nil && modelErr != nil {

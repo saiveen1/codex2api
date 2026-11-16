@@ -311,11 +311,9 @@ func ExecuteGrokRequest(ctx context.Context, account *auth.Account, requestBody 
 	if baseURL == "" || bearer == "" {
 		return nil, ErrNoAvailableAccount()
 	}
-	account.Mu().RLock()
-	proxyURL := account.ProxyURL
-	account.Mu().RUnlock()
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
+	proxyURL, proxyErr := account.ResolveProxyForRequest(proxyOverride)
+	if proxyErr != nil {
+		return nil, proxyErr
 	}
 
 	// 投递前一次性归一化：namespace 分组工具展平成子 function 并记录别名（响应流里再

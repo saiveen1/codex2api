@@ -565,6 +565,9 @@ func (db *DB) InsertGrokAccountIfAbsent(ctx context.Context, name string, creden
 		}
 		defer tx.Rollback()
 
+		if accessErr := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), 0, proxyURL); accessErr != nil {
+			return accessErr
+		}
 		if db.isSQLite() {
 			result, insertErr := tx.ExecContext(ctx, `INSERT INTO accounts(name,platform,type,credentials,proxy_url,enabled) VALUES($1,'xai','grok',$2,$3,$4)`, name, encoded, proxyURL, enabled)
 			if insertErr != nil {
@@ -684,6 +687,9 @@ func (db *DB) ReauthGrokAccount(ctx context.Context, accountID int64, credential
 			}
 		}
 		if proxyURL = strings.TrimSpace(proxyURL); proxyURL != "" {
+			if accessErr := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), accountID, proxyURL); accessErr != nil {
+				return accessErr
+			}
 			if _, updateErr := tx.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id=$2`, proxyURL, accountID); updateErr != nil {
 				return updateErr
 			}

@@ -237,7 +237,6 @@ func (s *Store) refreshKiroAccount(ctx context.Context, acc *Account, forceRefre
 	rt := strings.TrimSpace(acc.RefreshToken)
 	lockedAccessToken := acc.AccessToken
 	dbID := acc.DBID
-	proxyURL := strings.TrimSpace(acc.ProxyURL)
 	cooldownActive := acc.Status == StatusCooldown && time.Now().Before(acc.CooldownUtil)
 	acc.mu.RUnlock()
 
@@ -262,6 +261,10 @@ func (s *Store) refreshKiroAccount(ctx context.Context, acc *Account, forceRefre
 		acc.mu.RUnlock()
 	}
 
+	proxyURL, usable := s.ResolveUsableProxyForAccount(acc)
+	if !usable {
+		return fmt.Errorf("kiro token refresh: proxy access denied or unavailable")
+	}
 	td, err := kiroTokenRefreshFunc(ctx, cred, rt, proxyURL)
 	if err != nil {
 		wrapped := fmt.Errorf("kiro token 刷新失败: %w", err)

@@ -263,7 +263,12 @@ func (h *Handler) handleGeminiCountTokens(c *gin.Context, model string, rawBody 
 
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {
 			h.store.Release(account)
 			return
@@ -592,7 +597,14 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, model string, rawB
 
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if claimContinuousRetryTerminal(c, continuousRetryProtocolGemini) && c.Request.Context().Err() == nil {
+				writeGeminiNativeError(c, http.StatusServiceUnavailable, proxyErr.Error())
+			}
+			return
+		}
 		if !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {
 				h.store.Release(account)

@@ -721,7 +721,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			return writeResponsesWSRecoveryErrorForContext(c, conn, turnReplay.err)
 		}
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			return writeResponsesWSErrorForContext(c, conn, api.NewAPIError(api.ErrCodeServiceUnavailable, proxyErr.Error(), api.ErrorTypeServer))
+		}
 		if !retainedHTTPFallback && !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {
 				h.store.Release(account)

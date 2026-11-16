@@ -422,6 +422,40 @@ export interface SubscriptionRefreshResponse {
   subscription_expires_at?: ISODateString
 }
 
+export interface ProxySubscriptionEngine {
+  binary_path: string
+  auto_install: boolean
+  controller_port: number
+  port_start: number
+}
+export interface ProxySubscriptionInput {
+  name: string
+  url: string
+  enabled: boolean
+  include_regex: string
+  exclude_regex: string
+  dedupe_regex: string
+  prefer_regex: string
+  refresh_minutes: number
+}
+export interface ProxySubscription extends ProxySubscriptionInput {
+  id: string
+  url_set: boolean
+  last_updated: string
+  last_error: string
+  total_nodes: number
+  kept_nodes: number
+}
+export interface ProxySubscriptionsView {
+  engine: ProxySubscriptionEngine
+  subscriptions: ProxySubscription[]
+  nodes: Array<{ key: string; subscription_id: string; name: string; url: string; active: boolean }>
+  running: boolean
+  version: string
+  last_error: string
+  operation: { running: boolean; stage: string; error: string; started_at: string; finished_at: string }
+}
+
 export interface AccountRow {
   codex_last_refresh_at?: string
   codex_refresh_error?: string

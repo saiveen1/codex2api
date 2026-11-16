@@ -141,7 +141,10 @@ func executeKiroConversion(ctx context.Context, account *auth.Account, inbound *
 // kiroOpenUpstream 发出请求。返回成功的上游流（调用方负责关闭），或按 Kiro 错误语义
 // 映射了状态码、保留原始错误体的合成响应，或传输错误。
 func kiroOpenUpstream(ctx context.Context, account *auth.Account, model string, conversion *kiroConversion, proxyOverride string) (*http.Response, *http.Response, error) {
-	requestAuth := account.KiroRequestAuth()
+	requestAuth, authErr := account.KiroRequestAuth()
+	if authErr != nil {
+		return nil, nil, authErr
+	}
 	if requestAuth.BearerToken == "" {
 		// 只有 refresh token、尚未换票的账号交给 handler 的 401 刷新路径。
 		return nil, kiroSyntheticResponse(http.StatusUnauthorized, []byte(`{"message":"The bearer token included in the request is invalid."}`)), nil
@@ -149,9 +152,9 @@ func kiroOpenUpstream(ctx context.Context, account *auth.Account, model string, 
 	if err := ConsumeAPIKeyModelRequestQuota(ctx, strings.TrimSpace(model)); err != nil {
 		return nil, nil, err
 	}
-	proxyURL := requestAuth.ProxyURL
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
+	proxyURL, proxyErr := account.ResolveProxyForRequest(proxyOverride)
+	if proxyErr != nil {
+		return nil, nil, proxyErr
 	}
 	proxyURL = requestProxyURL(ctx, proxyURL)
 	request := conversion.Request

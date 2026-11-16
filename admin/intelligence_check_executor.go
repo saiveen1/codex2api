@@ -57,6 +57,12 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	if account == nil {
 		return intelligenceExecution{Interrupted: true, Error: "配置错误：该账号渠道不支持降智检测"}
 	}
+	if h.store == nil || !h.store.ProxyAllowedForAccount(account.DBID, account.GetProxyURL()) {
+		return intelligenceExecution{Interrupted: true, Error: "proxy access denied or unavailable"}
+	}
+	if _, usable := h.store.ResolveUsableProxyForAccount(account); !usable {
+		return intelligenceExecution{Interrupted: true, Error: "proxy access denied or unavailable"}
+	}
 	claude := account.IsClaudeOAuth()
 	if claude || account.IsGrokAPI() || account.IsAntigravityAPI() || account.IsKiro() {
 		effort = ""

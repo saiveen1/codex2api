@@ -1,3 +1,4 @@
+import type { ProxySubscriptionEngine, ProxySubscriptionInput, ProxySubscription, ProxySubscriptionsView } from './types'
 import { intelligenceQuery, type IntelligenceSettings, type IntelligenceAccount, type IntelligenceRun, type IntelligenceBar, type IntelligencePage } from './lib/intelligenceCheck.ts'
 import { qualityTestFilterQuery, type QualityTestJob, type QualityTestJobsFilter, type QualityTestJobsResponse, type QualityTestPrompt } from './lib/qualityTest.ts'
 import type {
@@ -1784,6 +1785,14 @@ export const api = {
     request<{ message: string; total: number; imported: number; duplicate: number; failed: number }>(
       '/accounts/migrate', { method: 'POST', body: JSON.stringify(data) }),
   // Proxies
+  getProxySubscriptions: (signal?: AbortSignal) => request<ProxySubscriptionsView>('/proxy-subscriptions', { signal }),
+  createProxySubscription: (data: ProxySubscriptionInput) => request<ProxySubscription>('/proxy-subscriptions', { method: 'POST', body: JSON.stringify(data) }),
+  updateProxySubscription: (id: string, data: ProxySubscriptionInput) => request<ProxySubscription>(`/proxy-subscriptions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteProxySubscription: (id: string) => request<unknown>(`/proxy-subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  saveProxySubscriptionEngine: (data: ProxySubscriptionEngine) => request<unknown>('/proxy-subscriptions/engine', { method: 'PUT', body: JSON.stringify(data) }),
+  startProxySubscriptionEngine: () => request<unknown>('/proxy-subscriptions/engine/start', { method: 'POST' }),
+  refreshProxySubscriptions: (id?: string) => request<unknown>(id == null ? '/proxy-subscriptions/refresh' : `/proxy-subscriptions/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+  updateProxyAccess: (id: number, data: { exclusive: boolean; allowed_account_ids: number[] }) => request<unknown>(`/proxies/${id}/access`, { method: 'PATCH', body: JSON.stringify(data) }),
   listProxies: () =>
     request<{ proxies: ProxyRow[] }>('/proxies'),
   addProxies: (data: { urls?: string[]; url?: string; label?: string }) =>
@@ -1842,6 +1851,8 @@ export interface ProxyRow {
   risk_score?: ProxyRiskScoreSnapshot | null
   /** 绑定到该代理的账号数(服务端聚合,前端免拉全量账号)。 */
   bound_count: number
+  exclusive: boolean
+  allowed_account_ids: number[]
 }
 
 export interface AutoBalanceProxiesResult {

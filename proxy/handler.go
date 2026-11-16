@@ -248,14 +248,22 @@ func (h *Handler) shouldUseWebsocketForHTTP() bool {
 	}
 }
 
-func (h *Handler) resolveProxyForAttempt(account *auth.Account, stickyProxyURL string) string {
+func (h *Handler) resolveProxyForAttempt(account *auth.Account, stickyProxyURL string) (string, error) {
 	if h != nil && h.store != nil {
-		if proxyURL := strings.TrimSpace(stickyProxyURL); proxyURL != "" && !h.store.ManagedProxyUnavailable(proxyURL) {
-			return proxyURL
+		resolved, usable := h.store.ResolveUsableProxyForAccount(account)
+		if !usable {
+			return "", errors.New("no usable proxy route for account")
 		}
-		return h.store.ResolveProxyForAccount(account)
+		if proxyURL := strings.TrimSpace(stickyProxyURL); proxyURL != "" && !h.store.ManagedProxyUnavailable(proxyURL) {
+			shared := h.store.ProxyAllowedForAccount(0, proxyURL)
+			pinned := account != nil && account.GetProxyURL() == proxyURL && h.store.ProxyAllowedForAccount(account.DBID, proxyURL)
+			if shared || pinned {
+				return proxyURL, nil
+			}
+		}
+		return resolved, nil
 	}
-	return strings.TrimSpace(stickyProxyURL)
+	return strings.TrimSpace(stickyProxyURL), nil
 }
 
 type usageLimitDetails struct {
@@ -4541,7 +4549,15 @@ func (h *Handler) Responses(c *gin.Context) {
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		attemptMaxRateLimitRetries := pin.retryLimit(h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries))
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if isStream && writeCommittedResponsesRetryError(c, proxyErr.Error()) {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		// Pinned requests never read session affinity, so they do not write it.
 		if pin == nil && !retainedHTTPFallback && !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {
@@ -6628,7 +6644,15 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) || c.Request.Context().Err() != nil {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {
 			h.store.Release(account)
 			return
@@ -7501,7 +7525,15 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		attemptMaxRateLimitRetries := pin.retryLimit(h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries))
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if isStream && writeCommittedChatRetryError(c, proxyErr.Error()) {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		// Pinned requests never read session affinity, so they do not write it.
 		if pin == nil && !retainedHTTPFallback && !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {

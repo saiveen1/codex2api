@@ -833,7 +833,15 @@ func (h *Handler) Messages(c *gin.Context) {
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		attemptMaxRateLimitRetries := pin.retryLimit(h.effectiveMaxRateLimitRetries(account, maxRateLimitRetries))
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if isStream && writeCommittedAnthropicRetryError(c, "overloaded_error", proxyErr.Error()) {
+				return
+			}
+			sendAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", proxyErr.Error())
+			return
+		}
 		// Pinned requests never read session affinity, so they do not write it.
 		if pin == nil && !retainedHTTPFallback && !continuousRetryBuffersAttempts(continuousRetryPolicy) {
 			if !bindContinuousRetrySessionAffinityWithGuard(c.Request.Context(), h.store, affinityKey, account, proxyURL, affinityGuard) {

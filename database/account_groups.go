@@ -593,18 +593,28 @@ func (db *DB) UpdateAccountTags(ctx context.Context, id int64, tags []string) er
 }
 
 func (db *DB) UpdateAccountProxyURL(ctx context.Context, id int64, proxyURL string) error {
-	res, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, strings.TrimSpace(proxyURL), id)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return db.withSQLiteWriteLock(ctx, func() error {
+		tx, err := db.conn.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE accounts SET proxy_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, strings.TrimSpace(proxyURL), id)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return sql.ErrNoRows
+		}
+		return tx.Commit()
+	})
 }
 
 func normalizeIDSlice(ids []int64) []int64 {

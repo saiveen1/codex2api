@@ -592,7 +592,15 @@ func (h *Handler) forwardGrokImagesRequest(c *gin.Context, inboundEndpoint, imag
 		}
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if !claimContinuousRetryTerminal(c, continuousRetryProtocolOpenAI) || c.Request.Context().Err() != nil {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		routedModel := imageModel
 		if mapped, ok := resolveAccountModelMapping(account, imageModel); ok && mapped != "" {
 			routedModel = normalizeGrokMediaModel(mapped)
@@ -970,7 +978,15 @@ func (h *Handler) grokVideoCreate(c *gin.Context, operation string) {
 		}
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if !claimContinuousRetryTerminal(c, continuousRetryProtocolOpenAI) || c.Request.Context().Err() != nil {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		routedModel := model
 		if mapped, ok := resolveAccountModelMapping(account, model); ok && mapped != "" {
 			routedModel = normalizeGrokMediaModel(mapped)
@@ -1231,7 +1247,11 @@ func (h *Handler) VideosStatus(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))
 		return
 	}
-	proxyURL := h.resolveProxyForAttempt(account, "")
+	proxyURL, proxyErr := h.resolveProxyForAttempt(account, "")
+	if proxyErr != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+		return
+	}
 	resp, err := doGrokMediaRequest(c.Request.Context(), account, profile, proxyURL, http.MethodGet, "/v1/videos/"+url.PathEscape(requestID), nil, c.Request.Header.Clone(), binding.Model, nil)
 	if err != nil {
 		ErrorToGinResponse(c, err)
@@ -1316,7 +1336,11 @@ func (h *Handler) VideosContent(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(""))
 		return
 	}
-	proxyURL := h.resolveProxyForAttempt(account, "")
+	proxyURL, proxyErr := h.resolveProxyForAttempt(account, "")
+	if proxyErr != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+		return
+	}
 	suffix := "/v1/videos/" + url.PathEscape(requestID)
 
 	signedURL := ""

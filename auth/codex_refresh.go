@@ -72,9 +72,9 @@ func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force boo
 			}
 		}
 	}
-	proxyURL := s.ResolveProxyForAccount(acc)
-	if strings.TrimSpace(proxyURL) == "" && s.GetProxyPoolEnabled() {
-		return fmt.Errorf("账号 %d 代理池已启用但无可用代理，已拒绝直连刷新", dbID)
+	proxyURL, usable := s.ResolveUsableProxyForAccount(acc)
+	if !usable {
+		return fmt.Errorf("账号 %d 代理不可用或无权使用，已拒绝直连刷新", dbID)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

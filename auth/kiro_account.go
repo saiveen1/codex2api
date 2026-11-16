@@ -337,9 +337,10 @@ type KiroRequestAuth struct {
 }
 
 // KiroRequestAuth 取一次请求用的凭据快照；API Key 账号的 bearer 就是 ksk_ 密钥。
-func (a *Account) KiroRequestAuth() KiroRequestAuth {
-	if a == nil {
-		return KiroRequestAuth{}
+func (a *Account) KiroRequestAuth() (KiroRequestAuth, error) {
+	proxyURL, err := a.ResolveProxyForRequest("")
+	if err != nil {
+		return KiroRequestAuth{}, err
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -347,7 +348,7 @@ func (a *Account) KiroRequestAuth() KiroRequestAuth {
 	if a.Kiro.AuthKind == KiroAuthKindAPIKey {
 		bearer = strings.TrimSpace(a.APIKey)
 	}
-	return KiroRequestAuth{Credential: a.Kiro, BearerToken: bearer, ExpiresAt: a.ExpiresAt, ProxyURL: strings.TrimSpace(a.ProxyURL)}
+	return KiroRequestAuth{Credential: a.Kiro, BearerToken: bearer, ExpiresAt: a.ExpiresAt, ProxyURL: proxyURL}, nil
 }
 
 // KiroRefreshable 报告上游 401 能否靠刷新恢复。

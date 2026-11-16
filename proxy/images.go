@@ -1778,7 +1778,15 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		start := time.Now()
-		proxyURL := h.resolveProxyForAttempt(account, stickyProxyURL)
+		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
+		if proxyErr != nil {
+			h.store.Release(account)
+			if stream && writeCommittedResponsesRetryError(c, proxyErr.Error()) {
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			return
+		}
 		apiKey := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 		deviceCfg := h.deviceCfg
 		if deviceCfg == nil {

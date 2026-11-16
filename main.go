@@ -427,8 +427,16 @@ func main() {
 	store.TriggerAutoCleanupAsync()
 	defer store.Stop()
 	backgroundCtx, cancelBackground := context.WithCancel(context.Background())
-	adminHandler.StartQualityTests(backgroundCtx)
 	defer cancelBackground()
+	proxySubscriptionDir := strings.TrimSpace(os.Getenv("PROXY_SUBSCRIPTION_DATA_DIR"))
+	if proxySubscriptionDir == "" {
+		proxySubscriptionDir = "/data"
+	}
+	if err := adminHandler.StartProxySubscriptions(backgroundCtx, proxySubscriptionDir); err != nil {
+		log.Printf("订阅管理初始化失败，请检查持久化目录权限: %v", err)
+	}
+	defer adminHandler.CloseProxySubscriptions()
+	adminHandler.StartQualityTests(backgroundCtx)
 	if !proxy.StartResponseCacheSettingsPoller(backgroundCtx, db) {
 		log.Fatalf("启动响应缓存设置同步失败")
 	}

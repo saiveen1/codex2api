@@ -67,7 +67,10 @@ func kiroServerToolUseID() string {
 // kiroCallMCPSearch 调用 Kiro 的 /mcp web_search。返回值三选一：结果（可为空）、
 // 映射后的上游错误响应、传输错误。
 func kiroCallMCPSearch(ctx context.Context, account *auth.Account, query, proxyOverride string) (*kiroSearchResults, *http.Response, error) {
-	requestAuth := account.KiroRequestAuth()
+	requestAuth, authErr := account.KiroRequestAuth()
+	if authErr != nil {
+		return nil, nil, authErr
+	}
 	if requestAuth.BearerToken == "" {
 		return nil, kiroSyntheticResponse(http.StatusUnauthorized, []byte(`{"message":"The bearer token included in the request is invalid."}`)), nil
 	}
@@ -101,9 +104,9 @@ func kiroCallMCPSearch(ctx context.Context, account *auth.Account, query, proxyO
 	if tokenType := cred.TokenTypeHeader(); tokenType != "" {
 		req.Header.Set("tokentype", tokenType)
 	}
-	proxyURL := requestAuth.ProxyURL
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
+	proxyURL, proxyErr := account.ResolveProxyForRequest(proxyOverride)
+	if proxyErr != nil {
+		return nil, nil, proxyErr
 	}
 	proxyURL = requestProxyURL(ctx, proxyURL)
 	client := *getRequestClient(ctx, account, proxyURL)

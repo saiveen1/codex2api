@@ -1727,6 +1727,8 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_location VARCHAR(255) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_latency_ms INT DEFAULT 0;
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_status VARCHAR(20) NOT NULL DEFAULT 'untested';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS exclusive BOOLEAN NOT NULL DEFAULT FALSE;
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS allowed_account_ids TEXT NOT NULL DEFAULT '[]';
 	UPDATE proxies
 	SET test_status = 'success'
 	WHERE COALESCE(test_status, 'untested') = 'untested'
@@ -3691,15 +3693,17 @@ var ErrProxyTestTargetChanged = errors.New("proxy test target changed")
 
 // ProxyRow 代理行
 type ProxyRow struct {
-	ID            int64     `json:"id"`
-	URL           string    `json:"url"`
-	Label         string    `json:"label"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	TestIP        string    `json:"test_ip"`
-	TestLocation  string    `json:"test_location"`
-	TestLatencyMs int       `json:"test_latency_ms"`
-	TestStatus    string    `json:"test_status"`
+	ID                int64     `json:"id"`
+	URL               string    `json:"url"`
+	Label             string    `json:"label"`
+	Enabled           bool      `json:"enabled"`
+	Exclusive         bool      `json:"exclusive"`
+	AllowedAccountIDs []int64   `json:"allowed_account_ids"`
+	CreatedAt         time.Time `json:"created_at"`
+	TestIP            string    `json:"test_ip"`
+	TestLocation      string    `json:"test_location"`
+	TestLatencyMs     int       `json:"test_latency_ms"`
+	TestStatus        string    `json:"test_status"`
 	// BoundCount 是绑定到该代理的账号数,由列表接口按 proxy_url 聚合填充,
 	// 前端据此免拉全量账号(代理页大号池卡死问题)。
 	BoundCount int64                   `json:"bound_count"`
@@ -3728,6 +3732,9 @@ func (db *DB) SetAccountProxyURLs(ctx context.Context, assignments map[int64]str
 	}
 	defer stmt.Close()
 	for id, proxyURL := range assignments {
+		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+			return err
+		}
 		if _, err := stmt.ExecContext(ctx, strings.TrimSpace(proxyURL), id); err != nil {
 			return err
 		}
@@ -3765,7 +3772,7 @@ func (db *DB) CountAccountsByProxyURL(ctx context.Context) (map[string]int64, er
 
 // ListProxies 获取所有代理
 func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested') FROM proxies ORDER BY id`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT `+proxySelectColumns+` FROM proxies ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -3773,12 +3780,7 @@ func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
 
 	var proxies []*ProxyRow
 	for rows.Next() {
-		p := &ProxyRow{}
-		var createdAtRaw interface{}
-		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus); err != nil {
-			return nil, err
-		}
-		p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
+		p, err := scanProxyAccessRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -3801,33 +3803,7 @@ func (db *DB) ListProxies(ctx context.Context) ([]*ProxyRow, error) {
 
 // GetProxy returns one proxy by ID.
 func (db *DB) GetProxy(ctx context.Context, id int64) (*ProxyRow, error) {
-	p := &ProxyRow{}
-	var createdAtRaw interface{}
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT id, url, label, enabled, created_at,
-		       COALESCE(test_ip,''), COALESCE(test_location,''),
-		       COALESCE(test_latency_ms,0), COALESCE(test_status,'untested')
-		FROM proxies
-		WHERE id = $1
-	`, id).Scan(
-		&p.ID,
-		&p.URL,
-		&p.Label,
-		&p.Enabled,
-		&createdAtRaw,
-		&p.TestIP,
-		&p.TestLocation,
-		&p.TestLatencyMs,
-		&p.TestStatus,
-	)
-	if err != nil {
-		return nil, err
-	}
-	p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
-	if err != nil {
-		return nil, err
-	}
-	return p, nil
+	return scanProxyAccessRow(db.conn.QueryRowContext(ctx, `SELECT `+proxySelectColumns+` FROM proxies WHERE id = $1`, id))
 }
 
 // ListProxiesByIDs returns only the requested proxy rows.
@@ -3836,9 +3812,7 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 		return []*ProxyRow{}, nil
 	}
 	query := fmt.Sprintf(`
-		SELECT id, url, label, enabled, created_at,
-		       COALESCE(test_ip,''), COALESCE(test_location,''),
-		       COALESCE(test_latency_ms,0), COALESCE(test_status,'untested')
+		SELECT `+proxySelectColumns+`
 		FROM proxies
 		WHERE id IN (%s)
 		ORDER BY id
@@ -3851,22 +3825,7 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 
 	proxies := make([]*ProxyRow, 0, len(ids))
 	for rows.Next() {
-		p := &ProxyRow{}
-		var createdAtRaw interface{}
-		if err := rows.Scan(
-			&p.ID,
-			&p.URL,
-			&p.Label,
-			&p.Enabled,
-			&createdAtRaw,
-			&p.TestIP,
-			&p.TestLocation,
-			&p.TestLatencyMs,
-			&p.TestStatus,
-		); err != nil {
-			return nil, err
-		}
-		p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
+		p, err := scanProxyAccessRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -3875,12 +3834,22 @@ func (db *DB) ListProxiesByIDs(ctx context.Context, ids []int64) ([]*ProxyRow, e
 	return proxies, rows.Err()
 }
 
-// ListEnabledProxies 获取已启用的代理
+// ListEnabledProxies returns public-pool candidates; exclusive nodes are never auto-selected.
 func (db *DB) ListEnabledProxies(ctx context.Context) ([]*ProxyRow, error) {
-	query := `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested') FROM proxies WHERE enabled = true AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
-	if db.isSQLite() {
-		query = `SELECT id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested') FROM proxies WHERE enabled = 1 AND COALESCE(test_status,'untested') <> 'error' ORDER BY id`
+	return db.listEnabledProxies(ctx, false)
+}
+
+// ListEnabledProxyInventory includes healthy exclusive nodes for explicit-pin health checks.
+func (db *DB) ListEnabledProxyInventory(ctx context.Context) ([]*ProxyRow, error) {
+	return db.listEnabledProxies(ctx, true)
+}
+
+func (db *DB) listEnabledProxies(ctx context.Context, includeExclusive bool) ([]*ProxyRow, error) {
+	query := `SELECT ` + proxySelectColumns + ` FROM proxies WHERE enabled = true AND COALESCE(test_status,'untested') <> 'error'`
+	if !includeExclusive {
+		query += ` AND exclusive = false`
 	}
+	query += ` ORDER BY id`
 	rows, err := db.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -3889,12 +3858,7 @@ func (db *DB) ListEnabledProxies(ctx context.Context) ([]*ProxyRow, error) {
 
 	var proxies []*ProxyRow
 	for rows.Next() {
-		p := &ProxyRow{}
-		var createdAtRaw interface{}
-		if err := rows.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAtRaw, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus); err != nil {
-			return nil, err
-		}
-		p.CreatedAt, err = parseDBTimeValue(createdAtRaw)
+		p, err := scanProxyAccessRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -7598,6 +7562,11 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 			return err
 		}
 		defer tx.Rollback()
+		if proxyURL.Set {
+			if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL.Value); err != nil {
+				return err
+			}
+		}
 
 		if groupIDs.Set {
 			if err := db.intelligenceManualMutationTx(ctx, tx, []int64{id}, false); err != nil {
@@ -7745,6 +7714,13 @@ func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, updat
 			return tx.Commit()
 		}
 
+		if update.ProxyURL.Set {
+			for _, accountID := range active.ids {
+				if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), accountID, update.ProxyURL.Value); err != nil {
+					return err
+				}
+			}
+		}
 		if updateErr := db.batchUpdateAccountColumns(ctx, tx, active.ids, update); updateErr != nil {
 			return updateErr
 		}
@@ -8252,6 +8228,9 @@ func (db *DB) UpdateOpenAIResponsesAccount(ctx context.Context, id int64, name s
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+		return err
+	}
 
 	selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
 	if !db.isSQLite() {
@@ -8304,6 +8283,9 @@ func (db *DB) UpdateOAuthAccountCredentials(ctx context.Context, id int64, crede
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+		return err
+	}
 
 	selectQuery := `SELECT credentials FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`
 	if !db.isSQLite() {
@@ -8739,9 +8721,10 @@ func (db *DB) InsertAccount(ctx context.Context, name string, refreshToken strin
 		return 0, err
 	}
 
-	return db.insertRowID(ctx,
+	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
+		credentials,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8785,9 +8768,10 @@ func (db *DB) InsertATAccount(ctx context.Context, name string, accessToken stri
 		return 0, err
 	}
 
-	return db.insertRowID(ctx,
+	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
+		credentials,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8893,6 +8877,13 @@ func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuer
 				return err
 			}
 		} else if err = tx.QueryRowContext(ctx, strings.TrimSpace(postgresQuery), args...).Scan(&returnID); err != nil {
+			return err
+		}
+		var insertedProxy string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(proxy_url,'') FROM accounts WHERE id = $1`, returnID).Scan(&insertedProxy); err != nil {
+			return err
+		}
+		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), 0, insertedProxy); err != nil {
 			return err
 		}
 		if strings.TrimSpace(candidate) == "" {

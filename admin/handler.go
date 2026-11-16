@@ -46,6 +46,7 @@ import (
 
 // Handler 管理后台 API 处理器
 type Handler struct {
+	proxySubscriptions       *proxySubscriptionRuntime
 	oauthGateway             *oauthGatewayRuntime
 	oauthGatewayOnce         sync.Once
 	oauthGatewayWG           sync.WaitGroup
@@ -1425,10 +1426,19 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/images/assets", h.ListImageAssets)
 	api.GET("/images/assets/:id/file", h.GetImageAssetFile)
 	api.DELETE("/images/assets/:id", h.DeleteImageAsset)
+	api.GET("/proxy-subscriptions", h.ListProxySubscriptions)
+	api.POST("/proxy-subscriptions", h.SaveProxySubscription)
+	api.PATCH("/proxy-subscriptions/:id", h.SaveProxySubscription)
+	api.DELETE("/proxy-subscriptions/:id", h.DeleteProxySubscription)
+	api.POST("/proxy-subscriptions/refresh", h.RefreshProxySubscriptions)
+	api.POST("/proxy-subscriptions/:id/refresh", h.RefreshProxySubscriptions)
+	api.PUT("/proxy-subscriptions/engine", h.ConfigureProxyEngine)
+	api.POST("/proxy-subscriptions/engine/start", h.StartProxyEngine)
 	api.GET("/proxies", h.ListProxies)
 	api.POST("/proxies", h.AddProxies)
 	api.DELETE("/proxies/:id", h.DeleteProxy)
 	api.PATCH("/proxies/:id", h.UpdateProxy)
+	api.PATCH("/proxies/:id/access", h.UpdateProxyAccess)
 	api.POST("/proxies/batch-delete", h.BatchDeleteProxies)
 	api.POST("/proxies/clean-error", h.CleanErrorProxies)
 	api.POST("/proxies/test", h.TestProxy)
@@ -10670,6 +10680,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	if req.ProxyURL != nil && h.store != nil && !h.store.ProxyAllowedForAccount(0, strings.TrimSpace(*req.ProxyURL)) {
+		writeError(c, http.StatusBadRequest, "账号专用节点不能作为全局代理，请选择共享节点")
+		return
+	}
 	if req.PromptFilterCustomPatternsExpected != nil && req.PromptFilterCustomPatterns == nil {
 		writeError(c, http.StatusBadRequest, "Prompt 自定义规则版本快照不能单独提交")
 		return
@@ -13553,6 +13567,10 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 		return
 	}
 	oldURL := strings.TrimSpace(existing.URL)
+	if req.URL != nil && *req.URL != oldURL && h.subscriptionOwnsProxyURL(oldURL) {
+		writeError(c, http.StatusBadRequest, "订阅节点的入口由 mihomo 管理，不能手动修改 URL；可修改标签、启停和账号访问范围")
+		return
+	}
 
 	if err := h.db.UpdateProxy(ctx, id, req.URL, req.Label, req.Enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
