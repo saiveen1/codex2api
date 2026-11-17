@@ -572,6 +572,7 @@ func (s *Store) applyPersistentAccountSnapshot(dst, src *Account, enabled bool) 
 	dst.IgnoreUsageLimitStatusOverride = cloneBoolPtr(src.IgnoreUsageLimitStatusOverride)
 	dst.SkipWarmTier = src.SkipWarmTier
 	dst.KeepConcurrencyOnDegrade = src.KeepConcurrencyOnDegrade
+	dst.forceFast.Store(src.IsForceFast())
 	dst.AllowedAPIKeyIDs = cloneInt64Slice(src.AllowedAPIKeyIDs)
 	dst.setAllowedAPIKeyIDsLocked(src.AllowedAPIKeyIDs)
 	dst.Tags = cloneStringSlice(src.Tags)
@@ -678,6 +679,7 @@ func (s *Store) reloadAccountGroupRoutingByID(ctx context.Context, groupID int64
 	if found == nil {
 		s.groupAutoPauseThresholds.Delete(groupID)
 		s.groupBaseConcurrencyOverrides.Delete(groupID)
+		s.SetGroupForceFast(groupID, false)
 		s.groupProxyURLs.Delete(groupID)
 		s.groupNames.Delete(groupID)
 		return nil
@@ -693,6 +695,7 @@ func (s *Store) reloadAccountGroupRoutingByID(ctx context.Context, groupID int64
 		s.groupBaseConcurrencyOverrides.Delete(groupID)
 	}
 	s.SetGroupProxyURLs(groupID, found.ProxyURLs)
+	s.SetGroupForceFast(groupID, found.ForceFast)
 	s.groupNames.Store(groupID, strings.TrimSpace(found.Name))
 
 	accountIDs, err := s.db.ListAccountIDsInGroups(ctx, []int64{groupID})

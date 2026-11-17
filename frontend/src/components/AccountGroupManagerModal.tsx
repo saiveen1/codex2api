@@ -7,6 +7,7 @@ import type { AccountGroup, UpstreamChannel } from "../types";
 import Modal from "./Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useToast } from "../hooks/useToast";
 import { useConfirmDialog } from "../hooks/useConfirmDialog";
@@ -42,10 +43,11 @@ type GroupDraft = {
   autoPause5h: string;
   autoPause7d: string;
   proxyUrls: string;
+  forceFast: boolean;
 };
 
 function emptyDraft(color: string): GroupDraft {
-  return { id: null, name: "", description: "", color, baseConcurrency: "", autoPause5h: "", autoPause7d: "", proxyUrls: "" };
+  return { id: null, name: "", description: "", color, baseConcurrency: "", autoPause5h: "", autoPause7d: "", proxyUrls: "", forceFast: false };
 }
 
 // AccountGroupManagerModal 是各渠道通用的「管理分组」弹窗:创建/编辑/删除分组,
@@ -98,6 +100,7 @@ export function AccountGroupManagerModal({
       autoPause5h: formatAutoPauseThresholdPercent(g.auto_pause_5h_threshold),
       autoPause7d: formatAutoPauseThresholdPercent(g.auto_pause_7d_threshold),
       proxyUrls: (g.proxy_urls ?? []).join("\n"),
+      forceFast: g.force_fast ?? false,
     });
   };
 
@@ -116,6 +119,7 @@ export function AccountGroupManagerModal({
       name,
       description: draft.description.trim(),
       color: normalizeGroupColor(draft.color),
+      ...(channel === "codex" ? { force_fast: draft.forceFast } : {}),
       base_concurrency_override: parseNum(draft.baseConcurrency),
       auto_pause_5h_threshold: autoPauseThresholdPercentToRatio(draft.autoPause5h) ?? 0,
       auto_pause_7d_threshold: autoPauseThresholdPercentToRatio(draft.autoPause7d) ?? 0,
@@ -207,6 +211,15 @@ export function AccountGroupManagerModal({
             <span className={fieldLabel}>{t("accountGroups.description")}</span>
             <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder={t("accountGroups.descriptionPlaceholder")} />
           </div>
+          {channel === "codex" ? (
+            <div className="rounded-md border border-border p-3">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm font-semibold" id="shared-group-force-fast">{t("forceFast.label")}</span>
+                <Switch aria-labelledby="shared-group-force-fast" checked={draft.forceFast} onCheckedChange={(forceFast) => setDraft({ ...draft, forceFast })} />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>
+            </div>
+          ) : null}
           <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1">
               <span className={fieldLabel}>{t("accountGroups.baseConcurrency")}</span>

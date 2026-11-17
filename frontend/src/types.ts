@@ -457,6 +457,7 @@ export interface ProxySubscriptionsView {
 }
 
 export interface AccountRow {
+  force_fast?: boolean
   codex_last_refresh_at?: string
   codex_refresh_error?: string
   upstream_request_id_header?: string | null
@@ -1686,6 +1687,7 @@ export interface GrokBatchImportResponse {
 }
 
 export interface UpdateAccountSchedulerRequest {
+  force_fast?: boolean
   upstream_request_id_header?: string | null
   score_bias_override?: number | null
   base_concurrency_override?: number | null
@@ -1720,6 +1722,7 @@ export interface BatchUpdateAccountsRequest extends UpdateAccountSchedulerReques
 }
 
 export interface AccountGroup {
+  force_fast?: boolean
   id: number
   name: string
   description: string
@@ -1740,6 +1743,7 @@ export interface AccountGroupsResponse {
 }
 
 export interface CreateAccountGroupRequest {
+  force_fast?: boolean
   name: string
   description?: string
   color?: string
@@ -1752,6 +1756,7 @@ export interface CreateAccountGroupRequest {
 }
 
 export interface UpdateAccountGroupRequest {
+  force_fast?: boolean
   name?: string
   description?: string
   color?: string
@@ -3984,6 +3989,7 @@ export interface APIKeyModelRequestUsage {
 }
 
 export interface APIKeyLimits {
+  force_fast?: boolean
   model_allow?: string[]
   model_deny?: string[]
   plan_allow?: string[]

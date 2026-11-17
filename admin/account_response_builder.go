@@ -314,6 +314,7 @@ func (h *Handler) buildAccountResponse(
 	resp.AutoPause5hDisabled = row.GetCredentialBool("auto_pause_5h_disabled")
 	resp.AutoPause7dDisabled = row.GetCredentialBool("auto_pause_7d_disabled")
 	resp.KeepConcurrencyOnDegrade = row.GetCredentialBool(auth.KeepConcurrencyOnDegradeCredentialKey)
+	resp.ForceFast = row.GetCredentialBool(auth.ForceFastCredentialKey)
 	if includeDetails {
 		resp.DispatchCountLimit = accountDispatchCountLimit(row)
 	}

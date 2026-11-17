@@ -4292,9 +4292,9 @@ func (h *Handler) Responses(c *gin.Context) {
 	quotaFailover := false
 	ruleIdentity := h.payloadRuleIdentity(c)
 	reasoningEffort := extractReasoningEffort(rawBody)
-	serviceTier := extractServiceTier(rawBody)
-	if serviceTier != "" {
-		c.Set("x-service-tier", resolveServiceTier("", serviceTier))
+	clientTier := extractServiceTier(rawBody)
+	if clientTier != "" {
+		c.Set("x-service-tier", resolveServiceTier("", clientTier))
 	}
 
 	validateDone := time.Now()
@@ -4614,6 +4614,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 
 		if account.IsRelayStyle() {
+			serviceTier := clientTier
 			relayContinuationAttempted = true
 			if lastUpstreamCancel != nil {
 				lastUpstreamCancel()
@@ -5458,8 +5459,8 @@ func (h *Handler) Responses(c *gin.Context) {
 		readCtx := upstreamResponseReadContext(c.Request.Context(), upstreamCtx, continuousRetryPolicy)
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
 		// 身份按 attempt 附加实际选中账号维度：account_* 门随重试换号重新匹配（issue #410）。
-		attemptIdentity := ruleIdentity.WithSelectedAccount(account, h.store)
-		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
+		policy := h.codexAttemptPolicy(c, ruleIdentity, account)
+		upstreamCtx = policy.withContext(upstreamCtx)
 		lastUpstreamCancel = upstreamCancel
 		ttftGuard := newFirstTokenTimeoutGuard(firstTokenTimeoutForRequest(currentFirstTokenTimeout(), bodySignalCompact), upstreamCancel)
 		// WebSocket 上游下剥离自动注入的图片工具，防止模型自主生图产生大体积
@@ -5470,7 +5471,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 		// service_tier 记账按 payload 规则改写后的值归因（覆写 service_tier 的规则才生效）。
 		// 按尝试重算：不同尝试的生效模型/账号可能不同，规则按模型或账号门匹配则结果随之变化。
-		serviceTier = EffectiveRequestedServiceTier(upstreamBody, attemptEffectiveModel, downstreamHeaders, attemptIdentity)
+		serviceTier := policy.requestedTier(upstreamBody, attemptEffectiveModel, downstreamHeaders)
 		// 换号后剥离旧账号铸造的 turn-state 回带,防止跨账号矛盾信号打到上游。
 		upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
 		guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
@@ -5985,7 +5986,7 @@ func (h *Handler) Responses(c *gin.Context) {
 						// A hidden round gets exactly one request on this account. Failures
 						// stay inside the fold and become a synthetic response.incomplete;
 						// encrypted reasoning must never participate in account rotation.
-						rctx = WithPayloadRuleIdentity(rctx, attemptIdentity)
+						rctx = policy.withContext(rctx)
 						lastUpstreamCancel = rcancel
 						roundResp, roundErr := ExecuteRequest(rctx, account, roundBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 						// 续想轮同样消耗账号额度：成功开轮后同步上游用量头，
@@ -6496,9 +6497,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	apiKeyID := requestAPIKeyID(c)
 	affinityKey := sessionAffinityKey(sessionIdentity.affinityID, apiKeyID)
 	reasoningEffort := extractReasoningEffort(rawBody)
-	serviceTier := extractServiceTier(rawBody)
-	if serviceTier != "" {
-		c.Set("x-service-tier", resolveServiceTier("", serviceTier))
+	clientTier := extractServiceTier(rawBody)
+	if clientTier != "" {
+		c.Set("x-service-tier", resolveServiceTier("", clientTier))
 	}
 
 	// compact 强制非流式
@@ -6673,6 +6674,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		downstreamHeaders := c.Request.Header.Clone()
 
 		if account.IsOpenAIResponsesAPI() {
+			serviceTier := clientTier
 			relayContinuationAttempted = true
 			baseURL, _ := account.OpenAIResponsesCredentials()
 			upstreamEndpoint := auth.OpenAIResponsesEndpoint(baseURL, "/v1/responses/compact")
@@ -6922,6 +6924,12 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		// 开启后官方账号改走 /responses + compaction_trigger 的 body-signal 形态
 		// （强制 HTTP SSE），成功后聚合回 compact 的一次性 JSON。
 		compactViaResponses := CurrentRuntimeSettings().CompactViaResponses
+		policy := h.codexAttemptPolicy(c, nil, account)
+		upstreamCtx := policy.withContext(c.Request.Context())
+		serviceTier := clientTier
+		if policy.forceFast {
+			serviceTier = "priority"
+		}
 		upstreamEndpointLabel := "/v1/responses/compact"
 		var resp *http.Response
 		var reqErr error
@@ -6929,11 +6937,11 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		if compactViaResponses {
 			upstreamEndpointLabel = "/v1/responses"
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(c.Request.Context(), func() (*http.Response, error) {
-				return ExecuteRequest(c.Request.Context(), account, appendCompactionTriggerToResponsesBody(codexBody), upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, false)
+				return ExecuteRequest(upstreamCtx, account, appendCompactionTriggerToResponsesBody(codexBody), upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, false)
 			})
 		} else {
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(c.Request.Context(), func() (*http.Response, error) {
-				return ExecuteCompactRequest(c.Request.Context(), account, codexBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders)
+				return ExecuteCompactRequest(upstreamCtx, account, codexBody, upstreamSessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders)
 			})
 		}
 		durationMs := int(time.Since(start).Milliseconds())
@@ -7383,9 +7391,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	rememberContinuousRetryPolicyForRequest(c, continuousRetryPolicy)
 	reasoningEffort := extractReasoningEffort(rawBody)
 	ruleIdentity := h.payloadRuleIdentity(c)
-	serviceTier := extractServiceTier(rawBody)
-	if serviceTier != "" {
-		c.Set("x-service-tier", resolveServiceTier("", serviceTier))
+	clientTier := extractServiceTier(rawBody)
+	if clientTier != "" {
+		c.Set("x-service-tier", resolveServiceTier("", clientTier))
 	}
 
 	// 2. 翻译请求：OpenAI Chat → Codex Responses
@@ -7591,12 +7599,13 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		downstreamHeaders := c.Request.Header.Clone()
 
 		// 身份按 attempt 附加实际选中账号维度：account_* 门随重试换号重新匹配（issue #410）。
-		attemptIdentity := ruleIdentity.WithSelectedAccount(account, h.store)
+		policy := h.codexAttemptPolicy(c, ruleIdentity, account)
 		// service_tier 记账按 payload 规则改写后的值归因（覆写 service_tier 的规则才生效）。
 		// 仅 Codex 路径（ExecuteRequest）套用规则；relay 账号不套用，保持原值。
 		// 按尝试重算：不同尝试的生效模型/账号可能不同，规则按模型或账号门匹配则结果随之变化。
+		serviceTier := clientTier
 		if !isRelayAccount {
-			serviceTier = EffectiveRequestedServiceTier(codexBody, attemptEffectiveModel, downstreamHeaders, attemptIdentity)
+			serviceTier = policy.requestedTier(codexBody, attemptEffectiveModel, downstreamHeaders)
 		}
 
 		upstreamSessionID := resolveUpstreamSessionID(apiKeyID, sessionIdentity.upstreamSeed, sessionIdentity.explicitUpstreamID, useWebsocket)
@@ -7610,7 +7619,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		upstreamCtx, upstreamCancel := newDrainableUpstreamContext(c.Request.Context(), upstreamDrainTimeout)
 		readCtx := upstreamResponseReadContext(c.Request.Context(), upstreamCtx, continuousRetryPolicy)
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
-		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
+		upstreamCtx = policy.withContext(upstreamCtx)
 		lastUpstreamCancel = upstreamCancel
 		// 非流式且要下发 Antigravity 思考时上游改取非流式(见下),首个 token 要等整段
 		// 生成完才到,首字超时守卫不适用。

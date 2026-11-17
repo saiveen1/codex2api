@@ -474,6 +474,7 @@ type AccountGroupDraft = {
   auto_pause_7d_threshold: number;
   proxyURLsInput: string;
   channel: UpstreamChannel;
+  forceFast: boolean;
 };
 
 function getDefaultAccountVisibleColumns(): Record<
@@ -2043,6 +2044,7 @@ export default function Accounts() {
   );
   const [concurrencyInput, setConcurrencyInput] = useState("");
   const [skipWarmTier, setSkipWarmTier] = useState(false);
+  const [editForceFast, setEditForceFast] = useState(false);
   const [keepConcurrencyOnDegrade, setKeepConcurrencyOnDegrade] =
     useState(false);
   const [editAutoPause5hThresholdInput, setEditAutoPause5hThresholdInput] =
@@ -2288,6 +2290,7 @@ export default function Accounts() {
     auto_pause_7d_threshold: 0,
     proxyURLsInput: "",
     channel: "codex",
+    forceFast: false,
   });
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [showBatchMetaEditor, setShowBatchMetaEditor] = useState(false);
@@ -5854,6 +5857,7 @@ export default function Accounts() {
         : String(account.base_concurrency_override),
     );
     setSkipWarmTier(account.skip_warm_tier ?? false);
+    setEditForceFast(account.force_fast ?? false);
     setKeepConcurrencyOnDegrade(account.keep_concurrency_on_degrade ?? false);
     setEditAutoPause5hThresholdInput(
       formatQuotaAutoPausePercentInput(account.auto_pause_5h_threshold),
@@ -6111,6 +6115,7 @@ export default function Accounts() {
         // 指纹收敛只作用于 Codex 官方出站路径，中转/Grok 账号不下发该字段。
         ...(isCodexOfficialAccount(editingAccount)
           ? {
+              force_fast: editForceFast,
               codex_fingerprint_mode: editCodexFingerprintMode,
               timezone: editTimezone.trim(),
             }
@@ -6188,6 +6193,7 @@ export default function Accounts() {
       auto_pause_7d_threshold: 0,
       proxyURLsInput: "",
       channel: "codex",
+      forceFast: false,
     });
   };
 
@@ -6206,6 +6212,7 @@ export default function Accounts() {
       auto_pause_7d_threshold: group.auto_pause_7d_threshold ?? 0,
       proxyURLsInput: (group.proxy_urls ?? []).join("\n"),
       channel: group.channel,
+      forceFast: group.force_fast ?? false,
     });
   };
 
@@ -6236,6 +6243,7 @@ export default function Accounts() {
           .map((line) => line.trim())
           .filter(Boolean),
         channel: groupDraft.channel,
+        ...(groupDraft.channel === "codex" ? { force_fast: groupDraft.forceFast } : {}),
       };
       if (groupDraft.id === null) {
         await api.createAccountGroup(payload);
@@ -10362,6 +10370,16 @@ export default function Accounts() {
                           })}
                         </div>
 
+                        {isCodexOfficialAccount(editingAccount) ? (
+                          <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-sm font-semibold" id="account-force-fast">{t("forceFast.label")}</span>
+                              <Switch aria-labelledby="account-force-fast" checked={editForceFast} onCheckedChange={setEditForceFast} />
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>
+                          </div>
+                        ) : null}
+
                         {/* 设备指纹收敛 */}
                         {isCodexOfficialAccount(editingAccount) ? (
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors md:col-span-2">
@@ -11464,6 +11482,15 @@ export default function Accounts() {
                       );
                     })()}
                   </div>
+                  {groupDraft.channel === "codex" ? (
+                    <div className="rounded-xl border border-border/70 bg-card p-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="text-sm font-semibold" id="group-force-fast">{t("forceFast.label")}</span>
+                        <Switch aria-labelledby="group-force-fast" checked={groupDraft.forceFast} onCheckedChange={(forceFast) => setGroupDraft((draft) => ({ ...draft, forceFast }))} />
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>
+                    </div>
+                  ) : null}
                   <label className="block space-y-1.5">
                     <span className="text-xs font-semibold text-muted-foreground">
                       {t("accounts.groupDescription")}

@@ -478,6 +478,7 @@ type Account struct {
 	ignoreUsageLimitStatus         bool
 	SkipWarmTier                   bool // 跳过 warm 层级降级
 	KeepConcurrencyOnDegrade       bool // warm/risky 不降并发,层级照算 (issue #772)
+	forceFast                      atomic.Bool
 	AllowedAPIKeyIDs               []int64
 	allowedAPIKeySet               map[int64]struct{}
 	Tags                           []string
@@ -4158,6 +4159,7 @@ type Store struct {
 	smartPacingWindows            string   // protected by mu, "5h,7d" / "5h" / "7d"
 	groupAutoPauseThresholds      sync.Map // int64 -> [2]float64 {5h, 7d}
 	groupBaseConcurrencyOverrides sync.Map // int64 -> int64; missing means inherit global
+	groupForceFast                sync.Map // int64 -> struct{}; only enabled groups
 	groupNames                    sync.Map // int64 -> string; 组 ID→名，供 payload 规则按组名匹配
 	groupProxyURLs                sync.Map // int64 -> []string; 组级代理列表(issue #479),missing = 未设置
 }
@@ -6152,6 +6154,7 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 				s.groupBaseConcurrencyOverrides.Store(g.ID, g.BaseConcurrencyOverride.Int64)
 			}
 			s.SetGroupProxyURLs(g.ID, g.ProxyURLs)
+			s.SetGroupForceFast(g.ID, g.ForceFast)
 			s.groupNames.Store(g.ID, strings.TrimSpace(g.Name))
 		}
 	}
@@ -6576,6 +6579,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 	account.AutoPause5hDisabled = row.GetCredentialBool("auto_pause_5h_disabled")
 	account.AutoPause7dDisabled = row.GetCredentialBool("auto_pause_7d_disabled")
 	account.KeepConcurrencyOnDegrade = row.GetCredentialBool(KeepConcurrencyOnDegradeCredentialKey)
+	account.forceFast.Store(row.GetCredentialBool(ForceFastCredentialKey))
 	if limit, ok := row.GetCredentialInt64("dispatch_count_limit"); ok {
 		account.SetDispatchCountLimit(limit)
 	}
@@ -10189,6 +10193,38 @@ func (s *Store) ApplyAccountKeepConcurrencyOnDegrade(dbID int64, enabled bool) b
 	acc.mu.Unlock()
 	s.fastSchedulerUpdate(acc)
 	return true
+}
+
+const ForceFastCredentialKey = "force_fast"
+
+func (a *Account) IsForceFast() bool {
+	return a != nil && a.forceFast.Load()
+}
+
+func (s *Store) ApplyAccountForceFast(dbID int64, forceFast bool) {
+	if acc := s.FindByID(dbID); acc != nil {
+		acc.forceFast.Store(forceFast)
+	}
+}
+
+func (s *Store) SetGroupForceFast(id int64, forceFast bool) {
+	if forceFast {
+		s.groupForceFast.Store(id, struct{}{})
+	} else {
+		s.groupForceFast.Delete(id)
+	}
+}
+
+func (s *Store) GroupsForceFast(ids []int64) bool {
+	if s == nil {
+		return false
+	}
+	for _, id := range ids {
+		if _, ok := s.groupForceFast.Load(id); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) ApplyAccountDispatchCountLimit(dbID int64, limit *int64) bool {

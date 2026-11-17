@@ -15,6 +15,7 @@ type AccountGroup struct {
 	Color                   string
 	SortOrder               int64
 	BaseConcurrencyOverride sql.NullInt64
+	ForceFast               bool
 	MemberCount             int64
 	AutoPause5hThreshold    float64
 	AutoPause7dThreshold    float64
@@ -53,7 +54,7 @@ func NormalizeAccountGroupChannel(channel string) string {
 
 func (db *DB) ListAccountGroups(ctx context.Context) ([]AccountGroup, error) {
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT g.id, g.name, g.description, g.color, g.sort_order, g.base_concurrency_override,
+		SELECT g.id, g.name, g.description, g.color, g.sort_order, g.base_concurrency_override, g.force_fast,
 			COALESCE(COUNT(a.id), 0),
 			COALESCE(g.auto_pause_5h_threshold, 0), COALESCE(g.auto_pause_7d_threshold, 0),
 			COALESCE(g.proxy_urls, '[]'),
@@ -64,7 +65,7 @@ func (db *DB) ListAccountGroups(ctx context.Context) ([]AccountGroup, error) {
 		LEFT JOIN accounts a ON a.id = m.account_id
 			AND a.status <> 'deleted'
 			AND COALESCE(a.error_message, '') <> 'deleted'
-		GROUP BY g.id, g.name, g.description, g.color, g.sort_order, g.base_concurrency_override,
+		GROUP BY g.id, g.name, g.description, g.color, g.sort_order, g.base_concurrency_override, g.force_fast,
 			g.auto_pause_5h_threshold, g.auto_pause_7d_threshold, g.proxy_urls, g.channel, g.created_at, g.updated_at
 		ORDER BY g.sort_order, g.name`)
 	if err != nil {
@@ -75,7 +76,7 @@ func (db *DB) ListAccountGroups(ctx context.Context) ([]AccountGroup, error) {
 	for rows.Next() {
 		var g AccountGroup
 		var createdRaw, updatedRaw, proxyRaw interface{}
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Color, &g.SortOrder, &g.BaseConcurrencyOverride, &g.MemberCount, &g.AutoPause5hThreshold, &g.AutoPause7dThreshold, &proxyRaw, &g.Channel, &createdRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Color, &g.SortOrder, &g.BaseConcurrencyOverride, &g.ForceFast, &g.MemberCount, &g.AutoPause5hThreshold, &g.AutoPause7dThreshold, &proxyRaw, &g.Channel, &createdRaw, &updatedRaw); err != nil {
 			return nil, err
 		}
 		g.ProxyURLs = decodeTagsValue(proxyRaw)
@@ -95,6 +96,10 @@ func (db *DB) ListAccountGroups(ctx context.Context) ([]AccountGroup, error) {
 }
 
 func (db *DB) CreateAccountGroup(ctx context.Context, name, description, color string, autoPause5h, autoPause7d float64, baseConcurrencyOverride sql.NullInt64, sortOrder ...int64) (int64, error) {
+	return db.CreateAccountGroupWithOptions(ctx, name, description, color, autoPause5h, autoPause7d, baseConcurrencyOverride, false, sortOrder...)
+}
+
+func (db *DB) CreateAccountGroupWithOptions(ctx context.Context, name, description, color string, autoPause5h, autoPause7d float64, baseConcurrencyOverride sql.NullInt64, forceFast bool, sortOrder ...int64) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return 0, fmt.Errorf("group name is required")
@@ -104,7 +109,7 @@ func (db *DB) CreateAccountGroup(ctx context.Context, name, description, color s
 		order = sortOrder[0]
 	}
 	if db.isSQLite() {
-		res, err := db.conn.ExecContext(ctx, `INSERT INTO account_groups (name, description, color, sort_order, auto_pause_5h_threshold, auto_pause_7d_threshold, base_concurrency_override) VALUES (?, ?, ?, ?, ?, ?, ?)`, name, description, color, order, autoPause5h, autoPause7d, nullableInt64Value(baseConcurrencyOverride))
+		res, err := db.conn.ExecContext(ctx, `INSERT INTO account_groups (name, description, color, sort_order, auto_pause_5h_threshold, auto_pause_7d_threshold, base_concurrency_override, force_fast) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, name, description, color, order, autoPause5h, autoPause7d, nullableInt64Value(baseConcurrencyOverride), forceFast)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return 0, ErrDuplicateAccountGroupName
@@ -114,7 +119,7 @@ func (db *DB) CreateAccountGroup(ctx context.Context, name, description, color s
 		return res.LastInsertId()
 	}
 	var id int64
-	err := db.conn.QueryRowContext(ctx, `INSERT INTO account_groups (name, description, color, sort_order, auto_pause_5h_threshold, auto_pause_7d_threshold, base_concurrency_override) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, name, description, color, order, autoPause5h, autoPause7d, nullableInt64Value(baseConcurrencyOverride)).Scan(&id)
+	err := db.conn.QueryRowContext(ctx, `INSERT INTO account_groups (name, description, color, sort_order, auto_pause_5h_threshold, auto_pause_7d_threshold, base_concurrency_override, force_fast) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, name, description, color, order, autoPause5h, autoPause7d, nullableInt64Value(baseConcurrencyOverride), forceFast).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return 0, ErrDuplicateAccountGroupName
@@ -128,6 +133,7 @@ type UpdateAccountGroupOpts struct {
 	AutoPause5hThreshold    *float64
 	AutoPause7dThreshold    *float64
 	BaseConcurrencyOverride OptionalNullInt64
+	ForceFast               *bool
 	// ProxyURLs 为 nil 表示不修改;空切片表示清空组代理。
 	ProxyURLs *[]string
 	// Channel 为 nil 表示不修改;handler 层保证仅空组可改渠道。
@@ -170,6 +176,9 @@ func (db *DB) UpdateAccountGroup(ctx context.Context, id int64, name, descriptio
 		}
 		if opts.BaseConcurrencyOverride.Set {
 			add("base_concurrency_override", nullableInt64Value(opts.BaseConcurrencyOverride.Value))
+		}
+		if opts.ForceFast != nil {
+			add("force_fast", *opts.ForceFast)
 		}
 		if opts.ProxyURLs != nil {
 			add("proxy_urls", encodeTagsJSON(*opts.ProxyURLs))

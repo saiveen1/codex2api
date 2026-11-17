@@ -31,6 +31,7 @@ type accountGroupResponse struct {
 	Color                   string   `json:"color"`
 	SortOrder               int64    `json:"sort_order"`
 	BaseConcurrencyOverride *int64   `json:"base_concurrency_override"`
+	ForceFast               bool     `json:"force_fast"`
 	MemberCount             int64    `json:"member_count"`
 	AutoPause5hThreshold    float64  `json:"auto_pause_5h_threshold"`
 	AutoPause7dThreshold    float64  `json:"auto_pause_7d_threshold"`
@@ -52,6 +53,7 @@ func toAccountGroupResponse(g database.AccountGroup) accountGroupResponse {
 		Color:                   g.Color,
 		SortOrder:               g.SortOrder,
 		BaseConcurrencyOverride: nullableInt64Pointer(g.BaseConcurrencyOverride),
+		ForceFast:               g.ForceFast,
 		MemberCount:             g.MemberCount,
 		AutoPause5hThreshold:    g.AutoPause5hThreshold,
 		AutoPause7dThreshold:    g.AutoPause7dThreshold,
@@ -109,6 +111,7 @@ type createAccountGroupReq struct {
 	Color                   string          `json:"color"`
 	SortOrder               *int64          `json:"sort_order"`
 	BaseConcurrencyOverride json.RawMessage `json:"base_concurrency_override"`
+	ForceFast               bool            `json:"force_fast"`
 	AutoPause5hThreshold    float64         `json:"auto_pause_5h_threshold"`
 	AutoPause7dThreshold    float64         `json:"auto_pause_7d_threshold"`
 	ProxyURLs               []string        `json:"proxy_urls"`
@@ -185,7 +188,7 @@ func (h *Handler) CreateAccountGroup(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "分组数量已达上限")
 		return
 	}
-	id, err := h.db.CreateAccountGroup(ctx, name, description, color, req.AutoPause5hThreshold, req.AutoPause7dThreshold, baseConcurrencyOverride.Value, sortOrder)
+	id, err := h.db.CreateAccountGroupWithOptions(ctx, name, description, color, req.AutoPause5hThreshold, req.AutoPause7dThreshold, baseConcurrencyOverride.Value, req.ForceFast, sortOrder)
 	if err != nil {
 		if errors.Is(err, database.ErrDuplicateAccountGroupName) {
 			writeError(c, http.StatusConflict, err.Error())
@@ -217,6 +220,7 @@ func (h *Handler) CreateAccountGroup(c *gin.Context) {
 	}
 	if h.store != nil {
 		h.store.SetGroupName(id, name)
+		h.store.SetGroupForceFast(id, req.ForceFast)
 	}
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "分组已创建"})
 }
@@ -227,6 +231,7 @@ type updateAccountGroupReq struct {
 	Color                   *string         `json:"color"`
 	SortOrder               *int64          `json:"sort_order"`
 	BaseConcurrencyOverride json.RawMessage `json:"base_concurrency_override"`
+	ForceFast               *bool           `json:"force_fast"`
 	AutoPause5hThreshold    *float64        `json:"auto_pause_5h_threshold"`
 	AutoPause7dThreshold    *float64        `json:"auto_pause_7d_threshold"`
 	// ProxyURLs 缺省(null)表示不修改;传空数组表示清空组代理。
@@ -300,11 +305,12 @@ func (h *Handler) UpdateAccountGroup(c *gin.Context) {
 		req.Channel = &normalized
 	}
 	var opts *database.UpdateAccountGroupOpts
-	if req.AutoPause5hThreshold != nil || req.AutoPause7dThreshold != nil || baseConcurrencyOverride.Set || req.ProxyURLs != nil || req.Channel != nil {
+	if req.AutoPause5hThreshold != nil || req.AutoPause7dThreshold != nil || baseConcurrencyOverride.Set || req.ProxyURLs != nil || req.Channel != nil || req.ForceFast != nil {
 		opts = &database.UpdateAccountGroupOpts{
 			AutoPause5hThreshold:    req.AutoPause5hThreshold,
 			AutoPause7dThreshold:    req.AutoPause7dThreshold,
 			BaseConcurrencyOverride: baseConcurrencyOverride,
+			ForceFast:               req.ForceFast,
 			ProxyURLs:               req.ProxyURLs,
 			Channel:                 req.Channel,
 		}
@@ -350,6 +356,9 @@ func (h *Handler) UpdateAccountGroup(c *gin.Context) {
 	if baseConcurrencyOverride.Set && h.store != nil {
 		h.store.SetGroupBaseConcurrencyOverride(id, nullableInt64Pointer(baseConcurrencyOverride.Value))
 	}
+	if req.ForceFast != nil && h.store != nil {
+		h.store.SetGroupForceFast(id, *req.ForceFast)
+	}
 	if req.ProxyURLs != nil && h.store != nil {
 		h.store.SetGroupProxyURLs(id, *req.ProxyURLs)
 	}
@@ -383,6 +392,7 @@ func (h *Handler) DeleteAccountGroup(c *gin.Context) {
 	if h.store != nil {
 		h.store.DeleteGroupAutoPauseThresholds(id)
 		h.store.DeleteGroupBaseConcurrencyOverride(id)
+		h.store.SetGroupForceFast(id, false)
 		h.store.DeleteGroupProxyURLs(id)
 		h.store.DeleteGroupName(id)
 		for _, acc := range h.store.Accounts() {

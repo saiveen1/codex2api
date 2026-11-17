@@ -561,6 +561,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 		// requested tier 归因走 EffectiveRequestedServiceTier（净化前取值），不受影响。
 		requestBody = sanitizeServiceTierForUpstream(requestBody)
 	}
+	requestBody = applyForcedFast(ctx, requestBody)
 	var daybreakErr error
 	requestBody, daybreakErr = guardDaybreakUpstream(ctx, account, requestBody)
 	if daybreakErr != nil {
@@ -1129,6 +1130,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	}
 	resetUpstreamUserAgentAudit(ctx)
 	resetWsAcquireAudit(ctx)
+	requestBody = applyForcedFast(ctx, requestBody)
 	var encryptedAttempt *encryptedContentAttempt
 	requestBody, encryptedAttempt = prepareEncryptedContentAttempt(ctx, account, requestBody, sessionID, headers)
 	defer func() { encryptedAttempt.observeResponse(upstreamResponse, requestBody) }()

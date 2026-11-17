@@ -1195,6 +1195,7 @@ func (db *DB) migrate(ctx context.Context) error {
 		color                     VARCHAR(20) DEFAULT '',
 		sort_order                INT DEFAULT 0,
 		base_concurrency_override INT NULL,
+		force_fast                BOOLEAN NOT NULL DEFAULT FALSE,
 		proxy_urls                TEXT DEFAULT '[]',
 		created_at                TIMESTAMPTZ DEFAULT NOW(),
 		updated_at                TIMESTAMPTZ DEFAULT NOW()
@@ -1203,6 +1204,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS color VARCHAR(20) DEFAULT '';
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0;
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS base_concurrency_override INT NULL;
+	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS force_fast BOOLEAN NOT NULL DEFAULT FALSE;
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS proxy_urls TEXT DEFAULT '[]';
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS channel VARCHAR(16) DEFAULT 'codex';
 	ALTER TABLE account_groups ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
@@ -1926,6 +1928,7 @@ type APIKeyLimits struct {
 	// 必须用 X-Codex2API-Account-ID 指定账号，网关只在该账号上执行，不做内部选号、
 	// 换号或重试，也不以冷却 / 并发 / 自动暂停等内部调度判断拒绝请求。默认关闭。
 	ExternalScheduler bool `json:"external_scheduler,omitempty"`
+	ForceFast         bool `json:"force_fast,omitempty"`
 }
 
 // 图片工具策略取值。
@@ -2020,6 +2023,7 @@ func (l APIKeyLimits) IsZero() bool {
 		!l.AutoCompactOnOverflow &&
 		!l.AllowLive &&
 		!l.ExternalScheduler &&
+		!l.ForceFast &&
 		l.WebSchedulingMode == "" &&
 		l.ResolveImageGenerationPolicy() == ImageGenerationPolicyAllow &&
 		l.ResolveUpstreamChannel() == UpstreamChannelAuto

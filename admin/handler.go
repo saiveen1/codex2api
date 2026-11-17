@@ -1873,6 +1873,7 @@ type accountResponse struct {
 	AutoPause5hDisabled           bool                        `json:"auto_pause_5h_disabled"`
 	AutoPause7dDisabled           bool                        `json:"auto_pause_7d_disabled"`
 	KeepConcurrencyOnDegrade      bool                        `json:"keep_concurrency_on_degrade"`
+	ForceFast                     bool                        `json:"force_fast"`
 	UsageLimitOverride            *bool                       `json:"ignore_usage_limit_status_override"`
 	UsageLimitEffective           bool                        `json:"ignore_usage_limit_status_effective"`
 	DispatchCountLimit            *int64                      `json:"dispatch_count_limit"`
@@ -2199,7 +2200,7 @@ func (h *Handler) GetAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// accountLiteResponse 是 ?view=lite 的账号条目:身份 + 绑定字段,无调度/用量指标。
+// accountLiteResponse 是 ?view=lite 的账号条目:身份、绑定和 Force Fast 设置，无用量指标。
 // 字段名与完整版 accountResponse 对齐,前端可直接当 AccountRow 子集消费。
 type accountLiteResponse struct {
 	ID                 int64  `json:"id"`
@@ -2208,6 +2209,7 @@ type accountLiteResponse struct {
 	PlanType           string `json:"plan_type"`
 	Status             string `json:"status"`
 	Enabled            bool   `json:"enabled"`
+	ForceFast          bool   `json:"force_fast"`
 	ProxyURL           string `json:"proxy_url"`
 	ATOnly             bool   `json:"at_only"`
 	OpenAIResponsesAPI bool   `json:"openai_responses_api"`
@@ -2264,6 +2266,7 @@ func (h *Handler) listAccountsLite(c *gin.Context, ctx context.Context) {
 			PlanType:           planType,
 			Status:             status,
 			Enabled:            row.Enabled,
+			ForceFast:          row.GetCredentialBool(auth.ForceFastCredentialKey),
 			ProxyURL:           row.ProxyURL,
 			ATOnly:             !isOpenAIResponsesAccount && !isGrokAccount && !isClaudeAccount && row.GetCredential("refresh_token") == "" && row.GetCredential("access_token") != "",
 			OpenAIResponsesAPI: isOpenAIResponsesAccount,
@@ -2282,6 +2285,7 @@ type updateAccountSchedulerReq struct {
 	BaseConcurrencyOverride json.RawMessage `json:"base_concurrency_override"`
 	SkipWarmTier            json.RawMessage `json:"skip_warm_tier"`
 	KeepConcurrency         json.RawMessage `json:"keep_concurrency_on_degrade"`
+	ForceFast               json.RawMessage `json:"force_fast"`
 	AllowedAPIKeyIDs        json.RawMessage `json:"allowed_api_key_ids"`
 	Tags                    json.RawMessage `json:"tags"`
 	GroupIDs                json.RawMessage `json:"group_ids"`
@@ -2308,6 +2312,7 @@ type accountSchedulerUpdate struct {
 	BaseConcurrencyOverride database.OptionalNullInt64
 	SkipWarmTier            database.OptionalBool
 	KeepConcurrency         database.OptionalBool
+	ForceFast               database.OptionalBool
 	AllowedAPIKeyIDs        database.OptionalInt64Slice
 	Tags                    optionalStringSlice
 	GroupIDs                database.OptionalInt64Slice
@@ -2345,6 +2350,10 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		return accountSchedulerUpdate{}, err
 	}
 	keepConcurrency, err := parseOptionalBoolField(req.KeepConcurrency, auth.KeepConcurrencyOnDegradeCredentialKey)
+	if err != nil {
+		return accountSchedulerUpdate{}, err
+	}
+	forceFast, err := parseOptionalBoolField(req.ForceFast, auth.ForceFastCredentialKey)
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
@@ -2495,6 +2504,9 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if keepConcurrency.Set {
 		credentialUpdates[auth.KeepConcurrencyOnDegradeCredentialKey] = keepConcurrency.Value
 	}
+	if forceFast.Set {
+		credentialUpdates[auth.ForceFastCredentialKey] = forceFast.Value
+	}
 	if ignoreUsageLimitStatusOverride.Set {
 		if ignoreUsageLimitStatusOverride.Value == nil {
 			credentialUpdates["ignore_usage_limit_status_override"] = nil
@@ -2525,6 +2537,7 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		BaseConcurrencyOverride: baseConcurrencyOverride,
 		SkipWarmTier:            skipWarmTier,
 		KeepConcurrency:         keepConcurrency,
+		ForceFast:               forceFast,
 		AllowedAPIKeyIDs:        allowedAPIKeyIDs,
 		Tags:                    tags,
 		GroupIDs:                groupIDs,
@@ -2615,6 +2628,7 @@ func (u accountSchedulerUpdate) hasChanges() bool {
 		u.BaseConcurrencyOverride.Set ||
 		u.SkipWarmTier.Set ||
 		u.KeepConcurrency.Set ||
+		u.ForceFast.Set ||
 		u.AllowedAPIKeyIDs.Set ||
 		u.Tags.Set ||
 		u.GroupIDs.Set ||
@@ -2881,6 +2895,9 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 	}
 	if update.KeepConcurrency.Set {
 		h.store.ApplyAccountKeepConcurrencyOnDegrade(id, update.KeepConcurrency.Value)
+	}
+	if update.ForceFast.Set {
+		h.store.ApplyAccountForceFast(id, update.ForceFast.Value)
 	}
 	if update.AllowedAPIKeyIDs.Set {
 		h.store.ApplyAccountAllowedAPIKeys(id, update.AllowedAPIKeyIDs.Values)
@@ -9161,6 +9178,7 @@ func sanitizeAPIKeyLimits(in database.APIKeyLimits) database.APIKeyLimits {
 		AutoCompactOnOverflow:  in.AutoCompactOnOverflow,
 		AllowLive:              in.AllowLive,
 		ExternalScheduler:      in.ExternalScheduler,
+		ForceFast:              in.ForceFast,
 		UpstreamChannel:        in.ResolveUpstreamChannel(),
 		WebSchedulingMode:      in.WebSchedulingMode,
 		ScopeLimits:            database.NormalizeAPIKeyScopeLimits(in.ScopeLimits),

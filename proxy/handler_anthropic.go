@@ -712,7 +712,7 @@ func (h *Handler) Messages(c *gin.Context) {
 	h.activateAnthropicMessagesKeepalive(c.Request.Context(), nil, isStream)
 
 	reasoningEffort := extractReasoningEffort(routingBody)
-	serviceTier := extractServiceTier(routingBody)
+	clientTier := extractServiceTier(routingBody)
 	ruleIdentity := h.payloadRuleIdentity(c)
 	// 会话属于入站 Messages 协议，与选中的上游渠道无关。
 	sessionIdentity := resolveClaudeRequestSessionIdentity(c.Request.Header, rawBody)
@@ -853,6 +853,7 @@ func (h *Handler) Messages(c *gin.Context) {
 			log.Printf("上游 WebSocket 1009 后启动 HTTP 降级尝试 (fallback_id=%s, source=%s, attempt=%d, account=%d, endpoint=/v1/messages, ws_elapsed_ms=%d)", wsHTTPFallback.ID(), wsHTTPFallback.Source(), attempt+1, account.ID(), wsHTTPFallback.WSElapsed().Milliseconds())
 		}
 		isRelayAccount := account.IsRelayStyle()
+		serviceTier := clientTier
 		attemptEffectiveModel := effectiveModel
 		if foldAntigravityLogical && isRelayAccount && !account.IsAntigravityAPI() {
 			// A relay owns its declared logical model; gateway tier aliases are
@@ -901,8 +902,8 @@ func (h *Handler) Messages(c *gin.Context) {
 		readCtx := upstreamResponseReadContext(c.Request.Context(), upstreamCtx, continuousRetryPolicy)
 		upstreamCtx = context.WithValue(upstreamCtx, encryptedContentSessionKey{}, sessionIdentity.affinityID)
 		// 身份按 attempt 附加实际选中账号维度：account_* 门随重试换号重新匹配（issue #410）。
-		attemptIdentity := ruleIdentity.WithSelectedAccount(account, h.store)
-		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
+		policy := h.codexAttemptPolicy(c, ruleIdentity, account)
+		upstreamCtx = policy.withContext(upstreamCtx)
 		if account.IsClaudeOAuth() {
 			if claudeSessionID == "" {
 				claudeSessionID = claudeUpstreamSessionID(upstreamSessionID)
@@ -1046,7 +1047,7 @@ func (h *Handler) Messages(c *gin.Context) {
 				return
 			}
 			// service_tier 记账按 payload 规则改写后的值归因（仅 Codex 路径套用规则）。
-			serviceTier = EffectiveRequestedServiceTier(codexBody, attemptEffectiveModel, downstreamHeaders, attemptIdentity)
+			serviceTier = policy.requestedTier(codexBody, attemptEffectiveModel, downstreamHeaders)
 			upstreamCtx = WithCodexTurnStateAffinityKey(upstreamCtx, affinityKey)
 			guardCodexTurnStateEcho(affinityKey, account, downstreamHeaders)
 			resp, reqErr = executeHTTPWithContinuousRetryKeepalive(upstreamCtx, func() (*http.Response, error) {

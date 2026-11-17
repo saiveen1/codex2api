@@ -145,6 +145,7 @@ interface LimitsFormState {
   imageGenerationPolicy: ImageGenerationPolicy;
   allowLive: boolean;
   externalScheduler: boolean;
+  forceFast: boolean;
   upstreamChannel: UpstreamChannel;
   webSchedulingMode: NonNullable<APIKeyLimits["web_scheduling_mode"]>;
   scopeLimits: ScopeLimitFormState[];
@@ -268,6 +269,7 @@ const emptyLimitsForm: LimitsFormState = {
   imageGenerationPolicy: "allow",
   allowLive: false,
   externalScheduler: false,
+  forceFast: false,
   upstreamChannel: "auto",
   webSchedulingMode: "fill_first",
   scopeLimits: [],
@@ -2313,6 +2315,9 @@ export default function APIKeys() {
                 }
               />
             ) : null}
+            {supportsChatGPTLive(createForm.limits.upstreamChannel) ? (
+              <LimitSwitchField label={t("forceFast.label")} hint={t("forceFast.hint")} checked={createForm.limits.forceFast} onCheckedChange={(forceFast) => updateCreateForm({ limits: { ...createForm.limits, forceFast } })} />
+            ) : null}
             <LimitSwitchField
               label={t("apiKeys.limits.externalScheduler")}
               hint={t("apiKeys.limits.externalSchedulerHint")}
@@ -2522,6 +2527,9 @@ export default function APIKeys() {
                         })
                       }
                     />
+                  ) : null}
+                  {supportsChatGPTLive(editForm.limits.upstreamChannel) ? (
+                    <LimitSwitchField label={t("forceFast.label")} hint={t("forceFast.hint")} checked={editForm.limits.forceFast} onCheckedChange={(forceFast) => updateEditForm({ limits: { ...editForm.limits, forceFast } })} />
                   ) : null}
                   <LimitSwitchField
                     label={t("apiKeys.limits.externalScheduler")}
@@ -2798,6 +2806,7 @@ function limitsFromAPIKey(limits: APIKeyLimits | undefined): LimitsFormState {
     imageGenerationPolicy: resolveImageGenerationPolicy(limits),
     allowLive: Boolean(limits.allow_live),
     externalScheduler: Boolean(limits.external_scheduler),
+    forceFast: Boolean(limits.force_fast),
     webSchedulingMode: limits.web_scheduling_mode ?? "fill_first",
     upstreamChannel:
       limits.upstream_channel === "codex" ||
@@ -3074,6 +3083,7 @@ function limitsFormToPayload(form: LimitsFormState, t: Translator): APIKeyLimits
       form.imageGenerationPolicy === "block" || undefined,
     allow_live: supportsChatGPTLive(form.upstreamChannel) && form.allowLive,
     external_scheduler: form.externalScheduler || undefined,
+    force_fast: form.forceFast,
     upstream_channel:
       form.upstreamChannel === "auto" ? undefined : form.upstreamChannel,
     web_scheduling_mode: form.upstreamChannel === "chatgpt_web" ? form.webSchedulingMode : undefined,

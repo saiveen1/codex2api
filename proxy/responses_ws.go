@@ -751,8 +751,8 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		}
 		upstreamCtx, upstreamCancel := newDrainableUpstreamContext(c.Request.Context(), upstreamDrainTimeout)
 		// 身份按 attempt 附加实际选中账号维度：account_* 门随重试换号重新匹配（issue #410）。
-		attemptIdentity := ruleIdentity.WithSelectedAccount(account, h.store)
-		upstreamCtx = WithPayloadRuleIdentity(upstreamCtx, attemptIdentity)
+		policy := h.codexAttemptPolicy(c, ruleIdentity, account)
+		upstreamCtx = policy.withContext(upstreamCtx)
 		lastUpstreamCancel = upstreamCancel
 		ttftGuard := newFirstTokenTimeoutGuard(firstTokenTimeoutForRequest(currentFirstTokenTimeout(), bodySignalCompact), upstreamCancel)
 		useWebsocket := !wsHTTPFallback.ForceHTTP()
@@ -807,7 +807,11 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 			}
 		}
 		// service_tier 记账按 payload 规则改写后的值归因（覆写 service_tier 的规则才生效）。
-		serviceTier = EffectiveRequestedServiceTier(upstreamBody, effectiveModel, downstreamHeaders, attemptIdentity)
+		if account.IsOpenAIResponsesAPI() {
+			serviceTier = extractServiceTier(upstreamBody)
+		} else {
+			serviceTier = policy.requestedTier(upstreamBody, effectiveModel, downstreamHeaders)
+		}
 		// 在 useWebsocket 最终确定后再派生上游身份键：与 handler.go 的
 		// Responses/ChatCompletions 路径一致——无显式会话默认每请求隔离上游身份，
 		// WS 路径交给 ExecuteRequest 的 stateless 槽位池处理。

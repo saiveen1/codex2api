@@ -1795,6 +1795,31 @@ func TestSQLiteMigratesAccountGroupBaseConcurrencyOverride(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigratesAccountGroupForceFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-groups.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE account_groups (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	); INSERT INTO account_groups (name) VALUES ('legacy')`)
+	closeErr := legacy.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("create legacy group: exec=%v close=%v", err, closeErr)
+	}
+	db, err := New("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	groups, err := db.ListAccountGroups(t.Context())
+	if err != nil || len(groups) != 1 || groups[0].Name != "legacy" || groups[0].ForceFast {
+		t.Fatalf("legacy group must survive with force_fast=false: groups=%+v err=%v", groups, err)
+	}
+}
+
 func TestAccountGroupBaseConcurrencyOverrideCRUD(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 	db, err := New("sqlite", dbPath)
