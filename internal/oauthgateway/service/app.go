@@ -8,17 +8,22 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/codex2api/internal/oauthgateway/upstream"
 )
 
 type App struct {
-	store     Store
-	target    Target
-	allowHTTP bool
-	wake      chan struct{}
-	workMu    sync.Mutex
+	store      Store
+	target     Target
+	allowHTTP  bool
+	wake       chan struct{}
+	workMu     sync.Mutex
+	recoveryMu sync.Mutex
+	enabled    sync.Map
+	signals    sync.Map
+	closed     atomic.Bool
 }
 
 func New(store Store, target Target, allowHTTP bool) (*App, error) {
@@ -27,7 +32,7 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 	}
 	a := &App{store: store, target: target, allowHTTP: allowHTTP, wake: make(chan struct{}, 1)}
 	err := store.Update(func(s *State) error {
-		if (s.Version != 1 && s.Version != 2) || (s.Version == 1 && len(s.Archived) > 0) {
+		if (s.Version < 1 || s.Version > 3) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
 			return errors.New("unsupported encrypted state version")
 		}
 		if s.Settings.OAuthURL == "" {
@@ -37,8 +42,11 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 			s.Settings.OAuthURL = DefaultOAuthURL
 		}
 		for j := range s.Jobs {
-			// Older state can contain this flag; it never enables retention here.
-			s.Jobs[j].SaveCredentials = false
+			// Legacy flags were never consent to retention. V3 is a one-way,
+			// fail-closed migration: older binaries reject it rather than purge it.
+			if s.Version < 3 {
+				s.Jobs[j].SaveCredentials = false
+			}
 			for g := range s.Jobs[j].Groups {
 				group := &s.Jobs[j].Groups[g]
 				if group.Stage == "checking" {
@@ -57,6 +65,12 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 			}
 			purgeMaterials(&s.Jobs[j])
 		}
+		s.Version = 3
+		for _, r := range s.Recoveries {
+			if r.Enabled {
+				a.enabled.Store(r.Snapshot.AccountID, true)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -65,7 +79,11 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 	}
 	return a, nil
 }
-func (a *App) Close() error { return a.store.Close() }
+func (a *App) Close() error {
+	a.closed.Store(true)
+	a.signals.Range(func(key, _ any) bool { a.signals.Delete(key); return true })
+	return a.store.Close()
+}
 func (a *App) notify() {
 	select {
 	case a.wake <- struct{}{}:
@@ -80,7 +98,7 @@ func (a *App) settings() (Settings, error) {
 	return s.Settings, nil
 }
 func settingsView(s Settings) SettingsView {
-	return SettingsView{OAuthURL: s.OAuthURL, OAuthTokenSet: s.OAuthToken != "", Configured: s.OAuthURL != "" && s.OAuthToken != "", AutoRecoveryReason: "仅支持手动导入（manual import only）；不会因 401 自动重新授权或替换现有账号凭据（no automatic replacement）。"}
+	return SettingsView{OAuthURL: s.OAuthURL, OAuthTokenSet: s.OAuthToken != "", Configured: s.OAuthURL != "" && s.OAuthToken != "", AutoRecoverySupported: true, AutoRecoveryReason: "支持显式保管材料账号的受控原账号恢复；先尝试正常刷新，再核验 password_totp、原主体/工作区身份锁和凭据版本。未保管的历史账号不会自动启用，封禁或身份不可证明时需人工处理。"}
 }
 func (a *App) Settings() (SettingsView, error) { s, err := a.settings(); return settingsView(s), err }
 func (a *App) SaveSettings(next Settings) (SettingsView, error) {
@@ -238,6 +256,14 @@ func (a *App) Preview(ctx context.Context, in Input) (Preview, error) {
 	if e = compatible(cap); e != nil {
 		return p, e
 	}
+	if in.RecoveryAccountID > 0 {
+		if _, e = a.bindRecovery(ctx, in, groups); e != nil {
+			return p, e
+		}
+		if e = checkRecoveryCapability(cap); e != nil {
+			return p, e
+		}
+	}
 	for _, g := range groups {
 		if err := checkUploadSize(cap, g.Request); err != nil {
 			return p, err
@@ -284,6 +310,27 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 	if e != nil {
 		return JobView{}, false, e
 	}
+	// Preserve idempotent lookup even if the account was deleted after submit.
+	if state, err := a.store.View(); err != nil {
+		return JobView{}, false, err
+	} else {
+		for _, j := range state.Jobs {
+			if j.ID == in.RequestID && j.Fingerprint == fp {
+				return jobView(j), true, nil
+			}
+		}
+		for _, j := range state.Archived {
+			if j.ID == in.RequestID && j.Fingerprint == fp {
+				return archiveView(j), true, nil
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recovery, e := a.bindRecovery(ctx, in, groups)
+	if e != nil {
+		return JobView{}, false, e
+	}
 	var view JobView
 	existing := false
 	e = a.store.Update(func(s *State) error {
@@ -321,6 +368,9 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 		}
 		active := 0
 		for _, j := range s.Jobs {
+			if recovery != nil && j.Recovery != nil && recovery.AccountID == j.Recovery.AccountID && recoveryInFlight(j) {
+				return fault(409, "account_busy", "原账号已有未解决的恢复任务，请处理原任务。")
+			}
 			v := jobView(j)
 			if v.CanRefresh || v.CanRetryImport {
 				active++
@@ -345,6 +395,14 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 		}
 		now := time.Now().UTC()
 		job := Job{ID: in.RequestID, Fingerprint: fp, Settings: s.Settings, Groups: groups, GroupIDs: sortedGroups(in.GroupIDs), RuntimeProxy: in.RuntimeProxy, CreatedAt: now, UpdatedAt: now}
+		job.SaveCredentials, job.Recovery = in.SaveCredentials, recovery
+		if recovery != nil {
+			for _, r := range s.Recoveries {
+				if r.Snapshot.AccountID == recovery.AccountID && r.Enabled {
+					job.RecoveryEpoch = r.Epoch
+				}
+			}
+		}
 		s.Jobs = append(s.Jobs, job)
 		view = jobView(job)
 		return nil
@@ -398,6 +456,8 @@ func (a *App) changeJob(id string, change func(*Job) error) error {
 	})
 }
 func (a *App) Action(id, action string) (JobView, error) {
+	a.recoveryMu.Lock()
+	defer a.recoveryMu.Unlock()
 	e := a.changeJob(id, func(j *Job) error {
 		v := jobView(*j)
 		switch action {

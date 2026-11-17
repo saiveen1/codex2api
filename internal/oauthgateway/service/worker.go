@@ -9,6 +9,9 @@ import (
 )
 
 func (a *App) Run(ctx context.Context) error {
+	if a.closed.Load() {
+		return errors.New("task worker is closed")
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	a.notify()
@@ -33,12 +36,18 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) Step(ctx context.Context) (bool, error) {
 	a.workMu.Lock()
 	defer a.workMu.Unlock()
+	if a.closed.Load() {
+		return false, errors.New("task worker is closed")
+	}
 	if ctx.Err() != nil {
 		return false, nil
 	}
 	state, err := a.store.View()
 	if err != nil {
 		return false, err
+	}
+	if worked, err := a.stepRecovery(ctx, state); worked || err != nil {
+		return worked, err
 	}
 	now := time.Now()
 	for _, job := range state.Jobs {
@@ -279,6 +288,14 @@ func (a *App) prepare(ctx context.Context, o *upstream.OAuthClient, c Target, jo
 	if err = compatible(cap); err != nil {
 		return stop(err)
 	}
+	if job.Recovery != nil {
+		if err = checkRecoveryCapability(cap); err != nil {
+			return a.failGroup(job.ID, index, "needs_review", publicError(err))
+		}
+		if err = a.checkRecoveryJob(ctx, job); err != nil {
+			return a.failGroup(job.ID, index, "needs_review", publicError(err))
+		}
+	}
 	if err := checkUploadSize(cap, g.Request); err != nil {
 		return stop(err)
 	}
@@ -361,42 +378,81 @@ func (a *App) prepare(ctx context.Context, o *upstream.OAuthClient, c Target, jo
 	return a.acceptBatch(job, index, batch)
 }
 func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) error {
+	a.recoveryMu.Lock()
+	defer a.recoveryMu.Unlock()
+	if err := a.checkRecoveryJob(ctx, job); err != nil {
+		return a.mutateGroup(job.ID, index, func(g *Group) {
+			g.Deliveries[d].State = "import_rejected"
+			g.Deliveries[d].Account = nil
+			g.Deliveries[d].Error = publicError(err)
+		})
+	}
 	delivery := job.Groups[index].Deliveries[d]
 	if err := a.mutateGroup(job.ID, index, func(g *Group) { g.Deliveries[d].State = "importing" }); err != nil {
 		return err
 	}
-	result, err := c.Import(ctx, delivery.Account, job.GroupIDs, job.RuntimeProxy)
+	var result upstream.ImportResult
+	var importErr error
+	if job.Recovery != nil {
+		result, importErr = a.target.(RecoveryTarget).Recover(ctx, *job.Recovery, delivery.Account, job.ID)
+	} else {
+		result, importErr = c.Import(ctx, delivery.Account, job.GroupIDs, job.RuntimeProxy)
+	}
 	var remote *upstream.Error
-	knownError := errors.As(err, &remote) && !remote.Uncertain
+	knownError := errors.As(importErr, &remote) && !remote.Uncertain
 	valid := validImportSummary(result)
-	accepted := valid && result.Failed == 0
-	return a.mutateGroup(job.ID, index, func(g *Group) {
-		item := &g.Deliveries[d]
-		g.NextCheck = time.Time{}
-		if accepted && (err == nil || knownError) {
-			item.State = "imported"
-			item.CreatedIDs = result.CreatedIDs
-			item.Account = nil
-			item.Error = nil
-			if err != nil {
-				item.Error = publicError(err)
+	accepted := valid && result.Failed == 0 && (importErr == nil || knownError)
+	var retained *Recovery
+	if accepted && job.SaveCredentials {
+		retained = a.retainRecovery(ctx, job, index, delivery, result)
+		if (retained == nil || retained.Error != nil) && importErr == nil {
+			importErr = LocalImportError("recovery_retention_failed")
+		}
+	}
+	err := a.store.Update(func(s *State) error {
+		for j := range s.Jobs {
+			if s.Jobs[j].ID != job.ID {
+				continue
 			}
-			return
-		}
-		item.State = "import_unknown"
-		item.Error = safeError("import_outcome_unknown", "codex", "manual_review")
-		if err != nil {
-			item.Error = publicError(err)
-		}
-		if knownError && valid && result.Failed == 1 {
-			item.State = "import_failed"
-			if local := localImportProblem(remote); local != nil && local.Action == "manual_review" {
-				item.State = "import_rejected"
+			g := &s.Jobs[j].Groups[index]
+			item := &g.Deliveries[d]
+			g.NextCheck = time.Time{}
+			if accepted {
+				item.State = "imported"
+				item.CreatedIDs = result.CreatedIDs
+				item.Account = nil
+				item.Error = nil
+				if importErr != nil {
+					item.Error = publicError(importErr)
+				}
+				if retained != nil {
+					registerRecovery(s, *retained, job.AutoRecovery)
+				}
+			} else {
+				item.State = "import_unknown"
+				item.Error = safeError("import_outcome_unknown", "codex", "manual_review")
+				if importErr != nil {
+					item.Error = publicError(importErr)
+				}
+				if knownError && valid && result.Failed == 1 {
+					item.State = "import_failed"
+					if local := localImportProblem(remote); local != nil && local.Action == "manual_review" {
+						item.State = "import_rejected"
+					}
+				} else {
+					g.Stage = "needs_review"
+				}
 			}
-		} else {
-			g.Stage = "needs_review"
+			purgeMaterials(&s.Jobs[j])
+			s.Jobs[j].UpdatedAt = time.Now().UTC()
+			return nil
 		}
+		return fault(404, "not_found", "任务不存在。")
 	})
+	if err == nil && retained != nil {
+		a.enabled.Store(retained.Snapshot.AccountID, true)
+	}
+	return err
 }
 
 // This validation belonged to the removed HTTP target; keep it at the injected boundary.

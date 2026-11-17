@@ -41,3 +41,26 @@ test('only the opaque request ID survives navigation and invalid stored IDs are 
     else globalThis.sessionStorage = previous
   }
 })
+
+test('retention and an explicit recovery target survive preview submission unchanged', () => {
+  const input = { source_text: 'a----p----t', options: { proxy_mode: 'system' }, group_ids: [], save_credentials: true, recovery_account_id: 42 }
+  assert.deepEqual(createSubmission(input, 'repair-1'), { ...input, request_id: 'repair-1' })
+  assert.equal(input.request_id, undefined)
+})
+
+test('unavailable storage prevents submission but cannot undo a confirmed acceptance', () => {
+  const previous = globalThis.sessionStorage
+  globalThis.sessionStorage = {
+    getItem: () => { throw new Error('blocked') },
+    setItem: () => { throw new Error('blocked') },
+    removeItem: () => { throw new Error('blocked') },
+  }
+  try {
+    assert.equal(readPendingRequest(), null)
+    assert.throws(() => rememberPendingRequest('request-1'), /blocked/)
+    assert.doesNotThrow(() => forgetPendingRequest())
+  } finally {
+    if (previous === undefined) delete globalThis.sessionStorage
+    else globalThis.sessionStorage = previous
+  }
+})

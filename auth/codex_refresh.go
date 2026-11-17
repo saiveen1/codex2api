@@ -20,6 +20,7 @@ func (s *Store) SetCodexOAuthKeepalive(enabled bool) { s.codexOAuthKeepalive.Sto
 // rotating RT. Persist before publishing, and retry the persistence operation
 // (not OAuth) when the database temporarily fails.
 func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force bool) error {
+	receipt, _ := ctx.Value(oauthRecoveryRefreshReceiptKey{}).(*oauthRecoveryRefreshReceipt)
 	var lease *oauthRefreshLease
 	for retries := 0; ; retries++ {
 		if retries >= 4 {
@@ -144,9 +145,10 @@ func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force boo
 			if reloadErr == nil && changed && usable {
 				return s.publishCodexRefresh(ctx, acc)
 			}
+			s.notifyOAuthRecoveryRefreshFailure(acc, generation, err)
 			s.markPermanentRefreshFailure(acc, errors.New(message))
 		}
-		return errors.New(message)
+		return fmt.Errorf("%s: %w", message, err)
 	}
 	updates := codexRefreshedCredentials(acc, td, info, warning)
 	s.hydrateCodexRefreshedWorkspace(ctx, acc, td, updates, proxyURL)
@@ -186,6 +188,10 @@ func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force boo
 			message := "新 Token 保存失败，已停止重复消费旧 RT；请重新授权导入凭据"
 			s.MarkError(acc, message)
 			return fmt.Errorf("%s: %w", message, err)
+		}
+		if receipt != nil && containsCodexRefreshID(publishedIDs, dbID) {
+			receipt.attemptID, receipt.generation = attempt.ID, attempt.Generations[dbID]
+			receipt.accessToken, receipt.refreshToken = td.AccessToken, td.RefreshToken
 		}
 	} else if s.db != nil {
 		// Session-token-only accounts do not consume an OAuth RT.

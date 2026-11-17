@@ -10,11 +10,13 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/oauthgateway/service"
 	"github.com/codex2api/internal/oauthgateway/upstream"
@@ -52,6 +54,9 @@ func (h *Handler) StartOAuthGateway(ctx context.Context) {
 		}
 		runtime := &oauthGatewayRuntime{app: app, slots: make(chan struct{}, 8)}
 		h.oauthGateway = runtime
+		if h.store != nil {
+			h.store.SetOAuthRecoveryHooks(&auth.OAuthRecoveryHooks{Enabled: app.RecoveryEnabled, Signal: app.RequestRecovery})
+		}
 		h.oauthGatewayWG.Add(1)
 		go func() {
 			defer h.oauthGatewayWG.Done()
@@ -187,6 +192,8 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 		data, err = app.Quota(ctx)
 	case method == "GET" && path == "groups":
 		data, err = app.Groups(ctx)
+	case method == "GET" && path == "recovery":
+		data, err = app.Recoveries()
 	case method == "POST" && path == "connections/test":
 		var empty struct{}
 		if !decodeOAuthGatewayJSON(c, &empty) {
@@ -206,7 +213,12 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 		if !decodeOAuthGatewayJSON(c, &input) {
 			return
 		}
-		if err = h.validateOAuthGatewayDestination(ctx, input.GroupIDs, input.RuntimeProxy); err != nil {
+		if input.RecoveryAccountID > 0 {
+			if len(input.GroupIDs) > 0 || input.RuntimeProxy != "" {
+				err = oauthGatewayFault(400, "invalid_recovery_destination", "修复原账号不能更改分组或运行代理。")
+				break
+			}
+		} else if err = h.validateOAuthGatewayDestination(ctx, input.GroupIDs, input.RuntimeProxy); err != nil {
 			break
 		}
 		if path == "preview" {
@@ -227,7 +239,19 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 		}
 	default:
 		parts := strings.Split(path, "/")
-		if len(parts) == 2 && parts[0] == "jobs" && method == "GET" {
+		if len(parts) == 3 && parts[0] == "recovery" && parts[2] == "disable" && method == "POST" {
+			var empty struct{}
+			if !decodeOAuthGatewayJSON(c, &empty) {
+				return
+			}
+			id, parseErr := strconv.ParseInt(parts[1], 10, 64)
+			if parseErr != nil || id <= 0 {
+				err = oauthGatewayFault(400, "invalid_recovery_account", "恢复账号 ID 必须为正整数。")
+			} else {
+				err = app.DisableRecovery(id)
+				data = struct{}{}
+			}
+		} else if len(parts) == 2 && parts[0] == "jobs" && method == "GET" {
 			data, err = app.Job(parts[1])
 		} else if len(parts) == 3 && parts[0] == "jobs" && method == "POST" {
 			if parts[2] == "archive" {

@@ -52,16 +52,18 @@ type InputAccount struct {
 	Proxy      json.RawMessage `json:"proxy,omitempty"`
 }
 type Input struct {
-	RequestID       string           `json:"request_id,omitempty"`
-	SourceText      string           `json:"source_text,omitempty"`
-	Accounts        []InputAccount   `json:"accounts,omitempty"`
-	Options         upstream.Options `json:"options"`
-	GroupIDs        []int64          `json:"group_ids"`
-	SaveCredentials bool             `json:"save_credentials"`
-	RuntimeProxy    string           `json:"runtime_proxy,omitempty"`
+	RequestID         string           `json:"request_id,omitempty"`
+	SourceText        string           `json:"source_text,omitempty"`
+	Accounts          []InputAccount   `json:"accounts,omitempty"`
+	Options           upstream.Options `json:"options"`
+	GroupIDs          []int64          `json:"group_ids"`
+	SaveCredentials   bool             `json:"save_credentials"`
+	RuntimeProxy      string           `json:"runtime_proxy,omitempty"`
+	RecoveryAccountID int64            `json:"recovery_account_id,omitempty"`
 }
 type PreviewRow struct {
 	Line             int    `json:"line"`
+	Identifier       string `json:"identifier"`
 	IdentifierMasked string `json:"identifier_masked"`
 	ProxyMode        string `json:"proxy_mode"`
 }
@@ -94,25 +96,30 @@ type Group struct {
 	ReadFailures  int                    `json:"read_failures,omitempty"`
 }
 type Job struct {
-	ID              string    `json:"id"`
-	Fingerprint     string    `json:"fingerprint"`
-	Settings        Settings  `json:"settings"`
-	Groups          []Group   `json:"groups"`
-	GroupIDs        []int64   `json:"group_ids"`
-	SaveCredentials bool      `json:"save_credentials"`
-	RuntimeProxy    string    `json:"runtime_proxy,omitempty"`
-	CancelRequested bool      `json:"cancel_requested"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string            `json:"id"`
+	Fingerprint     string            `json:"fingerprint"`
+	Settings        Settings          `json:"settings"`
+	Groups          []Group           `json:"groups"`
+	GroupIDs        []int64           `json:"group_ids"`
+	SaveCredentials bool              `json:"save_credentials"`
+	RuntimeProxy    string            `json:"runtime_proxy,omitempty"`
+	CancelRequested bool              `json:"cancel_requested"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	Recovery        *RecoverySnapshot `json:"recovery,omitempty"`
+	RecoveryEpoch   int64             `json:"recovery_epoch,omitempty"`
+	AutoRecovery    bool              `json:"auto_recovery,omitempty"`
 }
 type State struct {
-	Version  int           `json:"version"`
-	Settings Settings      `json:"settings"`
-	Jobs     []Job         `json:"jobs"`
-	Archived []ArchivedJob `json:"archived,omitempty"`
+	Version    int           `json:"version"`
+	Settings   Settings      `json:"settings"`
+	Jobs       []Job         `json:"jobs"`
+	Archived   []ArchivedJob `json:"archived,omitempty"`
+	Recoveries []Recovery    `json:"recoveries,omitempty"`
 }
 type ItemView struct {
 	Line             int      `json:"line"`
+	Identifier       string   `json:"identifier"`
 	IdentifierMasked string   `json:"identifier_masked"`
 	State            string   `json:"state"`
 	ImportState      string   `json:"import_state"`
@@ -132,22 +139,24 @@ type GroupView struct {
 	NextCheckAt   *time.Time `json:"next_check_at,omitempty"`
 }
 type JobView struct {
-	ID               string      `json:"id"`
-	State            string      `json:"state"`
-	Total            int         `json:"total"`
-	Imported         int         `json:"imported"`
-	Failed           int         `json:"failed"`
-	Pending          int         `json:"pending"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
-	CanRefresh       bool        `json:"can_refresh"`
-	CanCancel        bool        `json:"can_cancel"`
-	CanRetryImport   bool        `json:"can_retry_import"`
-	Groups           []GroupView `json:"groups"`
-	CanArchive       bool        `json:"can_archive"`
-	RetainedMaterial bool        `json:"retained_material"`
-	Archived         bool        `json:"archived"`
-	ArchivedAt       *time.Time  `json:"archived_at,omitempty"`
+	ID                string      `json:"id"`
+	State             string      `json:"state"`
+	Total             int         `json:"total"`
+	Imported          int         `json:"imported"`
+	Failed            int         `json:"failed"`
+	Pending           int         `json:"pending"`
+	CreatedAt         time.Time   `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
+	CanRefresh        bool        `json:"can_refresh"`
+	CanCancel         bool        `json:"can_cancel"`
+	CanRetryImport    bool        `json:"can_retry_import"`
+	Groups            []GroupView `json:"groups"`
+	CanArchive        bool        `json:"can_archive"`
+	RetainedMaterial  bool        `json:"retained_material"`
+	Archived          bool        `json:"archived"`
+	ArchivedAt        *time.Time  `json:"archived_at,omitempty"`
+	RecoveryAccountID int64       `json:"recovery_account_id,omitempty"`
+	AutoRecovery      bool        `json:"auto_recovery,omitempty"`
 }
 
 // Problem is already sanitized; restoring it must not run a remote decoder.

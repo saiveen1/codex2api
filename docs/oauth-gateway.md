@@ -8,8 +8,9 @@
 
 1. 给 codex2api 进程配置稳定、足够随机的 `CODEX_CRED_ENCRYPTION_KEY`，然后重启。已有密钥不要更换；密钥丢失或更换会导致已加密的任务和账号凭据无法读取。此变量也启用项目原有的账号凭据加密，新写入使用加密，已有明文凭据仍可读取。
 2. 使用原有管理后台登录，进入 **OAuth 网关**。默认地址无需修改；输入网关的**客户 CDK（激活码）**，不是 codex2api 的 `ADMIN_SECRET`，也不是外部网关的管理员密钥。
-3. 保存后测试连接、读取能力和配额。CDK 直接作为 Bearer；推荐使用 CDK 而非会过期的短期会话。
-4. 粘贴或上传账号材料，设置代理和目标分组，先预检，再明确创建授权任务。
+3. 保存后页面自动读取能力、配额和本地 Codex 分组；也可测试连接或分别重试失败项。CDK 直接作为 Bearer；推荐使用 CDK 而非会过期的短期会话。刷新保留已选分组和授权选项。
+4. 粘贴或上传账号材料，设置代理和可选目标分组，先预检，再明确创建授权任务。修改材料或选项后需要重新预检，按钮旁会显示原因和下一步。
+5. 材料输入、预检和未归档任务显示完整账号标识。不要在不可信屏幕或录屏中展示密码/TOTP；明文显示不改变管理员鉴权、服务端加密和日志保护。
 
 Docker Compose 需要将该环境变量明确传入容器，例如在服务的 `environment` 下加入 `CODEX_CRED_ENCRYPTION_KEY: ${CODEX_CRED_ENCRYPTION_KEY}`。仅在宿主机设置变量而未传入容器，不会启用功能。不要把真实密钥、CDK 或账号材料提交到仓库。
 
@@ -37,22 +38,36 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 - 只自动重试原任务的 lookup/status/result 读取，连续失败的最短间隔为 5/10/20/30 秒，第五次失败停止并待核查。鉴权、配置及身份问题不盲重试。
 - 用户选择“重试导入”只处理已确认未写入的失败项，不触发新 OAuth。SQL 提交结果不明或重启时处于 `importing` 的项目保持 `import_unknown`，必须人工核对，不能盲重放。
 - 重复账号、结果类型错误或身份冲突标记为 `import_rejected`，不允许“重试导入”；可在明确确认丢弃授权结果后归档。它们不计为成功入库。
-- 已有相同 OAuth 身份或凭据路由的账号不会被覆盖；原账号的凭据、代理、分组、状态和历史保持不变。这不是自动恢复接口。
-- 终态任务会清除不再需要的密码、TOTP 和 OAuth 代理材料。结果未知的任务保留恢复查询所必需的加密材料；可安全归档时只保留统计和幂等指纹。需要清除剩余结果材料时明确确认。
+- 普通新增仍拒绝覆盖相同 OAuth 身份或凭据路由的已有账号。只有显式指定 `recovery_account_id` 的修复任务，才可在原主体、原工作区和凭据版本匹配时更新原账号；保留其主键、代理、分组、状态历史和统计。
+- 终态任务清除不再需要的密码、TOTP 和 OAuth 代理材料。只有显式选择 `save_credentials:true`，成功导入/修复后才另建加密恢复保管记录。归档任务不关闭恢复；请使用“停止恢复并清除材料”撤销保管。结果未知的任务只保留对账所需材料，不盲目重放。
 - 页面不将账号材料、密码、TOTP、CDK 或代理认证写入 localStorage/sessionStorage。只有未确认提交的非敏感本地请求 ID 存入当前标签页的 sessionStorage，用于离开页面后继续核对。关闭标签页前仍应记录原 ID；任务台账保留在服务端。
 - 更换外部网关地址必须重新输入对应凭证；任务保留它创建时明确选择的连接快照，不会默默换网关。HTTP 仅允许回环地址，外部地址使用 HTTPS；重定向不携带凭据跟随。
 
-### 本轮不包含
+## 受控原账号恢复
 
-**没有实现 401 自动重新授权、原账号凭据条件替换或自动恢复删除的账号。** 当前流程用于手动授权并新增账号，不修改现有 401 清理逻辑。未来恢复必须同时核验原主体、原工作区、凭据版本及清理协调，不能把所有 401 或所有永久刷新错误都视为可重新登录。
+三种操作互相区分：
 
-没有自动迁移独立桥接服务的旧加密状态、密钥或任务。旧系统若存在在途/未知结果，应先在那里对账；不要在新页面重新提交同一批真实账号。
+- **新增账号**：不填写原账号 ID；默认 `save_credentials:false`。重复账号仍被拒绝，不会顺便覆盖。
+- **修复已有账号**：填写“修复已有账号 ID”，只提供该账号的一条材料。不能提交目标分组或运行代理变更；原账号必须仍存在且 enabled，主体/工作区必须可证明。已删除、禁用、身份不符或凭据已被其他操作更新时拒绝回写。
+- **启用后续自动恢复**：明确勾选“成功后启用 401 自动恢复（加密保管密码和 TOTP）”。只保管本次成功账号的登录材料、授权选项和网关连接快照。历史任务不会因升级自动启用，已清除的密码/TOTP必须重新提供。
+
+启用后，严格识别凭据失效类 401 或永久 token 刷新错误；401 路径先尝试原有 refresh token/session token 刷新。只有确需重新授权才提交密码/TOTP，且网关必须声明 `password_totp`、`expected_identity_guard` 和原请求查询能力。通过普通授权接口携带 `expected_identity` 执行，不依赖外部网关自带自动恢复调度；不能以邮箱相同或 `team_preferred` 替代原主体/工作区校验。
+
+每个账号只允许一个在途恢复，自动授权最多三次，后续尝试至少冷却15分钟；失败、挑战、身份不能证明或结果未知进入人工核查，不把封禁、代理/网络故障、网关 CDK 鉴权失败、`missing_scope` 等一律当作可重登。新凭据通过原账号主键、generation、family和凭据指纹的条件事务写回；未知数据库提交保留 `import_unknown`，不重复写入。
+
+已保管账号不被 401/错误自动清理抢先删除。恢复 worker 故障停止不能撤销已知保管记录的清理保护；手动删除/禁用仍有效，后台不能自动复活。“停止恢复并清除材料”清除保管秘密、撤销未来恢复，已在途授权仍按原ID对账，但停止后的结果不能写回原账号。
+
+恢复记录可在页面查看 `ready`、`refreshing`、`pending`、`recovering`、`manual_review`、`disabled` 状态、尝试次数、关联任务和错误。非重试类失败需要人工纠正材料或账号状态；不能反复点新建任务替代对账。
+
+触发回调只写有界内存信号，以免阻塞模型请求或在账号锁内访问数据库；worker随后落盘。该极短窗口内进程崩溃可能丢失一次触发，后续同类失败可再次触发；已经落盘的任务和未知结果会在重启后继续核查。不自动迁移独立桥接服务的旧任务；旧系统的在途结果应先在那里对账。
 
 ## 存储与多实例
 
 任务及连接配置以随机 nonce 的 AES-GCM 密文保存在现有数据库的 `oauth_gateway_state` 单例行中，使用现有凭据加密根密钥的域分离派生密钥。数据库中不保存第二套账号池。SQLite 任务检查点在同一连接上使用 `synchronous=FULL`，在外部副作用前确认写入。
 
 当前模块为**单写入者**：数据库 owner 租约为 120 秒，worker 空闲时也续租；每次状态更新带 revision/owner 条件。另一个实例不会接管尚未过期的任务；失去所有权或写入结果不明后，旧实例停止继续工作。多副本环境请将此管理页请求固定路由到持有者实例。正常关闭释放租约；异常退出后待租约到期再重启选定实例，不通过删除状态行抢占。
+
+**升级/回退边界：** 当前加密状态格式为 v3，首次打开模块会将 v1/v2 安全升级；旧保存标记不视为用户保管授权。没有新增数据库表或 DDL，但旧二进制不能读取 v3，会拒绝启动 OAuth 模块，不能直接降级并假定恢复仍可用。部署前应确认这一持久状态格式变化；不要删除状态行或更换加密根来绕过。
 
 当前容量：最多 8 个未解决任务、200 个当前任务记录、10,000 个归档，状态明文编码上限 64 MiB。归档保留幂等指纹，同一 ID 的原请求不会重新授权。
 
@@ -62,19 +77,23 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET / PUT | `/settings` | 读取脱敏配置 / 保存 `{oauth_url,oauth_token}`；同地址 token 留空保留 |
+| GET / PUT | `/settings` | 读取非秘密配置/恢复能力 / 保存 `{oauth_url,oauth_token}`；同地址 token 留空保留 |
 | POST | `/connections/test` | `{}`，测试网关和本地账号分组访问 |
 | GET | `/capabilities`、`/quota`、`/groups` | 服务能力、配额、本地 Codex 分组 |
 | POST | `/proxy-check` | `{options}`，在外部 OAuth 执行机检查自带代理 |
 | POST | `/preview` | 本地与网关校验，不执行授权 |
 | POST | `/jobs` | 创建已确认任务；必填稳定 `request_id`，新建 202，幂等命中 200 |
-| GET | `/jobs`、`/jobs?archived=1`、`/jobs/{id}` | 当前任务、归档、单任务脱敏详情 |
+| GET | `/jobs`、`/jobs?archived=1`、`/jobs/{id}` | 当前任务、归档和详情；返回完整 `identifier`，不返回密码/TOTP/token |
 | POST | `/jobs/{id}/refresh` | `{}`，继续核查原任务 |
 | POST | `/jobs/{id}/cancel` | `{}`，请求取消，仍须确认在途结果 |
 | POST | `/jobs/{id}/retry-import` | `{}`，只重试已确认未写入的导入 |
 | POST | `/jobs/{id}/archive` | `{discard_credentials:boolean}`，安全归档 |
+| GET | `/recovery` | 恢复保管状态数组：账号 ID、完整标识、状态、尝试次数、下次检查、原任务及错误 |
+| POST | `/recovery/{account_id}/disable` | `{}`，停止恢复并清除保管秘密；成功返回 `{}` |
 
-`preview` / `jobs` 输入可选 `source_text` 或 `accounts`（二选一），另含 `options`、`group_ids`、`runtime_proxy`。`save_credentials:true` 被拒绝；本轮不提供长期保存登录材料用于自动重登的功能。
+`preview` / `jobs` 输入可选 `source_text` 或 `accounts`（二选一），另含 `options`、`group_ids`、`runtime_proxy`、boolean `save_credentials`（默认 false）和可选 `recovery_account_id`。指定修复 ID 时只能包含一条材料，`group_ids` 必须为空、`runtime_proxy` 必须留空。请求中的标识必须匹配原账号；无法安全对应手机号与原账号身份时转人工处理。
+
+`PreviewRow` / `ItemView` 返回完整 `identifier` 并保留旧 `identifier_masked` 字段供兼容。未归档历史任务可从本地请求记录取得完整标识；已归档任务不保留逐账号材料，不能还原已经清除的详情。恢复视图不包含密码/TOTP、网关令牌、代理认证或凭据指纹。
 
 ## 本地验证
 
@@ -82,7 +101,7 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 
 ```sh
 go test ./internal/oauthgateway/...
-go test ./database ./admin -run 'TestOAuthGateway'
+go test ./database ./admin ./auth ./proxy -run 'TestOAuth(Gateway|Recovery)'
 cd frontend
 npm run typecheck
 node --experimental-strip-types --test src/lib/oauthGateway.test.mjs

@@ -10,7 +10,8 @@ A personal fork of Codex2API, an OpenAI / Anthropic-compatible gateway. This REA
 
 - Import `identifier----password----TOTP_SECRET` or JSON material in the existing admin UI, authorize through an explicitly selected external gateway, and insert results directly into the local account pool. No separate bridge service is required.
 - Supports per-account OAuth proxies, execution-machine proxy checks, separate runtime proxies, durable task tracking and safe archives. Unknown outcomes never trigger a new authorization or a blind import retry.
-- Reuses administrator authentication and the application database; configure `CODEX_CRED_ENCRYPTION_KEY` before enabling. This release supports manual authorization for new accounts, not existing-account replacement or automatic 401 recovery.
+- Reuses administrator authentication and the application database; configure `CODEX_CRED_ENCRYPTION_KEY` before enabling. Ordinary imports never overwrite accounts. Explicitly target an existing account for repair and opt into encrypted material retention for identity-, workspace- and credential-version-guarded 401 recovery.
+- The page loads capabilities, quota and groups automatically, shows full account identifiers and explains disabled actions. Retention is off by default and can be explicitly revoked. Encrypted task state upgrades to v3; check compatibility before downgrading.
 
 See [Setup, API and limits](docs/oauth-gateway.md).
 

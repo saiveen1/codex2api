@@ -3981,6 +3981,7 @@ type Store struct {
 	tokenCache                         cache.TokenCache
 	oauthRefreshLocksMu                sync.Mutex
 	oauthRefreshLocks                  map[string]*oauthRefreshLocalLock
+	oauthRecovery                      atomic.Pointer[OAuthRecoveryHooks]
 	workspaceLinkedMu                  sync.Mutex                     // 工作区联动熔断进程内去重
 	workspaceLinkedRecent              map[string]workspaceLinkedMark // workspaceID → 去重窗口
 	apiKeyGroupsMu                     sync.RWMutex
@@ -12223,13 +12224,13 @@ func (s *Store) runAutoCleanupSweep(ctx context.Context) {
 	cleanedError := 0
 
 	if s.GetAutoCleanUnauthorized() {
-		cleanedUnauthorized = s.CleanByRuntimeStatus(cleanupCtx, "unauthorized")
+		cleanedUnauthorized = s.cleanByRuntimeStatusMatch(cleanupCtx, "unauthorized", func(acc *Account) bool { return !s.OAuthRecoveryProtected(acc.DBID) })
 	}
 	if s.GetAutoCleanRateLimited() {
 		cleanedRateLimited = s.CleanByRuntimeStatus(cleanupCtx, "rate_limited")
 	}
 	if s.GetAutoCleanError() {
-		cleanedError = s.CleanByRuntimeStatus(cleanupCtx, "error")
+		cleanedError = s.cleanByRuntimeStatusMatch(cleanupCtx, "error", func(acc *Account) bool { return !s.OAuthRecoveryProtected(acc.DBID) })
 	}
 
 	if cleanedUnauthorized > 0 || cleanedRateLimited > 0 || cleanedError > 0 {

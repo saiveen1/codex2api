@@ -1,6 +1,6 @@
 export type Problem = { code?: string; message?: string; source?: string; action?: string; retryable?: boolean; retry_after?: number; uncertain?: boolean }
 export type Account = { identifier: string; password: string; totp_secret: string; proxy?: string | Record<string, unknown> }
-export type GatewayInput = { source_text?: string; accounts?: Account[]; options: Record<string, string>; group_ids: number[]; save_credentials: false; runtime_proxy?: string; request_id?: string }
+export type GatewayInput = { source_text?: string; accounts?: Account[]; options: Record<string, string>; group_ids: number[]; save_credentials: boolean; runtime_proxy?: string; request_id?: string; recovery_account_id?: number }
 export function parseMaterial(source: string, format: 'txt' | 'json'): Account[] {
   if (new TextEncoder().encode(source).length > 1048576) throw new Error('Input exceeds 1 MiB')
   const text = source.replace(/^\uFEFF/, '')
@@ -46,5 +46,6 @@ export function rememberPendingRequest(id: string): void {
   sessionStorage.setItem(pendingRequestStorageKey, id)
 }
 export function forgetPendingRequest(): void {
-  sessionStorage.removeItem(pendingRequestStorageKey)
+  // A cleanup failure must not turn a confirmed acceptance into a new submission.
+  try { sessionStorage.removeItem(pendingRequestStorageKey) } catch { /* A stale ID can still be reconciled on return. */ }
 }

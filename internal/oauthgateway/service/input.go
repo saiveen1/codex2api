@@ -19,8 +19,11 @@ var secretPattern = regexp.MustCompile(`^[A-Z2-7]{16,64}$`)
 
 func normalize(in Input) ([]Group, Preview, error) {
 	p := Preview{Valid: true, Rows: []PreviewRow{}, Errors: []upstream.PreviewIssue{}}
-	if in.SaveCredentials {
-		return nil, p, fault(400, "save_credentials_unsupported", "仅支持手动导入，不能保留可重复登录的账密与 TOTP 材料。")
+	if in.RecoveryAccountID < 0 {
+		return nil, p, fault(400, "invalid_recovery_account", "恢复账号 ID 必须为正整数。")
+	}
+	if in.RecoveryAccountID > 0 && (len(in.GroupIDs) > 0 || in.RuntimeProxy != "") {
+		return nil, p, fault(400, "invalid_recovery_destination", "修复原账号不能更改分组或运行代理。")
 	}
 	if (in.SourceText != "") == (in.Accounts != nil) {
 		return nil, p, fault(400, "one_material_source_required", "请只提供 TXT 文本或结构化账号数组。")
@@ -49,6 +52,9 @@ func normalize(in Input) ([]Group, Preview, error) {
 	}
 	if len(accounts) == 0 || len(accounts) > 100 {
 		return nil, p, fault(400, "invalid_accounts", "每次任务需要 1–100 个账号。")
+	}
+	if in.RecoveryAccountID > 0 && len(accounts) != 1 {
+		return nil, p, fault(400, "invalid_recovery_material", "修复原账号必须只提供一份账号材料。")
 	}
 	if len(in.GroupIDs) > 100 {
 		return nil, p, fault(400, "invalid_groups", "选择的分组过多。")
@@ -125,7 +131,7 @@ func normalize(in Input) ([]Group, Preview, error) {
 		groups[idx].Request.Accounts = append(groups[idx].Request.Accounts, upstream.Account{Identifier: identifier, Password: account.Password, TOTPSecret: secret})
 		groups[idx].Lines = append(groups[idx].Lines, line)
 		groups[idx].Masks = append(groups[idx].Masks, mask(identifier))
-		p.Rows = append(p.Rows, PreviewRow{Line: line, IdentifierMasked: mask(identifier), ProxyMode: itemOptions.ProxyMode})
+		p.Rows = append(p.Rows, PreviewRow{Line: line, Identifier: identifier, IdentifierMasked: mask(identifier), ProxyMode: itemOptions.ProxyMode})
 	}
 	p.Count = len(accounts)
 	p.Groups = len(groups)

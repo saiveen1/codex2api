@@ -20,8 +20,8 @@ func TestArchiveRetainsIdempotencyAcrossRestart(t *testing.T) {
 	if !v.CanArchive || v.RetainedMaterial {
 		t.Fatal("completed task not archivable or retained login material")
 	}
-	// Preserve the source discard-confirmation regression using legacy state;
-	// new requests cannot opt into credential retention in this integration.
+	// Preserve discard confirmation for unresolved task material; retained
+	// account recovery material is stored separately from the archived job.
 	if err := store.Update(func(s *State) error {
 		s.Jobs[0].SaveCredentials = true
 		s.Jobs[0].Groups[0].Request.Accounts[0].Password = " keep spaces "
@@ -37,7 +37,7 @@ func TestArchiveRetainsIdempotencyAcrossRestart(t *testing.T) {
 		t.Fatalf("archive outcome: %v", err)
 	}
 	state, err := a.store.View()
-	if err != nil || len(state.Jobs) != 0 || len(state.Archived) != 1 || state.Version != 2 {
+	if err != nil || len(state.Jobs) != 0 || len(state.Archived) != 1 || state.Version != 3 {
 		t.Fatal("archive did not compact durable state")
 	}
 	archivedJSON, _ := json.Marshal(state.Archived)

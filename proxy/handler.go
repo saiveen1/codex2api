@@ -9112,6 +9112,11 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 			return codex429Decision{}
 		}
 
+		if h.store.NotifyOAuthRecoveryUnauthorized(account, statusCode, body) {
+			h.store.MarkCooldownWithError(account, 5*time.Minute, "unauthorized", upstreamAccountErrorMessage(statusCode, body))
+			return codex429Decision{}
+		}
+
 		if h.store.GetAutoCleanUnauthorized() {
 			// 开启自动清理时，401 立即从号池删除
 			log.Printf("账号 %d 收到 401，立即清理", account.ID())

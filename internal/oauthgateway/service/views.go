@@ -2,6 +2,10 @@ package service
 
 func jobView(j Job) JobView {
 	v := JobView{ID: j.ID, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Groups: []GroupView{}}
+	if j.Recovery != nil {
+		v.RecoveryAccountID = j.Recovery.AccountID
+		v.AutoRecovery = j.AutoRecovery
+	}
 	review := false
 	allCancelled := true
 	allQueued := true
@@ -34,6 +38,9 @@ func jobView(j Job) JobView {
 		}
 		for i, line := range g.Lines {
 			item := ItemView{Line: line, IdentifierMasked: g.Masks[i], State: g.Stage, ImportState: "not_ready"}
+			if i < len(g.Request.Accounts) {
+				item.Identifier = g.Request.Accounts[i].Identifier
+			}
 			for _, remote := range g.Batch.Items {
 				if remote.Line == i+1 {
 					item.State = remote.State
