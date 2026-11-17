@@ -7,7 +7,7 @@ import socket
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from curl_cffi import CurlOpt
+from curl_cffi import CurlOpt, ffi, lib
 from curl_cffi.requests import AsyncSession
 
 from contract import SafeError
@@ -15,6 +15,17 @@ from contract import SafeError
 ASSET_HOSTS = frozenset({"chatgpt.com", "files.oaiusercontent.com", "oaiusercontent.com",
                          "oaidalleapiprodscus.blob.core.windows.net",
                          "prod-files-secure.s3.us-west-2.amazonaws.com"})
+
+
+def authenticated_asset_url(url):
+    """Only the authenticated same-origin image endpoint receives account ATs."""
+    try:
+        p = urlsplit(url)
+        return (p.scheme == "https" and p.hostname == "chatgpt.com" and p.port in {None, 443}
+                and p.path == "/backend-api/estuary/content" and not p.username and not p.password
+                and not p.fragment and "\\" not in url and not any(ord(c) < 33 for c in url))
+    except (TypeError, ValueError):
+        return False
 
 
 async def public_destination(url):
@@ -71,29 +82,41 @@ class CurlTransport:
 
     @asynccontextmanager
     async def open(self, method, url, *, headers, timeout, asset=False, **kwargs):
-        session = self.session
-        if asset:
-            host, addresses = await public_destination(url)
-            # Pin DNS to the validated address; curl_cffi rejects a python list
-            # for CONNECT_TO, and RESOLVE keeps the original host for TLS SNI.
-            # The original host also stays in the URL, so certificate checks
-            # still apply to the real name.
-            address = addresses[0]
-            target = f"[{address}]" if ":" in address else address
-            session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
-                                   proxy=self.proxy,
-                                   curl_options=self.options | {CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
-        response = None
+        session, response, connect_to = self.session, None, ffi.NULL
         try:
+            if asset:
+                host, addresses = await public_destination(url)
+                # Never propagate account credentials to storage origins or PUTs.
+                allowed_auth = method == "GET" and authenticated_asset_url(url)
+                headers = {k: v for k, v in headers.items()
+                           if k.lower() not in {"cookie", "proxy-authorization"}
+                           and (k.lower() != "authorization" or allowed_auth)}
+                address = addresses[0]
+                target = f"[{address}]" if ":" in address else address
+                # curl_cffi 0.15 handles RESOLVE lists but CONNECT_TO needs a
+                # native slist. Keep it alive until the isolated session closes.
+                connect_to = lib.curl_slist_append(ffi.NULL, f"{host}:443:{target}:443".encode())
+                if connect_to == ffi.NULL:
+                    raise SafeError("image_download_failed")
+                session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
+                                       proxy=self.proxy,
+                                       curl_options=self.options | {CurlOpt.CONNECT_TO: connect_to,
+                                                                   CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
             response = await session.request(method, url, headers=headers, timeout=timeout,
                                              allow_redirects=False, stream=True, **kwargs)
             check_status(response, asset)
             yield response
         finally:
-            if response is not None:
-                await response.aclose()
-            if asset:
-                await session.close()
+            try:
+                if response is not None:
+                    await response.aclose()
+            finally:
+                try:
+                    if asset and session is not self.session:
+                        await session.close()
+                finally:
+                    if connect_to != ffi.NULL:
+                        lib.curl_slist_free_all(connect_to)
 
     async def close(self):
         await self.session.close()

@@ -175,6 +175,10 @@ type chatGPTWebFailure struct {
 func (e *chatGPTWebFailure) Error() string { return chatGPTWebErrorMessage(e.code) }
 func chatGPTWebErrorMessage(code string) string {
 	switch code {
+	case "web_account_unavailable":
+		return "No eligible in-scope Web account is available: check a recent (under 30 minutes) Web observation, unchanged credentials/workspace/proxy, and available account capacity"
+	case "worker_protocol_error":
+		return "The Web worker event could not be validated or persisted; inspect the execution record before retrying"
 	case "auth_required":
 		return "ChatGPT Web authentication requires verification"
 	case "environment_challenge":
@@ -203,6 +207,8 @@ func chatGPTWebErrorMessage(code string) string {
 }
 func chatGPTWebSafeCode(code string) string {
 	switch code {
+	case "web_account_unavailable", "worker_protocol_error", "workspace_unavailable", "identity_mismatch":
+		return code
 	case "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "upstream_text_reply", "execution_conflict", "invalid_request":
 		return code
 	}

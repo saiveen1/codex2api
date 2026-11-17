@@ -119,10 +119,9 @@ class Script:
         if url in self.failures:
             raise self.failures[url]
         if kwargs.get("asset"):
-            # Downloads of signed assets need this account's bearer token
-            # (verified live: 403 without it, 200 with it). Uploads go to a
-            # pre-signed blob URL and must not carry it. Cookies are never sent.
-            if method == "GET":
+            # Same-origin content GETs authenticate; external signed storage
+            # URLs and uploads must not receive account credentials.
+            if method == "GET" and url.startswith("https://chatgpt.com/backend-api/estuary/content?"):
                 assert kwargs["headers"].get("Authorization", "").startswith("Bearer ")
             else:
                 assert "Authorization" not in kwargs["headers"]

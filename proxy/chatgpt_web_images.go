@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/openaiidentity"
+	"github.com/codex2api/internal/webasset"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/sjson"
 )
@@ -131,7 +134,7 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 		h.AcquireAPIKeyScopeConcurrency(c, account)
 		return account, &state, proxyURL, nil
 	}
-	return nil, nil, "", errors.New("no verified, in-scope ChatGPT Web account is available; check web environment and quota")
+	return nil, nil, "", &chatGPTWebFailure{"web_account_unavailable", http.StatusServiceUnavailable, false}
 }
 
 func writeChatGPTWebError(c *gin.Context, err error, executionID string) {
@@ -312,6 +315,7 @@ func (h *Handler) saveChatGPTWebStage(ctx context.Context, execution *database.C
 	next.Stage = stage
 	ok, err := h.db.SaveChatGPTWebExecution(ctx, &next, expected)
 	if err != nil || !ok {
+		log.Printf("[ChatGPTWebExecution] stage=%s save_failed=%t error=%v", stage, !ok, err)
 		return errors.New("web execution state could not be persisted")
 	}
 	*execution = next
@@ -319,8 +323,13 @@ func (h *Handler) saveChatGPTWebStage(ctx context.Context, execution *database.C
 }
 
 func webOpaqueID(value string) string {
-	if len(value) > 200 || strings.ContainsAny(value, "?&#\r\n\x00") || strings.Contains(value, "https://") || strings.Contains(value, "http://") {
+	if len(value) > 160 {
 		return ""
+	}
+	for _, c := range value {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return ""
+		}
 	}
 	return value
 }
@@ -498,26 +507,38 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			default:
 				return result, &chatGPTWebFailure{"submission_unknown", 502, true}
 			}
-			if id := webOpaqueID(event.ConversationID); id != "" {
-				execution.ConversationID = id
+			// Validate before mutating the snapshot: an invalid event must not
+			// poison the subsequent failure-record save.
+			if (event.ConversationID != "" && webOpaqueID(event.ConversationID) == "") || (event.TaskID != "" && webOpaqueID(event.TaskID) == "") {
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
-			if id := webOpaqueID(event.TaskID); id != "" {
-				execution.TaskID = id
+			next := *execution
+			next.AssetIDs = slices.Clone(execution.AssetIDs)
+			if event.ConversationID != "" {
+				next.ConversationID = event.ConversationID
+			}
+			if event.TaskID != "" {
+				next.TaskID = event.TaskID
 			}
 			for _, id := range event.AssetIDs {
-				if safe := webOpaqueID(id); safe != "" && len(execution.AssetIDs) < 8 {
-					execution.AssetIDs = append(execution.AssetIDs, safe)
+				if !webasset.Valid(id) {
+					return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
+				}
+				if !slices.Contains(next.AssetIDs, id) {
+					next.AssetIDs = append(next.AssetIDs, id)
 				}
 			}
-			// Recovery may replay earlier facts; never regress the durable stage.
+			if len(next.AssetIDs) > 8 {
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
+			}
+			// Replay may add known IDs, but cannot regress the durable stage.
 			if chatGPTWebStageRank(stage) < chatGPTWebStageRank(execution.Stage) {
-				continue
+				stage = execution.Stage
 			}
-			if stage != execution.Stage {
-				if err := h.saveChatGPTWebStage(ctx, execution, stage); err != nil {
-					return result, &chatGPTWebFailure{"submission_unknown", 502, true}
-				}
+			if err := h.saveChatGPTWebStage(ctx, &next, stage); err != nil {
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
+			*execution = next
 			if err := chatGPTWebProgress(c, stream, req.ExecutionID, stage); err != nil {
 				return result, &chatGPTWebFailure{"submission_unknown", 502, true}
 			}
@@ -532,8 +553,8 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			if im.MIMEType != event.Image.MIMEType || im.Width != event.Image.Width || im.Height != event.Image.Height {
 				return result, &chatGPTWebFailure{"image_download_failed", 502, true}
 			}
-			assetID := webOpaqueID(event.Image.AssetID)
-			if assetID == "" {
+			assetID := event.Image.AssetID
+			if !webasset.Valid(assetID) {
 				return result, &chatGPTWebFailure{"image_download_failed", 502, true}
 			}
 			if len(execution.AssetIDs) == 0 {

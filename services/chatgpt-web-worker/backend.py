@@ -14,7 +14,7 @@ from PIL import Image
 from contract import ID, MAX_OUTPUT, SafeError, image_info, safe_id, valid_workspace
 from conversation import Conversation, sse_events
 from proof import Resources, proof_token, requirements_token
-from transport import CurlTransport, json_response, read_bounded
+from transport import CurlTransport, authenticated_asset_url, json_response, read_bounded
 
 BASE = "https://chatgpt.com"
 VERSION = "prod-a194cd50d4416d3c0b47c740f206b12ce60f5887"
@@ -266,9 +266,9 @@ class Backend:
                 path = "/backend-api/files/" + safe_id(asset) + "/download"
             resolved = await self.api("GET", path)
             url = resolved.get("download_url") or resolved.get("url")
-            # The signed asset URL still requires this account's bearer token;
-            # sending no headers made every download return 403.
-            asset_headers = {"Authorization": "Bearer " + self.raw["access_token"]}
+            # Only the ChatGPT same-origin content resolver needs the account AT.
+            # External pre-signed storage URLs must never receive credentials.
+            asset_headers = {"Authorization": "Bearer " + self.raw["access_token"]} if authenticated_asset_url(url) else {}
             async with self.transport.open("GET", url, headers=asset_headers, timeout=self.remaining(), asset=True) as response:
                 data = await read_bounded(response, MAX_OUTPUT)
             mime, width, height = image_info(data)

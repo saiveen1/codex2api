@@ -54,6 +54,21 @@ Execute response is `application/x-ndjson`, with one event per line:
 {"type":"completed","usage_known":false}
 ```
 
+Asset references are not HTTP URLs. Both gateway validation and persistence accept
+a bounded bare ID (`[A-Za-z0-9_-]{1,160}`) or `sediment://` followed by that ID.
+The prefix is preserved: it selects the authenticated attachment resolver and is
+not interchangeable with a bare file ID. Signed URLs, paths, traversal, query or
+fragment suffixes are rejected. Replayed asset references are deduplicated.
+Invalid events must not mutate the persisted execution snapshot; classified
+failure records and known conversation IDs remain available for diagnosis.
+
+Only an exact HTTPS `chatgpt.com:443/backend-api/estuary/content` download GET may
+receive the account bearer token. External pre-signed storage URLs and uploads
+receive no account Authorization/Cookie. The transport enforces this again and
+does not follow redirects. A native `curl_slist` pins CONNECT_TO through proxies
+while preserving TLS verification of the original hostname; its lifetime ends
+only after the isolated request session closes.
+
 Terminal error event:
 
 ```json

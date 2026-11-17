@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/codex2api/internal/openaiidentity"
+	"github.com/codex2api/internal/webasset"
 	"github.com/google/uuid"
 )
 
@@ -410,7 +411,7 @@ func validateChatGPTWebExecution(e *ChatGPTWebExecution) error {
 		return errors.New("invalid chatgpt web execution metadata")
 	}
 	for _, id := range e.AssetIDs {
-		if !chatGPTWebSafeID(id, false) {
+		if !webasset.Valid(id) {
 			return errors.New("invalid chatgpt web asset ID")
 		}
 	}
