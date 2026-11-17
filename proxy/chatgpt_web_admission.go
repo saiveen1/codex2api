@@ -51,10 +51,25 @@ func chatGPTWebAutoCheckNeeded(state *database.ChatGPTWebAccountState, operation
 	if state == nil {
 		return true
 	}
-	if !state.Enabled || (state.LastCheckErrorCode != "" && state.LastCheckAt != nil && now.Sub(*state.LastCheckAt) < 2*time.Minute) {
+	if !state.Enabled {
+		return false
+	}
+	if state.RejectedCredentialRevision != "" {
+		if state.RejectedCredentialRevision == chatGPTWebHash(token) {
+			return false
+		}
+		// Rotated credentials need a real check, not the old credential's cooldown.
+		if state.LastCheckErrorCode == "auth_required" || state.LastCheckErrorCode == "identity_mismatch" {
+			return true
+		}
+	}
+	if state.LastCheckErrorCode != "" && state.LastCheckAt != nil && now.Sub(*state.LastCheckAt) < 2*time.Minute {
 		return false
 	}
 	matches := !expired && chatGPTWebStateMatches(*state, token, requested, proxyURL)
+	if matches && state.Status == "quota_exhausted" && state.QuotaResetAt != nil && state.QuotaResetAt.After(now) {
+		return false
+	}
 	if matches && chatGPTWebStateReady(*state, operation, now) {
 		return false // Busy ready accounts must not be probed again.
 	}
@@ -183,7 +198,7 @@ func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model str
 		if err != nil {
 			return nil, chatGPTWebAdmissionUnavailable()
 		}
-		if !auth.ChatGPTWebOAuthAccountEligible(current) || !current.Enabled || current.Locked || current.Status == "error" {
+		if !auth.ChatGPTWebAutoAccountEligible(current, time.Now()) {
 			return nil, chatGPTWebAdmissionUnavailable()
 		}
 		groups, err := h.db.GetAccountGroupIDs(ctx, account.ID())

@@ -151,6 +151,12 @@ func TestChatGPTWebPrepareSelectedOnlyAttemptsAndBackoff(t *testing.T) {
 	if checks.Load() != 5 {
 		t.Fatalf("backoff did not advance fairly to untouched candidates: %d", checks.Load())
 	}
+	// Even without an earlier ready observation, rejected tokens stay skipped.
+	webAdmissionSQL(t, f, `UPDATE chatgpt_web_account_states SET last_check_at=? WHERE last_check_error_code='auth_required'`, time.Now().Add(-time.Hour).UnixNano())
+	_ = f.handler.prepareChatGPTWebAccounts(webAdmissionContext(f, t.Context()), "generate", "gpt-image-2")
+	if checks.Load() != 5 {
+		t.Fatal("retried previously rejected credentials")
+	}
 	// Explicit manual checks retain their behavior and are not backoff-gated.
 	setWebCheckFixture(t, f, func(w http.ResponseWriter, r *http.Request) { checks.Add(1); fmt.Fprint(w, webAdmissionReady) })
 	if _, err := f.handler.CheckChatGPTWebAccount(t.Context(), accounts[0].ID()); err != nil {
@@ -436,6 +442,11 @@ func TestChatGPTWebAutoCheckNeededEvidence(t *testing.T) {
 			s.Status = "quota_exhausted"
 			s.ImageQuotaRemaining = &zero
 			s.QuotaResetAt = &reset
+		}, "generate", false},
+		{"stale_zero_with_future_reset", func(s *database.ChatGPTWebAccountState) {
+			zero := 0
+			old, reset := now.Add(-time.Hour), now.Add(time.Hour)
+			s.Status, s.ImageQuotaRemaining, s.ObservedAt, s.QuotaResetAt = "quota_exhausted", &zero, &old, &reset
 		}, "generate", false},
 		{"reset_due", func(s *database.ChatGPTWebAccountState) {
 			zero := 0

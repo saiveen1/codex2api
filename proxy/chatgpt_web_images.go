@@ -113,14 +113,6 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 				h.store.Release(account)
 				return nil, nil, "", err
 			}
-			latest, readErr := h.db.GetChatGPTWebAccountState(c.Request.Context(), account.ID())
-			proxyURL, usable = h.store.ResolveChatGPTWebProxy(account)
-			token, requested, _, expired, identityErr = account.ChatGPTWebIdentity()
-			if readErr != nil || !usable || expired || identityErr != nil || !chatGPTWebStateReady(*latest, operation, time.Now()) || !chatGPTWebStateMatches(*latest, token, requested, proxyURL) {
-				h.store.Release(account)
-				continue
-			}
-			state = *latest
 		}
 		acquired, err := h.db.AcquireChatGPTWebAccountLease(c.Request.Context(), state.AccountID, owner, until)
 		if err != nil {
@@ -131,8 +123,27 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 			h.store.Release(account)
 			continue
 		}
+		// Re-read after acquiring the lease: a preceding owner may have just
+		// recorded an authentication failure against our earlier ready snapshot.
+		ctx := c.Request.Context()
+		latest, readErr := h.db.GetChatGPTWebAccountState(ctx, account.ID())
+		row, accountErr := h.db.GetAccountByID(ctx, account.ID())
+		paused, pauseErr := h.db.IsIntelligenceCheckPaused(ctx, account.ID())
+		proxyURL, usable = h.store.ResolveChatGPTWebProxy(account)
+		token, requested, _, expired, identityErr = account.ChatGPTWebIdentity()
+		if !usable || expired || identityErr != nil || readErr != nil || accountErr != nil || pauseErr != nil || paused || !auth.ChatGPTWebAutoAccountEligible(row, time.Now()) ||
+			row.GetCredential("access_token") != token || !chatGPTWebStateReady(*latest, operation, time.Now()) || !chatGPTWebStateMatches(*latest, token, requested, proxyURL) {
+			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			releaseErr := h.db.ReleaseChatGPTWebAccountLease(cleanup, account.ID(), owner)
+			cancel()
+			h.store.Release(account)
+			if readErr != nil || accountErr != nil || pauseErr != nil || releaseErr != nil {
+				return nil, nil, "", errors.New("web account validation unavailable")
+			}
+			continue
+		}
 		h.AcquireAPIKeyScopeConcurrency(c, account)
-		return account, &state, proxyURL, nil
+		return account, latest, proxyURL, nil
 	}
 	return nil, nil, "", &chatGPTWebFailure{"web_account_unavailable", http.StatusServiceUnavailable, false}
 }
@@ -439,15 +450,12 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			}
 			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			_ = h.saveChatGPTWebStage(cleanup, execution, stage)
-			if code == "auth_required" || code == "quota_exhausted" || code == "environment_challenge" {
-				updated := *state
-				updated.ErrorCode = code
-				updated.Capabilities = nil
-				updated.Status = map[string]string{"auth_required": "auth_required", "quota_exhausted": "quota_exhausted", "environment_challenge": "challenge"}[code]
-				observed := time.Now().UTC()
-				updated.ObservedAt = &observed
-				updated.LastCheckAt, updated.LastCheckStage, updated.LastCheckErrorCode = &observed, "complete", code
-				_, _ = h.db.SaveChatGPTWebAccountObservation(cleanup, &updated, token)
+			if code == "auth_required" || code == "identity_mismatch" || code == "workspace_unavailable" || code == "environment_challenge" || code == "quota_exhausted" {
+				// Worker NDJSON errors refer to this account; HTTP worker-secret
+				// failures do not. Preserve the last verified quota observation.
+				if _, err := h.db.RecordChatGPTWebCheckFailure(cleanup, state, token, chatGPTWebHash(requested), started, code, "execute", 0); err != nil {
+					log.Printf("[ChatGPTWeb] account_id=%d could not persist account failure code=%s", account.ID(), code)
+				}
 			}
 			cancel()
 		}

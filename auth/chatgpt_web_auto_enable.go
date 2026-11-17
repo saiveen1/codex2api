@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/openaiidentity"
 )
 
 // ChatGPTWebOAuthAccountEligible checks account shape, not token/quota readiness.
@@ -21,6 +22,30 @@ func ChatGPTWebOAuthAccountEligible(row *database.AccountRow) bool {
 	mode := strings.ToLower(strings.TrimSpace(row.GetCredential("auth_mode")))
 	return (upstream == "" || upstream == "codex") && (mode == "" || mode == "oauth") &&
 		row.GetCredential("api_key") == "" && row.GetCredential("base_url") == ""
+}
+
+// ChatGPTWebAutoAccountEligible checks persisted account fences for automatic use.
+// It does not replace the Web state, pause, authorization, cache or lease checks.
+func ChatGPTWebAutoAccountEligible(row *database.AccountRow, now time.Time) bool {
+	if !ChatGPTWebOAuthAccountEligible(row) || !row.Enabled || row.Locked ||
+		(row.Status != "active" && row.Status != "cooldown") ||
+		strings.TrimSpace(row.GetCredential("access_token")) == "" {
+		return false
+	}
+	if row.CooldownReason != "" && !chatGPTWebNativeCooldown(row.CooldownReason) {
+		return false
+	}
+	if row.Status == "cooldown" && !chatGPTWebNativeCooldown(row.CooldownReason) {
+		return false
+	}
+	if raw := strings.TrimSpace(row.GetCredential("expires_at")); raw != "" {
+		expires, err := time.Parse(time.RFC3339, raw)
+		if err != nil || (!expires.After(now) && strings.TrimSpace(row.GetCredential("refresh_token")) == "" && strings.TrimSpace(row.GetCredential("session_token")) == "") {
+			return false
+		}
+	}
+	_, err := openaiidentity.RequestedWebWorkspace(row.GetCredential("account_id"), row.GetCredentialStringMap("custom_headers"))
+	return err == nil
 }
 
 // ListChatGPTWebAccountStates initializes unconfigured members of explicitly
@@ -79,7 +104,14 @@ func ListChatGPTWebAccountStates(ctx context.Context, db *database.DB) ([]databa
 		if err != nil {
 			return nil, err
 		}
-		if !ChatGPTWebOAuthAccountEligible(row) || !row.Enabled {
+		if !ChatGPTWebAutoAccountEligible(row, now) {
+			continue
+		}
+		paused, err := db.IsIntelligenceCheckPaused(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if paused {
 			continue
 		}
 		groups, err := db.GetAccountGroupIDs(ctx, id)

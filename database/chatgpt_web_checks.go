@@ -17,6 +17,7 @@ func (db *DB) ensureChatGPTWebCheckSchema(ctx context.Context) error {
 		{"last_check_stage", "TEXT NOT NULL DEFAULT ''"},
 		{"last_check_error_code", "TEXT NOT NULL DEFAULT ''"},
 		{"last_check_http_status", "INTEGER NOT NULL DEFAULT 0"},
+		{"rejected_credential_revision", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, column := range columns {
 		if db.isSQLite() {
@@ -36,7 +37,7 @@ func requestedChatGPTWebWorkspace(creds map[string]any) (string, error) {
 
 func chatGPTWebCheckStage(stage string) bool {
 	switch stage {
-	case "", "admission", "bootstrap", "identity", "workspace", "quota", "persist", "complete":
+	case "", "admission", "bootstrap", "identity", "workspace", "quota", "persist", "complete", "execute":
 		return true
 	}
 	return false
@@ -73,11 +74,18 @@ func (db *DB) RecordChatGPTWebCheckFailure(ctx context.Context, state *ChatGPTWe
 				return nil
 			}
 		}
+		// Fence only a confirmed account rejection, not a worker-secret 401,
+		// timeout, or an unsuccessful attempt to refresh an expired token.
+		rejected := ""
+		if expectedAT != "" && ((code == "auth_required" && (upstreamStatus == 401 || stage == "execute")) || code == "identity_mismatch") {
+			rejected = chatGPTWebHash(expectedAT)
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET
 			status=CASE WHEN enabled THEN $3 ELSE status END, capabilities='[]', error_code=$4,
-			last_check_at=$5, last_check_stage=$6, last_check_error_code=$4, last_check_http_status=$7, updated_at=$8
+			last_check_at=$5, last_check_stage=$6, last_check_error_code=$4, last_check_http_status=$7, updated_at=$8,
+			rejected_credential_revision=CASE WHEN $9='' THEN rejected_credential_revision ELSE $9 END
 			WHERE account_id=$1 AND environment_revision=$2 AND (last_check_at IS NULL OR last_check_at <= $5) AND (observed_at IS NULL OR observed_at <= $5)`,
-			state.AccountID, state.EnvironmentRevision, status, code, checked.UnixNano(), stage, upstreamStatus, time.Now().UTC().UnixNano())
+			state.AccountID, state.EnvironmentRevision, status, code, checked.UnixNano(), stage, upstreamStatus, time.Now().UTC().UnixNano(), rejected)
 		if err != nil {
 			return err
 		}

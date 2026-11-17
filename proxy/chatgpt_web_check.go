@@ -279,6 +279,11 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	if err != nil || len(data) > 65536 {
 		return fail("worker_protocol_error", "admission", resp.StatusCode)
 	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// Non-2xx authentication is between the gateway and worker. Account
+		// authentication failures arrive as observations inside an HTTP 200.
+		return state, &ChatGPTWebCheckError{Code: "worker_unavailable", Stage: "admission", HTTPStatus: webCheckHTTPStatus("worker_unavailable")}
+	}
 	var observation struct {
 		Status              string     `json:"status"`
 		Capabilities        []string   `json:"capabilities"`

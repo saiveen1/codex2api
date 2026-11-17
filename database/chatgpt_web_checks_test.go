@@ -72,6 +72,7 @@ func TestChatGPTWebCheckSchemaUpgradePreservesAccount(t *testing.T) {
 		ALTER TABLE chatgpt_web_account_states DROP COLUMN last_check_at;
 		ALTER TABLE chatgpt_web_account_states DROP COLUMN last_check_stage;
 		ALTER TABLE chatgpt_web_account_states DROP COLUMN last_check_error_code;
+		ALTER TABLE chatgpt_web_account_states DROP COLUMN rejected_credential_revision;
 		ALTER TABLE chatgpt_web_account_states DROP COLUMN last_check_http_status`)
 	if err != nil {
 		t.Fatal(err)

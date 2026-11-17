@@ -49,6 +49,7 @@ type ChatGPTWebAccountState struct {
 	LastCheckStage              string     `json:"last_check_stage"`
 	LastCheckErrorCode          string     `json:"last_check_error_code"`
 	LastCheckHTTPStatus         int        `json:"last_check_http_status"`
+	RejectedCredentialRevision  string     `json:"-"` // Last rejected AT, independent of the last quota observation.
 }
 
 type ChatGPTWebExecution struct {
@@ -128,7 +129,7 @@ func (db *DB) ensureChatGPTWebSchema(ctx context.Context) error {
 	return err
 }
 
-const chatGPTWebStateColumns = `account_id, enabled, environment_revision, device_id, session_id, status, capabilities, image_quota_remaining, quota_reset_at, observed_at, credential_revision, proxy_fingerprint, workspace_fingerprint, error_code, updated_at, workspace_id, workspace_binding_fingerprint, last_check_at, last_check_stage, last_check_error_code, last_check_http_status`
+const chatGPTWebStateColumns = `account_id, enabled, environment_revision, device_id, session_id, status, capabilities, image_quota_remaining, quota_reset_at, observed_at, credential_revision, proxy_fingerprint, workspace_fingerprint, error_code, updated_at, workspace_id, workspace_binding_fingerprint, last_check_at, last_check_stage, last_check_error_code, last_check_http_status, rejected_credential_revision`
 const chatGPTWebExecutionColumns = `id, api_key_id, account_id, request_hash, credential_revision, environment_revision, proxy_fingerprint, workspace_fingerprint, operation, stage, conversation_id, task_id, asset_ids, error_code, result_unknown, lease_owner, lease_until, created_at, updated_at`
 
 type chatGPTWebScanner interface{ Scan(...any) error }
@@ -138,7 +139,7 @@ func scanChatGPTWebState(row chatGPTWebScanner) (*ChatGPTWebAccountState, error)
 	var caps string
 	var quota, reset, observed, checked sql.NullInt64
 	var updated int64
-	if err := row.Scan(&s.AccountID, &s.Enabled, &s.EnvironmentRevision, &s.DeviceID, &s.SessionID, &s.Status, &caps, &quota, &reset, &observed, &s.CredentialRevision, &s.ProxyFingerprint, &s.WorkspaceFingerprint, &s.ErrorCode, &updated, &s.WorkspaceID, &s.WorkspaceBindingFingerprint, &checked, &s.LastCheckStage, &s.LastCheckErrorCode, &s.LastCheckHTTPStatus); err != nil {
+	if err := row.Scan(&s.AccountID, &s.Enabled, &s.EnvironmentRevision, &s.DeviceID, &s.SessionID, &s.Status, &caps, &quota, &reset, &observed, &s.CredentialRevision, &s.ProxyFingerprint, &s.WorkspaceFingerprint, &s.ErrorCode, &updated, &s.WorkspaceID, &s.WorkspaceBindingFingerprint, &checked, &s.LastCheckStage, &s.LastCheckErrorCode, &s.LastCheckHTTPStatus, &s.RejectedCredentialRevision); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(caps), &s.Capabilities); err != nil {
@@ -363,7 +364,7 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET status=$3, capabilities=$4,
 			image_quota_remaining=$5, quota_reset_at=$6, observed_at=$7, credential_revision=$8, proxy_fingerprint=$9, workspace_fingerprint=$10, error_code=$11, updated_at=$12,
-			workspace_id=$13, workspace_binding_fingerprint=$14, last_check_at=$15, last_check_stage=$16, last_check_error_code=$17, last_check_http_status=$18
+			workspace_id=$13, workspace_binding_fingerprint=$14, last_check_at=$15, last_check_stage=$16, last_check_error_code=$17, last_check_http_status=$18, rejected_credential_revision=CASE WHEN $3 IN ('ready','quota_exhausted') THEN '' ELSE rejected_credential_revision END
 			WHERE account_id=$1 AND environment_revision=$2 AND enabled=TRUE AND (observed_at IS NULL OR observed_at < $7) AND (last_check_at IS NULL OR last_check_at <= $15)`,
 			s.AccountID, s.EnvironmentRevision, s.Status, string(encoded), s.ImageQuotaRemaining, chatGPTWebTimeArg(s.QuotaResetAt), observed.UnixNano(), revision, s.ProxyFingerprint, s.WorkspaceFingerprint, s.ErrorCode, now.UnixNano(), s.WorkspaceID, s.WorkspaceBindingFingerprint, checked.UnixNano(), s.LastCheckStage, s.LastCheckErrorCode, s.LastCheckHTTPStatus)
 		if err != nil {

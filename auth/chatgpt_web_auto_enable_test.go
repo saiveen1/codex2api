@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/codex2api/database"
+	ic "github.com/codex2api/internal/intelligencecheck"
 )
 
 func autoWebDB(t *testing.T) (*database.DB, int64) {
@@ -185,5 +186,131 @@ func TestChatGPTWebAutoEnableScopeBoundaries(t *testing.T) {
 				t.Fatal("out-of-scope state created", states)
 			}
 		})
+	}
+}
+
+func TestChatGPTWebAutoAccountEligible(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		change func(*database.AccountRow)
+		want   bool
+	}{
+		{"active", func(r *database.AccountRow) {}, true},
+		{"locked", func(r *database.AccountRow) { r.Locked = true }, false},
+		{"disabled", func(r *database.AccountRow) { r.Enabled = false }, false},
+		{"deleted", func(r *database.AccountRow) { r.DeletedAt = sql.NullTime{Valid: true, Time: now} }, false},
+		{"error", func(r *database.AccountRow) { r.Status = "error" }, false},
+		{"unknown status", func(r *database.AccountRow) { r.Status = "mystery" }, false},
+		{"non oauth", func(r *database.AccountRow) { r.Type = "apikey" }, false},
+		{"auth cooldown", func(r *database.AccountRow) {
+			r.CooldownReason = "unauthorized"
+			r.CooldownUntil = sql.NullTime{Valid: true, Time: now.Add(time.Hour)}
+		}, false},
+		{"unknown cooldown", func(r *database.AccountRow) { r.CooldownReason = "unknown" }, false},
+		{"native quota", func(r *database.AccountRow) {
+			r.CooldownReason = "rate_limited"
+			r.CooldownUntil = sql.NullTime{Valid: true, Time: now.Add(time.Hour)}
+		}, true},
+		{"native cooldown status", func(r *database.AccountRow) { r.Status = "cooldown"; r.CooldownReason = "dispatch_count_limit" }, true},
+		{"missing access", func(r *database.AccountRow) { r.Credentials["access_token"] = " " }, false},
+		{"expired", func(r *database.AccountRow) { r.Credentials["expires_at"] = now.Format(time.RFC3339) }, false},
+		{"expired refreshable", func(r *database.AccountRow) {
+			r.Credentials["expires_at"] = now.Format(time.RFC3339)
+			r.Credentials["refresh_token"] = "rt"
+		}, true},
+		{"expired session", func(r *database.AccountRow) {
+			r.Credentials["expires_at"] = now.Format(time.RFC3339)
+			r.Credentials["session_token"] = "st"
+		}, true},
+		{"future", func(r *database.AccountRow) { r.Credentials["expires_at"] = now.Add(time.Second).Format(time.RFC3339) }, true},
+		{"bad expiry", func(r *database.AccountRow) {
+			r.Credentials["expires_at"] = "bad"
+			r.Credentials["refresh_token"] = "rt"
+		}, false},
+		{"bad workspace", func(r *database.AccountRow) { r.Credentials["account_id"] = "bad workspace" }, false},
+		{"default workspace", func(r *database.AccountRow) { r.Credentials["account_id"] = "" }, true},
+		{"bad workspace header", func(r *database.AccountRow) {
+			r.Credentials["custom_headers"] = map[string]interface{}{"ChatGPT-Account-ID": "bad workspace"}
+		}, false},
+	}
+	if ChatGPTWebAutoAccountEligible(nil, now) {
+		t.Fatal("nil account eligible")
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := &database.AccountRow{ID: 1, Type: "oauth", Platform: "openai", Enabled: true, Status: "active", Credentials: map[string]interface{}{"access_token": "token", "account_id": "workspace"}}
+			tt.change(row)
+			if got := ChatGPTWebAutoAccountEligible(row, now); got != tt.want {
+				t.Fatalf("eligible = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChatGPTWebAutoEnableSkipsPaused(t *testing.T) {
+	db, group := autoWebDB(t)
+	ctx := t.Context()
+	id := autoWebAccount(t, db, group, nil)
+	if _, err := db.InsertAPIKeyWithOptions(ctx, database.APIKeyInput{Name: "web", Key: "pause-key", AllowedGroupIDs: []int64{group}, Limits: database.APIKeyLimits{UpstreamChannel: database.UpstreamChannelChatGPTWeb}}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Action, settings.DegradeThreshold = "pause", 1
+	if _, err = db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err = db.EnqueueIntelligenceChecks(ctx, []int64{id}, now); err != nil {
+		t.Fatal(err)
+	}
+	run, err := db.ClaimIntelligenceCheck(ctx, "worker", now, time.Minute)
+	if err != nil || run == nil {
+		t.Fatalf("claim: %v %v", run, err)
+	}
+	ok, err := db.FinishIntelligenceCheck(ctx, run.ID, "worker", ic.Observation{Complete: true, Output: "29", DurationMS: 1}, now.Add(time.Second))
+	if err != nil || !ok {
+		t.Fatalf("finish: %v %v", ok, err)
+	}
+	paused, err := db.IsIntelligenceCheckPaused(ctx, id)
+	if err != nil || !paused {
+		t.Fatalf("pause: %v %v", paused, err)
+	}
+	if states := autoWebStates(t, db); len(states) != 0 {
+		t.Fatalf("paused account initialized: %+v", states)
+	}
+}
+
+func TestChatGPTWebAutoEnableFiltersPersistedHealth(t *testing.T) {
+	db, group := autoWebDB(t)
+	ctx := t.Context()
+	if _, err := db.InsertAPIKeyWithOptions(ctx, database.APIKeyInput{Name: "web", Key: "health-key", AllowedGroupIDs: []int64{group}, Limits: database.APIKeyLimits{UpstreamChannel: database.UpstreamChannelChatGPTWeb}}); err != nil {
+		t.Fatal(err)
+	}
+	good := autoWebAccount(t, db, group, nil)
+	missing := autoWebAccount(t, db, group, map[string]any{"access_token": ""})
+	expired := autoWebAccount(t, db, group, map[string]any{"expires_at": time.Now().Add(-time.Hour).Format(time.RFC3339)})
+	recoverable := autoWebAccount(t, db, group, map[string]any{"expires_at": time.Now().Add(-time.Hour).Format(time.RFC3339), "refresh_token": "rt"})
+	unauthorized := autoWebAccount(t, db, group, nil)
+	quota := autoWebAccount(t, db, group, nil)
+	if err := db.SetCooldown(ctx, unauthorized, "unauthorized", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetCooldown(ctx, quota, "rate_limited", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	states := autoWebStates(t, db)
+	for _, id := range []int64{good, recoverable, quota} {
+		if !states[id].Enabled {
+			t.Fatalf("eligible account %d missing: %+v", id, states)
+		}
+	}
+	for _, id := range []int64{missing, expired, unauthorized} {
+		if _, ok := states[id]; ok {
+			t.Fatalf("ineligible account %d initialized: %+v", id, states)
+		}
 	}
 }
