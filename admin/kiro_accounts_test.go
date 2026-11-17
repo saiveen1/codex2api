@@ -124,3 +124,55 @@ func TestKiroAccountsAreNeverUnsampled(t *testing.T) {
 		t.Fatal("Kiro quota comes from the control plane, not 5h/7d windows; it must not count as unsampled")
 	}
 }
+
+func TestExportKiroKAMKeepsExternalIdPFields(t *testing.T) {
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, nil, nil)
+	t.Cleanup(store.Stop)
+	handler := &Handler{db: db, store: store}
+	id, err := db.InsertAccountWithUpstream(context.Background(), "entra", "kiro", auth.UpstreamKiro, map[string]any{
+		"upstream_type": auth.UpstreamKiro, "email": "e@example.com", "refresh_token": "rt-e", "kiro_auth_kind": auth.KiroAuthKindExternalIdP,
+		auth.KiroTokenEndpointCredentialKey: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token", auth.KiroIssuerURLCredentialKey: "https://login.microsoftonline.com/tenant/v2.0",
+		auth.KiroScopesCredentialKey: "openid offline_access", auth.KiroAPIRegionCredentialKey: "eu-central-1", auth.KiroClientIDCredentialKey: "client-e",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/kiro/export?ids="+strconv.FormatInt(id, 10), nil)
+	handler.ExportKiroAccounts(c)
+	items, err := parseKiroImport(recorder.Body.String())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("round trip: %v %s", err, recorder.Body.String())
+	}
+	got := items[0].Credential
+	if got.TokenEndpoint == "" || got.IssuerURL == "" || got.Scopes == "" || got.APIRegion != "eu-central-1" || items[0].RawAuthMethod != auth.KiroAuthKindExternalIdP {
+		t.Fatalf("KAM export dropped authentication fields: %+v", got)
+	}
+}
+
+func TestKiroAccountPageFiltersByAuthKindAndPlan(t *testing.T) {
+	for _, kind := range []string{auth.KiroAuthKindSocial, auth.KiroAuthKindIdC, auth.KiroAuthKindExternalIdP, auth.KiroAuthKindAPIKey} {
+		if err := validateAccountPageFilters(accountPageQuery{AuthKind: kind}); err != nil {
+			t.Fatalf("auth_kind=%s rejected: %v", kind, err)
+		}
+	}
+	student := &accountListSnapshotItem{PlanType: "KIRO STUDENT", KiroAuthKind: auth.KiroAuthKindIdC}
+	if !accountListItemMatches(student, accountPageQuery{Plan: "kiro student", AuthKind: auth.KiroAuthKindIdC}, database.UpstreamChannelKiro) {
+		t.Fatal("Kiro plan filter must match the normalized plan key")
+	}
+	if accountListItemMatches(student, accountPageQuery{Plan: "kiro pro"}, database.UpstreamChannelKiro) {
+		t.Fatal("a student account must not match the pro filter")
+	}
+	quarantined := &accountListSnapshotItem{KiroAuthKind: auth.KiroAuthKindSocial, HealthTier: "banned", Status: "active"}
+	cooling := &accountListSnapshotItem{KiroAuthKind: auth.KiroAuthKindSocial, HealthTier: "risky", Status: "unauthorized"}
+	summary, _ := summarizeAccountList([]*accountListSnapshotItem{student, quarantined, cooling}, database.UpstreamChannelKiro)
+	if summary.KiroAuthKinds[auth.KiroAuthKindIdC] != 1 || summary.KiroAuthKinds[auth.KiroAuthKindSocial] != 2 {
+		t.Fatalf("kiro_auth_kinds = %v", summary.KiroAuthKinds)
+	}
+	// 「已隔离」标签按健康档计数，点进去的 health_tier=banned 筛选才不会是空的。
+	if summary.HealthBanned != 1 || !accountListItemMatches(quarantined, accountPageQuery{HealthTier: "banned"}, database.UpstreamChannelKiro) {
+		t.Fatalf("health_banned = %d", summary.HealthBanned)
+	}
+}

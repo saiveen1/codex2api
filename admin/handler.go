@@ -1788,6 +1788,7 @@ type accountResponse struct {
 	KiroAuthKind                  string                      `json:"kiro_auth_kind,omitempty"`
 	KiroLoginSource               string                      `json:"kiro_login_source,omitempty"`
 	KiroUsage                     json.RawMessage             `json:"kiro_usage,omitempty"`
+	KiroPlan                      string                      `json:"kiro_plan,omitempty"`
 	ClaudeBaseURL                 string                      `json:"claude_base_url,omitempty"`
 	AntigravityAuthKind           string                      `json:"antigravity_auth_kind,omitempty"`
 	AgentIdentity                 bool                        `json:"agent_identity,omitempty"`
@@ -9259,6 +9260,8 @@ var knownAPIKeyPlanFilters = map[string]struct{}{
 	// Antigravity keys derived from Google tier ids (g1-ultra-tier → ultra,
 	// standard-tier → standard); free/pro/api are shared with the lists above.
 	"ultra": {}, "standard": {},
+	// Kiro 账号按 auth.KiroPlanKey 从上游订阅标题归一后的标识匹配。
+	"kiro free": {}, "kiro pro": {}, "kiro pro+": {}, "kiro max": {}, "kiro power": {}, "kiro student": {},
 }
 
 // cleanPlanAllow 归一账号套餐白名单:小写去空白、丢弃未知值并去重。

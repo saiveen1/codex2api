@@ -15,6 +15,18 @@ A personal fork of Codex2API, an OpenAI / Anthropic-compatible gateway. This REA
 
 See [Setup, API and limits](docs/oauth-gateway.md).
 
+### mihomo-managed subscriptions and account-exclusive proxies
+
+Implemented in `60a5ea9` and subsequent proxy-access, binding-visibility and startup-recovery fixes.
+
+- Manage multiple HTTP(S) feeds in Proxy Management. Save, then explicitly refresh; use manual or scheduled refresh, name-based include/exclude regexes, dedupe groups and preferred matches. Feed formats and node protocols depend on the installed mihomo version; existing manual HTTP / HTTPS / SOCKS proxies remain separate.
+- On Linux, the gateway owns its mihomo process, with a configured binary or optional installation verified against official checksums. Restarts restore cached feeds, preserving endpoint identities and ports for the same subscription ID and node name. It does not adopt another mihomo process or modify the system proxy, TUN or DNS.
+- Nodes are shared by default. Exclusive nodes require both an account allowlist and an **explicit account binding**; they never enter the public pool or automatic balancing, and group/global proxies or stale sessions cannot bypass access checks. Filtered, disabled or deleted nodes do not silently unbind accounts or fall back to direct egress.
+- Staging failures retain the running core; activation/persistence failures attempt rollback. Refresh can briefly interrupt managed connections. Listener readiness does not establish outbound connectivity for every node, and name filters are not GeoIP checks.
+- Persist and protect the subscription data directory. Feed URLs, raw caches and local proxy credentials are sensitive and **are not automatically encrypted by `CODEX_CRED_ENCRYPTION_KEY`**. The controller and authenticated node listeners bind only to loopback and must not be exposed publicly.
+
+See [Proxy subscriptions and account access](docs/PROXY_SUBSCRIPTIONS.md) and [Managed component, configuration and security limits](managedproxy/README.md).
+
 ### Privacy-conscious request diagnostics
 
 Implemented in `a6179fb` and `4939c24`.
@@ -37,7 +49,7 @@ Implemented in `a80d951`.
 
 Implemented in `cc6fabf`.
 
-- Adds an explicitly scoped `chatgpt_web` API Key channel, disabled by default and separate from native Codex. Supports `gpt-image-2` generation, JSON / multipart edits, Image Studio and queued image jobs.
+- Adds an explicitly scoped `chatgpt_web` API Key channel, disabled by default and separate from native Codex. Supports seven controlled `gpt-image-2` / `2.5` / `2.6` family aliases, generation, JSON / multipart edits, Image Studio and queued image jobs. These aliases do not guarantee a distinct upstream engine or the requested output resolution.
 - Keeps account management, credential refresh, authorization, usage and the gallery in the gateway. An optional private Python worker executes the website protocol without Chrome or a second account pool.
 - Uses separate web capability/quota observations, fixed account and egress bindings, persistent submission fences and stable job/output IDs. Ambiguous submissions are not regenerated; known tasks may only resume querying/downloading.
 - Does not silently fall back to Codex, change accounts or replay generation after download failure. Mock tests do **not** establish live account availability or production readiness.
@@ -74,10 +86,10 @@ Use this fork's source when building these changes; upstream prebuilt images are
 
 ## Upstream
 
-Based on **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**; currently integrated through **`af5f94e` (including v3.1.6 and subsequent Kiro/client compatibility updates)**. The original gateway and inherited features/fixes belong to upstream and its contributors, not to this fork's additions. See the [inherited changelog](CHANGELOG.md).
+Based on **[james-6-23/codex2api](https://github.com/james-6-23/codex2api)**; currently integrated through **`4514623` (including v3.1.6 and subsequent Kiro account-management, protocol and client-compatibility updates)**. The original gateway and inherited features/fixes belong to upstream and its contributors, not to this fork's additions. See the [inherited changelog](CHANGELOG.md).
 
-- **Inherited features:** the dedicated Kiro channel, credential import/export and sign-in, Messages / Responses / Chat adapters, and scoped account usage/reset permissions in the Key portal. Kiro management is separate from this fork's OAuth gateway.
-- **Inherited fixes and optimizations:** OpenMausBot client-fingerprint normalization with protected code/schema literals and a fast no-op path; Antigravity `-xhigh` pricing aliases; portal titles, shared account cards and permission-save fixes.
+- **Inherited features:** the dedicated Kiro channel, full account-management page and plan filters, credential import/export and sign-in, Messages / Responses / Chat adapters, and scoped account usage/reset permissions in the Key portal. Kiro management is separate from this fork's OAuth gateway.
+- **Inherited fixes and optimizations:** OpenMausBot / OpenCode client-fingerprint normalization; Kiro refresh leases, image-input and structured-output fixes; upstream-reported image models in usage logs (observation only, no billing changes); Antigravity `-xhigh` pricing aliases; portal titles, shared account cards and permission-save fixes. Follow the [old-instance and refresh-isolation requirements](docs/KIRO.md) for rolling Kiro upgrades.
 
 ## License and notices
 
