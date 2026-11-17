@@ -388,6 +388,17 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 		})
 	}
 	delivery := job.Groups[index].Deliveries[d]
+	runtimeProxy := job.RuntimeProxy
+	if proxies := job.Groups[index].RuntimeProxies; len(proxies) > 0 {
+		if len(proxies) != len(job.Groups[index].Lines) || delivery.Line < 1 || delivery.Line > len(proxies) {
+			return a.mutateGroup(job.ID, index, func(g *Group) {
+				g.Deliveries[d].State = "import_rejected"
+				g.Deliveries[d].Account = nil
+				g.Deliveries[d].Error = &Problem{Code: "runtime_proxy_mapping_invalid", Message: "账号与运行代理映射不完整，请核对原任务；未执行导入。", Source: "codex", Action: "manual_review"}
+			})
+		}
+		runtimeProxy = proxies[delivery.Line-1]
+	}
 	if err := a.mutateGroup(job.ID, index, func(g *Group) { g.Deliveries[d].State = "importing" }); err != nil {
 		return err
 	}
@@ -396,7 +407,7 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 	if job.Recovery != nil {
 		result, importErr = a.target.(RecoveryTarget).Recover(ctx, *job.Recovery, delivery.Account, job.ID)
 	} else {
-		result, importErr = c.Import(ctx, delivery.Account, job.GroupIDs, job.RuntimeProxy)
+		result, importErr = c.Import(ctx, delivery.Account, job.GroupIDs, runtimeProxy)
 	}
 	var remote *upstream.Error
 	knownError := errors.As(importErr, &remote) && !remote.Uncertain

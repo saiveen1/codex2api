@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import PageHeader from '../components/PageHeader'
@@ -6,7 +6,10 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Select } from '../components/ui/select'
-import { createSubmission, parseMaterial, previewMatches, readPendingRequest, rememberPendingRequest, forgetPendingRequest, type GatewayInput, type Problem } from '../lib/oauthGateway'
+import { api, PROXY_POOL_CHANGED, type ProxyRow } from '../api'
+import { ProxyPoolSelect } from '../components/ProxyPoolSelect'
+import { formatProxyDisplayURL, formatProxyIdentity, proxyIsSelectable } from '../lib/accountProxyBinding'
+import { createSubmission, parseMaterial, withAccountRuntimeProxies, previewMatches, readPendingRequest, rememberPendingRequest, forgetPendingRequest, type Account, type GatewayInput, type Problem } from '../lib/oauthGateway'
 import { gatewayRequest, GatewayError } from '../lib/oauthGatewayApi'
 
 type Settings = { oauth_url: string; oauth_token_set: boolean; configured: boolean; auto_recovery_supported: boolean; auto_recovery_reason: string }
@@ -40,6 +43,8 @@ export default function OAuthGateway() {
   const [format, setFormat] = useState<'txt' | 'json'>('txt')
   const [opts, setOpts] = useState<Record<string, string>>({ proxy_mode: 'system' })
   const [runtimeProxy, setRuntimeProxy] = useState('')
+  const [runtimeProxies, setRuntimeProxies] = useState<ProxyRow[] | null>(null)
+  const [accountRuntimeProxies, setAccountRuntimeProxies] = useState<Record<string, string>>({})
   const [saveCredentials, setSaveCredentials] = useState(false)
   const [recoveryAccountID, setRecoveryAccountID] = useState('')
   const [preview, setPreview] = useState<{ revision: number; input: GatewayInput; result: Preview } | null>(null)
@@ -69,6 +74,17 @@ export default function OAuthGateway() {
   const settingsDirty = !!settings && (url.trim() !== settings.oauth_url || token !== '')
   const repairing = recoveryAccountID !== ''
   const invalidGroups = groups ? selectedGroups.filter(id => !groups.some(g => g.id === id)) : []
+  const material = useMemo(() => {
+    if (!source.trim()) return { accounts: [] as Account[], error: '' }
+    try { return { accounts: parseMaterial(source, format), error: '' } }
+    catch (e) { return { accounts: [] as Account[], error: errorText(e) } }
+  }, [source, format])
+  const runtimeAccounts = withAccountRuntimeProxies(material.accounts, accountRuntimeProxies)
+  const runtimeProxyLabel = (value: string) => {
+    if (!value) return tr('Inherit the server proxy policy', '沿用服务正常代理策略')
+    const selected = runtimeProxies?.find(p => p.url === value)
+    return selected ? `${formatProxyIdentity(selected)} (${formatProxyDisplayURL(value)})` : formatProxyDisplayURL(value)
+  }
 
   const problemText = (p?: Problem) => p ? [p.message || p.code, p.code && p.message ? `(${p.code})` : '', p.retry_after != null ? tr(`Retry after ${p.retry_after}s`, `${p.retry_after} 秒后再试`) : ''].filter(Boolean).join(' ') : ''
   const stateText = (state: string) => {
@@ -82,7 +98,7 @@ export default function OAuthGateway() {
     if (hadPreview.current) setPreviewChanged(true)
   }
   const clearMaterial = () => {
-    setSource(''); setRuntimeProxy(''); setOpts(current => ({ ...current, proxy: '' }))
+    setSource(''); setRuntimeProxy(''); setAccountRuntimeProxies({}); setOpts(current => ({ ...current, proxy: '' }))
     if (fileRef.current) fileRef.current.value = ''
     invalidate(); hadPreview.current = false; setPreviewChanged(false)
   }
@@ -115,6 +131,10 @@ export default function OAuthGateway() {
     const data = await gatewayRequest<Group[]>('/groups', 'GET', undefined, signal)
     if (!signal.aborted) setGroups(data || [])
   })
+  const loadRuntimeProxies = () => run('runtime-proxies', async signal => {
+    const data = await api.listProxies()
+    if (!signal.aborted) setRuntimeProxies(data.proxies || [])
+  })
   const loadSetup = () => Promise.all([loadCapabilities(), loadQuota(), loadGroups()])
   const loadSettings = () => run('settings', async signal => {
     const data = await gatewayRequest<Settings>('/settings', 'GET', undefined, signal)
@@ -125,8 +145,11 @@ export default function OAuthGateway() {
   })
   useEffect(() => {
     const abort = new AbortController(); controller.current = abort; busy.current.clear()
-    void loadSettings()
-    return () => { abort.abort(); controller.current = null; revisionRef.current++ }
+    void loadSettings(); void loadRuntimeProxies()
+    const reloadProxies = () => { void loadRuntimeProxies() }
+    window.addEventListener(PROXY_POOL_CHANGED, reloadProxies)
+    window.addEventListener('focus', reloadProxies)
+    return () => { window.removeEventListener(PROXY_POOL_CHANGED, reloadProxies); window.removeEventListener('focus', reloadProxies); abort.abort(); controller.current = null; revisionRef.current++ }
     // Initial load is bound to this mount's AbortController, not to form edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -163,6 +186,11 @@ export default function OAuthGateway() {
   }, [settings?.auto_recovery_supported, reload])
 
   const setOption = (key: string, value: string) => { setOpts(old => ({ ...old, [key]: value })); invalidate(); setProxyResult('') }
+  const setAccountRuntimeProxy = (account: Account, value: string) => {
+    if (formLocked || repairing) return
+    setAccountRuntimeProxies(old => ({ ...old, [account.identifier.trim().toLowerCase()]: value }))
+    invalidate()
+  }
   const inputProblem = () => {
     if (uncertain) return tr('Resolve the original submission below before creating another job.', '先核查下方原请求，结果明确前不能创建新任务。')
     if (!settings) return tr('Load gateway settings first.', '请先读取网关设置；读取失败时使用上方重试。')
@@ -170,8 +198,8 @@ export default function OAuthGateway() {
     if (settingsDirty) return tr('Connection settings changed. Save or restore them first.', '连接设置尚未保存，请先保存或还原输入。')
     if (!caps) return tr('Capabilities are not loaded. Retry above.', '服务能力尚未读取，请在上方重试读取能力。')
     if (!source.trim()) return tr('Paste account material or choose a UTF-8 file.', '请粘贴账号材料，或选择 UTF-8 文件。')
-    let count: number
-    try { count = parseMaterial(source, format).length } catch (e) { return tr('Fix the material format: ', '请修正材料格式：') + errorText(e) }
+    if (material.error) return tr('Fix the material format: ', '请修正材料格式：') + material.error
+    const count = material.accounts.length
     if (repairing && (!/^[1-9]\d*$/.test(recoveryAccountID) || !Number.isSafeInteger(Number(recoveryAccountID)))) return tr('Use a positive integer account ID.', '原账号 ID 必须是正整数。')
     if (repairing && count !== 1) return tr('Repairing an existing account requires exactly one account.', '修复已有账号时只能提供一个账号的材料。')
     if ((saveCredentials || repairing) && !settings.auto_recovery_supported) return tr('This server does not support controlled account recovery.', '当前服务不支持受控账号恢复，请先升级服务端。')
@@ -194,9 +222,9 @@ export default function OAuthGateway() {
   const makeInput = (): GatewayInput => {
     const problem = inputProblem()
     if (problem) throw new Error(problem)
-    const accounts = parseMaterial(source, format)
+    const accounts = withAccountRuntimeProxies(material.accounts, accountRuntimeProxies, repairing)
     const options = Object.fromEntries(Object.entries(opts).filter(([key, value]) => value && (key !== 'proxy' || opts.proxy_mode === 'custom')))
-    return { ...(format === 'json' ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}) }
+    return { ...(format === 'json' || accounts.some(a => a.runtime_proxy) ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}) }
   }
   const saveSettings = () => run('save', async signal => {
     invalidate(); setConnection('')
@@ -333,11 +361,22 @@ export default function OAuthGateway() {
           {!caps?.features?.proxy_check ? <p className="text-xs text-muted-foreground">{tr('The gateway has not declared proxy-check support.', '网关未声明支持执行机代理检查。')}</p> : !opts.proxy ? <p className="text-xs text-muted-foreground">{tr('Enter a proxy URI before checking.', '填写 OAuth 代理 URI 后即可检查。')}</p> : null}{showError('proxy')}{proxyResult && <p role="status" className="break-words text-sm">{proxyResult}</p>}
         </div>}
         <div className="grid gap-4 md:grid-cols-2">
-          {label(tr('Runtime proxy URI (optional)', '运行时代理 URI（可选）'), <Input type="password" value={runtimeProxy} disabled={repairing} autoComplete="new-password" onChange={e => { setRuntimeProxy(e.target.value); invalidate() }} />, repairing ? tr('Repair preserves the original account proxy.', '修复已有账号时保留原账号代理，不使用此处输入。') : tr('For later model requests, not OAuth. Must already be enabled in proxy management; blank inherits normal policy.', '用于后续模型请求，不是 OAuth 执行代理。须先在代理管理启用；留空沿用正常策略。'))}
+          <div className="space-y-2">{label(tr('Runtime proxy URI (optional)', '运行时代理 URI（可选）'), <Input aria-label={tr('Runtime proxy URI (optional)', '运行时代理 URI（可选）')} type="password" value={runtimeProxy} disabled={repairing} autoComplete="new-password" onChange={e => { setRuntimeProxy(e.target.value); invalidate() }} />, repairing ? tr('Repair preserves the original account proxy.', '修复已有账号时保留原账号代理，不使用此处输入。') : tr('Default for accounts without an individual runtime proxy. This is for model requests, not OAuth; blank inherits normal server policy.', '作为未单独设置账号的统一运行代理，用于模型请求，不是 OAuth 代理；留空沿用服务正常策略。'))}<ProxyPoolSelect proxies={runtimeProxies || []} value={runtimeProxy} disabled={formLocked || repairing} onSelect={value => { if (!formLocked && !repairing) { setRuntimeProxy(value); invalidate() } }} /></div>
           {label('User-Agent', <Input value={opts.user_agent || ''} disabled={opts.environment !== 'custom_ua' && !opts.user_agent} onChange={e => setOption('user_agent', e.target.value)} />, tr('Only custom_ua allows this field. Otherwise leave it blank.', '仅 custom_ua 环境需要填写，其他环境请留空。'))}
           {label(tr('Language (optional)', '语言（可选）'), <Input value={opts.language || ''} onChange={e => setOption('language', e.target.value)} />)}
           {label(tr('Timezone (optional)', '时区（可选）'), <Input value={opts.timezone || ''} onChange={e => setOption('timezone', e.target.value)} />)}
         </div>
+        <section aria-labelledby="account-runtime-proxies" className="space-y-3 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2"><h3 id="account-runtime-proxies" className="text-sm font-medium">{tr('Per-account runtime proxies (not OAuth)', '按账号设置运行代理（非 OAuth 代理）')}</h3><Button variant="outline" size="sm" disabled={!!pending['runtime-proxies']} onClick={loadRuntimeProxies}>{pending['runtime-proxies'] ? tr('Loading proxies…', '正在读取代理…') : tr('Refresh proxy list', '刷新代理列表')}</Button></div>
+          <p className="text-xs text-muted-foreground">{repairing ? tr('Repair keeps the existing account proxy. These inputs and any runtime_proxy in the material are not applied.', '修复原账号时保留原代理，不使用下方设置或材料中的 runtime_proxy。') : tr('Individual settings override the default above. Leave blank to inherit. Proxies must be registered, enabled and available to new accounts; OAuth proxy settings stay separate.', '单独设置优先于上方统一运行代理；留空则继承。代理须先登记、启用且允许新账号使用，与 OAuth 授权代理完全分开。')}</p>
+          <Link className="inline-block text-xs text-primary underline underline-offset-4" to="/proxies" target="_blank" rel="noopener noreferrer">{tr('Add or manage proxies in a new tab', '在新标签页添加或管理代理')}</Link>
+          {showError('runtime-proxies')}{errors['runtime-proxies'] && <p className="text-xs text-muted-foreground">{tr('You can still enter a registered URI; preview will verify it on the server.', '仍可填写已登记的代理 URI，预检时由服务端校验。')}</p>}
+          {runtimeProxies?.length === 0 && !errors['runtime-proxies'] && <p className="text-xs text-muted-foreground">{tr('No proxies are registered yet. Add one in proxy management to assign it here.', '尚未登记代理，请先到代理管理添加，再回这里选择。')}</p>}
+          {!runtimeAccounts.length ? <p className="text-sm text-muted-foreground">{tr('Enter valid TXT or JSON material to configure each account here.', '填写有效的 TXT 或 JSON 材料后，即可在这里逐个设置。')}</p> : <div className="divide-y divide-border">{runtimeAccounts.map((account, index) => <div key={`${account.identifier.trim().toLowerCase()}:${index}`} role="group" aria-label={tr(`Runtime proxy for ${account.identifier}`, `账号 ${account.identifier} 的运行代理`)} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+            <p className="min-w-0 break-all text-sm">{index + 1}. {account.identifier}</p>
+            <div className="min-w-0 space-y-2"><div className="grid gap-2 sm:grid-cols-2"><Input aria-label={tr(`Runtime proxy URI for ${account.identifier}`, `账号 ${account.identifier} 的运行代理 URI`)} type="password" autoComplete="new-password" value={account.runtime_proxy || ''} disabled={repairing} placeholder={tr('Blank inherits the default above', '留空沿用上方统一设置')} onChange={e => setAccountRuntimeProxy(account, e.target.value)} /><ProxyPoolSelect proxies={runtimeProxies || []} value={account.runtime_proxy || ''} disabled={formLocked || repairing} onSelect={value => setAccountRuntimeProxy(account, value)} /></div><div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{tr('Effective setting', '生效设置')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(account.runtime_proxy || runtimeProxy)}</p><Button size="sm" variant="outline" disabled={repairing || !account.runtime_proxy} onClick={() => setAccountRuntimeProxy(account, '')}>{tr('Inherit default', '沿用统一设置')}</Button></div>{!repairing && runtimeProxies && !errors['runtime-proxies'] && (account.runtime_proxy || runtimeProxy) && !runtimeProxies.some(p => p.url === (account.runtime_proxy || runtimeProxy) && proxyIsSelectable(p)) && <p className="text-xs text-destructive">{tr('This proxy is unavailable to new accounts; correct it before preview.', '该代理当前不可用于新账号，请修正后再预检。')}</p>}</div>
+          </div>)}</div>}
+        </section>
         <fieldset disabled={repairing} className="space-y-2"><legend className="mb-2 text-sm font-medium">{tr('Destination groups (optional)', '目标分组（可选）')}</legend>
           <p className="text-xs text-muted-foreground">{repairing ? tr('Repair preserves the original groups; selections here are not applied.', '修复已有账号时保留原分组，不使用此处选择。') : tr('Codex groups only. Leave unselected to import without group bindings.', '只列出 Codex 分组。不选择则导入后不绑定分组。')}</p>
           <div className="flex flex-wrap gap-4 text-sm">{groups?.length ? groups.map(g => <label key={g.id} className="flex items-center gap-2"><input type="checkbox" checked={selectedGroups.includes(g.id)} onChange={e => { setSelectedGroups(old => e.target.checked ? [...old, g.id] : old.filter(id => id !== g.id)); invalidate() }} />{g.name || `#${g.id}`}</label>) : <span className="text-muted-foreground">{pending.groups ? tr('Loading groups…', '正在读取分组…') : errors.groups ? tr('Groups could not be loaded; retry below.', '分组读取失败，请在下方重试。') : groups ? tr('No Codex groups exist. You can continue without a group.', '暂无 Codex 分组，可以不分组继续。') : tr('Groups have not been loaded yet.', '分组尚未读取。')}</span>}</div>

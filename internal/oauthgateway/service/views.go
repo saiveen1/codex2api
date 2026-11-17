@@ -123,5 +123,8 @@ func purgeMaterials(j *Job) {
 	if !v.CanRefresh && !v.CanRetryImport {
 		j.Settings = Settings{}
 		j.RuntimeProxy = ""
+		for i := range j.Groups {
+			j.Groups[i].RuntimeProxies = nil
+		}
 	}
 }

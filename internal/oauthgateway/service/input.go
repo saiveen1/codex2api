@@ -56,6 +56,15 @@ func normalize(in Input) ([]Group, Preview, error) {
 	if in.RecoveryAccountID > 0 && len(accounts) != 1 {
 		return nil, p, fault(400, "invalid_recovery_material", "修复原账号必须只提供一份账号材料。")
 	}
+	hasRuntimeOverrides := false
+	for _, account := range accounts {
+		if account.RuntimeProxy != "" {
+			if in.RecoveryAccountID > 0 {
+				return nil, p, fault(400, "invalid_recovery_destination", "修复原账号不能更改分组或运行代理。")
+			}
+			hasRuntimeOverrides = true
+		}
+	}
 	if len(in.GroupIDs) > 100 {
 		return nil, p, fault(400, "invalid_groups", "选择的分组过多。")
 	}
@@ -102,6 +111,8 @@ func normalize(in Input) ([]Group, Preview, error) {
 			code = "invalid_totp_secret"
 		case seen[identifier]:
 			code = "duplicate_identity"
+		case len(account.RuntimeProxy) > 4096 || strings.ContainsAny(account.RuntimeProxy, "\r\n\x00"):
+			code = "invalid_runtime_proxy"
 		}
 		seen[identifier] = true
 		if code != "" {
@@ -131,6 +142,13 @@ func normalize(in Input) ([]Group, Preview, error) {
 		groups[idx].Request.Accounts = append(groups[idx].Request.Accounts, upstream.Account{Identifier: identifier, Password: account.Password, TOTPSecret: secret})
 		groups[idx].Lines = append(groups[idx].Lines, line)
 		groups[idx].Masks = append(groups[idx].Masks, mask(identifier))
+		if hasRuntimeOverrides {
+			runtimeProxy := account.RuntimeProxy
+			if runtimeProxy == "" {
+				runtimeProxy = in.RuntimeProxy
+			}
+			groups[idx].RuntimeProxies = append(groups[idx].RuntimeProxies, runtimeProxy)
+		}
 		p.Rows = append(p.Rows, PreviewRow{Line: line, Identifier: identifier, IdentifierMasked: mask(identifier), ProxyMode: itemOptions.ProxyMode})
 	}
 	p.Count = len(accounts)

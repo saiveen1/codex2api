@@ -46,10 +46,11 @@ type SettingsView struct {
 	AutoRecoveryReason    string `json:"auto_recovery_reason"`
 }
 type InputAccount struct {
-	Identifier string          `json:"identifier"`
-	Password   string          `json:"password"`
-	TOTPSecret string          `json:"totp_secret"`
-	Proxy      json.RawMessage `json:"proxy,omitempty"`
+	Identifier   string          `json:"identifier"`
+	Password     string          `json:"password"`
+	TOTPSecret   string          `json:"totp_secret"`
+	Proxy        json.RawMessage `json:"proxy,omitempty"`
+	RuntimeProxy string          `json:"runtime_proxy,omitempty"`
 }
 type Input struct {
 	RequestID         string           `json:"request_id,omitempty"`
@@ -83,17 +84,18 @@ type Delivery struct {
 	CreatedIDs []int64         `json:"created_ids,omitempty"`
 }
 type Group struct {
-	Request       upstream.SubmitRequest `json:"request"`
-	Lines         []int                  `json:"lines"`
-	Masks         []string               `json:"masks"`
-	Stage         string                 `json:"stage"`
-	Batch         upstream.Batch         `json:"batch"`
-	Deliveries    []Delivery             `json:"deliveries"`
-	Error         *Problem               `json:"error,omitempty"`
-	NextCheck     time.Time              `json:"next_check"`
-	CancelSent    bool                   `json:"cancel_sent"`
-	ReadOperation string                 `json:"read_operation,omitempty"`
-	ReadFailures  int                    `json:"read_failures,omitempty"`
+	Request        upstream.SubmitRequest `json:"request"`
+	Lines          []int                  `json:"lines"`
+	Masks          []string               `json:"masks"`
+	RuntimeProxies []string               `json:"runtime_proxies,omitempty"`
+	Stage          string                 `json:"stage"`
+	Batch          upstream.Batch         `json:"batch"`
+	Deliveries     []Delivery             `json:"deliveries"`
+	Error          *Problem               `json:"error,omitempty"`
+	NextCheck      time.Time              `json:"next_check"`
+	CancelSent     bool                   `json:"cancel_sent"`
+	ReadOperation  string                 `json:"read_operation,omitempty"`
+	ReadFailures   int                    `json:"read_failures,omitempty"`
 }
 type Job struct {
 	ID              string            `json:"id"`

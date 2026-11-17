@@ -28,7 +28,7 @@ func (t oauthGatewayTarget) Groups(ctx context.Context) ([]upstream.Group, error
 	return out, nil
 }
 
-func (h *Handler) validateOAuthGatewayDestination(ctx context.Context, groupIDs []int64, runtimeProxy string) error {
+func (h *Handler) validateOAuthGatewayDestination(ctx context.Context, groupIDs []int64, runtimeProxy string, accountProxies ...string) error {
 	if h.db == nil {
 		return database.ErrOAuthGatewayState
 	}
@@ -48,23 +48,34 @@ func (h *Handler) validateOAuthGatewayDestination(ctx context.Context, groupIDs 
 			return oauthGatewayFault(400, "invalid_groups", "请选择存在的 Codex 分组。")
 		}
 	}
-	if runtimeProxy == "" {
-		return nil
+	if len(accountProxies) > 100 {
+		return oauthGatewayFault(400, "invalid_accounts", "每次任务最多 100 个账号。")
 	}
-	normalized, err := normalizeManagedProxyURL(runtimeProxy)
-	if err != nil || normalized != runtimeProxy {
-		return oauthGatewayFault(400, "invalid_runtime_proxy", "运行代理地址无效；不会回退直连。")
+	requested := make(map[string]bool)
+	for _, raw := range append([]string{runtimeProxy}, accountProxies...) {
+		if raw == "" {
+			continue
+		}
+		normalized, err := normalizeManagedProxyURL(raw)
+		if len(raw) > 4096 || err != nil || normalized != raw {
+			return oauthGatewayFault(400, "invalid_runtime_proxy", "账号运行代理地址无效；不会回退直连。")
+		}
+		requested[raw] = true
+	}
+	if len(requested) == 0 {
+		return nil
 	}
 	proxies, err := h.db.ListEnabledProxies(ctx)
 	if err != nil {
 		return errors.New("runtime proxy registry unavailable")
 	}
 	for _, p := range proxies {
-		if p.URL == runtimeProxy {
-			return nil
-		}
+		delete(requested, p.URL)
 	}
-	return oauthGatewayFault(400, "runtime_proxy_unavailable", "请先在代理管理中添加并启用该运行代理；不会回退直连。")
+	if len(requested) > 0 {
+		return oauthGatewayFault(400, "runtime_proxy_unavailable", "请先在代理管理中添加并启用每个账号的运行代理；新账号不能使用受限专用或测试失败的代理，不会回退直连。")
+	}
+	return nil
 }
 
 func oauthGatewayImportFailure(code string) (upstream.ImportResult, error) {

@@ -21,7 +21,7 @@ before(async () => {
     name: 'oauth-fixture', enforce: 'pre',
     resolveId(id) { if (id === 'virtual:oauth-fixture') return '\0oauth-fixture'; if (/^(?:\.\.\/|\.\/)+api$/.test(id)) return '\0oauth-admin-auth' },
     load(id) {
-      if (id === '\0oauth-admin-auth') return 'export const getAdminKey=()=>"synthetic-admin"; export const resetAdminAuthState=()=>{window.__loggedOut=true}'
+      if (id === '\0oauth-admin-auth') return 'export const getAdminKey=()=>"synthetic-admin"; export const resetAdminAuthState=()=>{window.__loggedOut=true}; export const PROXY_POOL_CHANGED="synthetic-proxy-change"; export const api={listProxies:async()=>{const r=await fetch("/api/admin/proxies",{headers:{"X-Admin-Key":"synthetic-admin"}});if(!r.ok)throw new Error("Synthetic proxy list failed");return r.json()}}'
       if (id !== '\0oauth-fixture') return
       return `import React from 'react'; import {createRoot} from 'react-dom/client'; import {MemoryRouter} from 'react-router-dom';
         import OAuthGateway from ${JSON.stringify(path.join(root, 'src/pages/OAuthGateway.tsx'))};
@@ -52,10 +52,12 @@ async function fixture(t, options = {}) {
     caps: { countries: ['auto', 'US'], environments: ['auto', 'custom_ua'], proxy_modes: ['system', 'custom'], workspace_policies: ['team_preferred'], max_batch_size: 100, max_upload_bytes: 1048576, features: { proxy_check: true, expected_identity_guard: true } },
     quota: { total: 10, remaining: 9, reserved: 0, used: 1 }, groups: options.emptyGroups ? [] : [{ id: 1, name: '测试分组' }],
     recoveries: options.recoveries || [], disabledRecoveries: [], missingLookup: false,
+    proxies: options.proxies || [{ id: 1, url: 'http://one-runtime.example.invalid:8080', label: '运行节点一', enabled: true, test_status: 'success', bound_count: 0, exclusive: false }, { id: 2, url: 'http://two-runtime.example.invalid:8080', label: '运行节点二', enabled: true, test_status: 'untested', bound_count: 0, exclusive: false }],
   }
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
     if (url.origin !== origin) throw new Error('unexpected external network in OAuth UI test')
+    if (url.pathname === '/api/admin/proxies') return route.fulfill({ status: options.proxyFailure ? 503 : 200, contentType: 'application/json', body: JSON.stringify({ proxies: state.proxies }) })
     if (!url.pathname.startsWith('/api/admin/oauth-gateway/')) return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div></body></html>' })
     assert.equal(request.headers()['x-admin-key'], 'synthetic-admin')
     const p = url.pathname.slice('/api/admin/oauth-gateway'.length)
@@ -333,4 +335,77 @@ test('recovery opt-in is blocked without the original-identity guard', async t =
   await optIn.uncheck()
   assert.equal(await page.getByRole('button', { name: '预检', exact: true }).isDisabled(), false)
   assert.equal(state.submissions, 0)
+})
+
+test('one account can select a runtime proxy without changing OAuth proxy mode', async t => {
+  const { page, state } = await fixture(t)
+  await prepare(page)
+  const row = page.getByRole('group', { name: '账号 fixture@example.invalid 的运行代理', exact: true })
+  await row.getByRole('button', { name: '从代理池选择', exact: false }).click()
+  await page.getByRole('option').filter({ hasText: '运行节点一' }).click()
+  assert.equal(await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).inputValue(), state.proxies[0].url)
+  assert.equal(await page.getByRole('button', { name: '创建授权任务', exact: true }).isDisabled(), true)
+  await page.getByRole('button', { name: '预检', exact: true }).click()
+  await page.getByText(/^预检通过 ·/).waitFor()
+  assert.equal(state.previewInput.accounts[0].runtime_proxy, state.proxies[0].url)
+  assert.equal(state.previewInput.options.proxy_mode, 'system')
+  assert.equal(state.previewInput.options.proxy, undefined)
+  await page.screenshot({ path: path.join(artifacts, 'oauth-account-proxy-desktop.png'), fullPage: true })
+  await page.getByRole('button', { name: '创建授权任务', exact: true }).click()
+  await page.getByText(/任务已接受：/).waitFor()
+  assert.equal(state.lastInput.accounts[0].runtime_proxy, state.proxies[0].url)
+  const stored = await page.evaluate(() => JSON.stringify({ ...sessionStorage, ...localStorage }))
+  assert.equal(stored.includes('one-runtime'), false)
+})
+
+test('multiple account runtime proxies survive reordering and inherit the batch default', async t => {
+  const { page, state } = await fixture(t)
+  await ready(page)
+  const first = material, second = material.replace('fixture@', 'second@')
+  await page.getByLabel('账号材料', { exact: true }).fill(`${first}\n${second}`)
+  await page.getByLabel('运行时代理 URI（可选）', { exact: true }).fill(state.proxies[0].url)
+  await page.getByLabel('账号 second@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[1].url)
+  await page.getByLabel('账号材料', { exact: true }).fill(`${second}\n${first}`)
+  assert.equal(await page.getByLabel('账号 second@example.invalid 的运行代理 URI', { exact: true }).inputValue(), state.proxies[1].url)
+  assert.equal(await page.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).inputValue(), '')
+  await page.getByRole('button', { name: '预检', exact: true }).click()
+  await page.getByText(/^预检通过 ·/).waitFor()
+  assert.equal(state.previewInput.runtime_proxy, state.proxies[0].url)
+  assert.deepEqual(state.previewInput.accounts.map(a => [a.identifier, a.runtime_proxy || '']), [['second@example.invalid', state.proxies[1].url], ['fixture@example.invalid', '']])
+  await page.getByRole('button', { name: '读取能力和配额', exact: true }).click()
+  await ready(page)
+  assert.equal(await page.getByRole('button', { name: '创建授权任务', exact: true }).isDisabled(), false)
+  await page.getByRole('button', { name: '创建授权任务', exact: true }).click()
+  await page.getByText(/任务已接受：/).waitFor()
+  assert.equal(state.lastInput.accounts[0].runtime_proxy, state.proxies[1].url)
+})
+
+test('JSON runtime pins can be reset to inherit and are omitted from account repair', async t => {
+  const { page, state } = await fixture(t)
+  await ready(page)
+  await page.getByLabel('输入格式', { exact: true }).click()
+  await page.getByRole('option', { name: 'JSON', exact: true }).click()
+  await page.getByLabel('账号材料', { exact: true }).fill(JSON.stringify([{ identifier: 'fixture@example.invalid', password: 'synthetic-password', totp_secret: 'JBSWY3DPEHPK3PXP', proxy: 'http://oauth-only.example.invalid:8080', runtime_proxy: state.proxies[1].url }]))
+  const row = page.getByRole('group', { name: '账号 fixture@example.invalid 的运行代理', exact: true })
+  assert.equal(await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).inputValue(), state.proxies[1].url)
+  await row.getByRole('button', { name: '沿用统一设置', exact: true }).click()
+  assert.equal(await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).inputValue(), '')
+  await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[0].url)
+  await page.getByLabel(/修复已有账号 ID/).fill('42')
+  assert.equal(await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).isDisabled(), true)
+  await page.getByRole('button', { name: '预检', exact: true }).click()
+  await page.getByText(/^预检通过 ·/).waitFor()
+  assert.equal(state.previewInput.accounts[0].runtime_proxy, undefined)
+  assert.equal(state.previewInput.accounts[0].proxy, 'http://oauth-only.example.invalid:8080')
+})
+
+test('proxy list failures remain visible and mobile account proxy controls fit', async t => {
+  const { page, state } = await fixture(t, { mobile: true, proxyFailure: true })
+  await ready(page)
+  await page.getByLabel('账号材料', { exact: true }).fill(material)
+  await page.getByText('Synthetic proxy list failed', { exact: true }).waitFor()
+  await page.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[0].url)
+  assert.equal(await page.getByRole('button', { name: '预检', exact: true }).isDisabled(), false)
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+  await page.screenshot({ path: path.join(artifacts, 'oauth-account-proxy-mobile.png'), fullPage: true })
 })

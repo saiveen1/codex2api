@@ -27,8 +27,21 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 这是合成材料，不能用于真实登录。密码首尾空格原样保留；含 `----` 的密码应使用 JSON 账号数组。每账号可提供 `proxy` 覆盖，服务按代理分批。单任务最多 100 个账号、请求体最多 1 MiB，同时还受外部网关的实际容量限制。
 
 - **OAuth 代理**只用于外部执行机完成授权。自带代理会通过该执行机的 `/proxy-check` 检查，不用 codex2api 本机的连通性替代；失败不回退到系统代理或直连。
-- **运行代理**只用于账号后续的模型请求，必须在 codex2api 的代理管理中已添加并启用。留空沿用 codex2api 现有的正常代理策略（该策略本身可能允许直连）；不复制 OAuth 代理，也不采纳网关结果里的代理字段。
+- **运行代理**只用于账号后续的模型请求，必须在 codex2api 的代理管理中已添加、启用且可用于新账号（禁用、测试失败及受限专用节点不可选择）。统一 `runtime_proxy` 是默认值，每个 `accounts[]` 可独立填写同名 `runtime_proxy` 覆盖。优先级为**账号单独设置 → 统一运行代理 → 服务正常策略**；空值表示继承，不表示强制直连。不复制 OAuth 代理，也不采纳网关结果里的代理字段。
 - 目标分组仅允许 Codex 分组。新账号及其分组同一事务提交后，才加载到运行时账号池。
+
+页面粘贴 TXT 或 JSON 后，在“按账号设置运行代理（非 OAuth 代理）”逐行填写 URI 或从现有代理池选择；可点击“沿用统一设置”清除覆盖。节点列表刷新不会丢失选择，材料重排时设置按账号标识跟随。代理尚未登记时，用“在新标签页添加或管理代理”先添加，再返回刷新列表。单账号同样有独立设置行；修复已有账号时保留原代理，这些输入不会应用。
+
+JSON 示例（合成数据；示例运行代理须先登记）：
+
+```json
+[
+  {"identifier":"one@example.invalid","password":"synthetic","totp_secret":"JBSWY3DPEHPK3PXP","runtime_proxy":"http://runtime-one.example.invalid:8080"},
+  {"identifier":"two@example.invalid","password":"synthetic","totp_secret":"JBSWY3DPEHPK3PXP","proxy":"http://oauth-only.example.invalid:8080","runtime_proxy":"socks5://runtime-two.example.invalid:1080"}
+]
+```
+
+`proxy` 是 OAuth 执行代理；`runtime_proxy` 是导入后的账号代理。逐账号运行代理仅在本地加密任务中保存，不发送到外部 OAuth 网关，也不改变 OAuth 分批。导入按授权结果的行映射选取代理，重启与重试导入沿用原映射；每次实际入库仍重新校验节点，失效时拒绝而非回退。
 
 ## 任务和安全边界
 
@@ -67,7 +80,7 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 
 当前模块为**单写入者**：数据库 owner 租约为 120 秒，worker 空闲时也续租；每次状态更新带 revision/owner 条件。另一个实例不会接管尚未过期的任务；失去所有权或写入结果不明后，旧实例停止继续工作。多副本环境请将此管理页请求固定路由到持有者实例。正常关闭释放租约；异常退出后待租约到期再重启选定实例，不通过删除状态行抢占。
 
-**升级/回退边界：** 当前加密状态格式为 v3，首次打开模块会将 v1/v2 安全升级；旧保存标记不视为用户保管授权。没有新增数据库表或 DDL，但旧二进制不能读取 v3，会拒绝启动 OAuth 模块，不能直接降级并假定恢复仍可用。部署前应确认这一持久状态格式变化；不要删除状态行或更换加密根来绕过。
+**升级/回退边界：** 首次打开模块将 v1/v2 加密状态安全升级为 v3，旧保存标记不视为保管授权。首次创建包含逐账号运行代理的任务时才升级为 v4，归档不降级，以免旧 worker 忽略账号代理映射。没有新增数据库表或 DDL；旧二进制不支持新版状态时会拒绝启动 OAuth 模块。部署/回退前应确认此格式变化，不要删除状态行或更换加密根绕过。
 
 当前容量：最多 8 个未解决任务、200 个当前任务记录、10,000 个归档，状态明文编码上限 64 MiB。归档保留幂等指纹，同一 ID 的原请求不会重新授权。
 
@@ -92,6 +105,8 @@ user@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP
 | POST | `/recovery/{account_id}/disable` | `{}`，停止恢复并清除保管秘密；成功返回 `{}` |
 
 `preview` / `jobs` 输入可选 `source_text` 或 `accounts`（二选一），另含 `options`、`group_ids`、`runtime_proxy`、boolean `save_credentials`（默认 false）和可选 `recovery_account_id`。指定修复 ID 时只能包含一条材料，`group_ids` 必须为空、`runtime_proxy` 必须留空。请求中的标识必须匹配原账号；无法安全对应手机号与原账号身份时转人工处理。
+
+`accounts[].runtime_proxy` 为可选字符串，留空继承顶层 `runtime_proxy`。指定 `recovery_account_id` 时逐账号运行代理也必须留空。TXT材料不增加分隔列；页面有逐账号覆盖时使用结构化 `accounts` 提交，避免混淆密码分隔符和代理字段。
 
 `PreviewRow` / `ItemView` 返回完整 `identifier` 并保留旧 `identifier_masked` 字段供兼容。未归档历史任务可从本地请求记录取得完整标识；已归档任务不保留逐账号材料，不能还原已经清除的详情。恢复视图不包含密码/TOTP、网关令牌、代理认证或凭据指纹。
 

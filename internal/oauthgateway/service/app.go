@@ -32,7 +32,7 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 	}
 	a := &App{store: store, target: target, allowHTTP: allowHTTP, wake: make(chan struct{}, 1)}
 	err := store.Update(func(s *State) error {
-		if (s.Version < 1 || s.Version > 3) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
+		if (s.Version < 1 || s.Version > 4) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
 			return errors.New("unsupported encrypted state version")
 		}
 		if s.Settings.OAuthURL == "" {
@@ -49,6 +49,9 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 			}
 			for g := range s.Jobs[j].Groups {
 				group := &s.Jobs[j].Groups[g]
+				if s.Version < 4 && len(group.RuntimeProxies) > 0 {
+					return errors.New("per-account runtime proxies require encrypted state version 4")
+				}
 				if group.Stage == "checking" {
 					group.Stage = "queued"
 				}
@@ -65,7 +68,9 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 			}
 			purgeMaterials(&s.Jobs[j])
 		}
-		s.Version = 3
+		if s.Version < 3 {
+			s.Version = 3
+		}
 		for _, r := range s.Recoveries {
 			if r.Enabled {
 				a.enabled.Store(r.Snapshot.AccountID, true)
@@ -401,6 +406,13 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 				if r.Snapshot.AccountID == recovery.AccountID && r.Enabled {
 					job.RecoveryEpoch = r.Epoch
 				}
+			}
+		}
+		for _, group := range groups {
+			if len(group.RuntimeProxies) > 0 {
+				// Older workers must refuse this state rather than ignore account pins.
+				s.Version = 4
+				break
 			}
 		}
 		s.Jobs = append(s.Jobs, job)

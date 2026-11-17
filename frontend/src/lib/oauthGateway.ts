@@ -1,5 +1,5 @@
 export type Problem = { code?: string; message?: string; source?: string; action?: string; retryable?: boolean; retry_after?: number; uncertain?: boolean }
-export type Account = { identifier: string; password: string; totp_secret: string; proxy?: string | Record<string, unknown> }
+export type Account = { identifier: string; password: string; totp_secret: string; proxy?: string | Record<string, unknown>; runtime_proxy?: string }
 export type GatewayInput = { source_text?: string; accounts?: Account[]; options: Record<string, string>; group_ids: number[]; save_credentials: boolean; runtime_proxy?: string; request_id?: string; recovery_account_id?: number }
 export function parseMaterial(source: string, format: 'txt' | 'json'): Account[] {
   if (new TextEncoder().encode(source).length > 1048576) throw new Error('Input exceeds 1 MiB')
@@ -12,10 +12,10 @@ export function parseMaterial(source: string, format: 'txt' | 'json'): Account[]
     accounts = value.map((a: unknown, i: number) => {
       if (!a || typeof a !== 'object') throw new Error(`Invalid account ${i + 1}`)
       const row = a as Record<string, unknown>
-      if (Object.keys(row).some(key => !['identifier', 'password', 'totp_secret', 'proxy'].includes(key))) throw new Error(`Unknown field in account ${i + 1}`)
+      if (Object.keys(row).some(key => !['identifier', 'password', 'totp_secret', 'proxy', 'runtime_proxy'].includes(key))) throw new Error(`Unknown field in account ${i + 1}`)
       const proxy = row.proxy
-      if (typeof row.identifier !== 'string' || typeof row.password !== 'string' || typeof row.totp_secret !== 'string' || (proxy != null && typeof proxy !== 'string' && (typeof proxy !== 'object' || Array.isArray(proxy)))) throw new Error(`Invalid account ${i + 1}`)
-      return { identifier: row.identifier, password: row.password, totp_secret: row.totp_secret, ...(proxy ? { proxy: proxy as Account['proxy'] } : {}) }
+      if (typeof row.identifier !== 'string' || typeof row.password !== 'string' || typeof row.totp_secret !== 'string' || (row.runtime_proxy !== undefined && typeof row.runtime_proxy !== 'string') || (proxy != null && typeof proxy !== 'string' && (typeof proxy !== 'object' || Array.isArray(proxy)))) throw new Error(`Invalid account ${i + 1}`)
+      return { identifier: row.identifier, password: row.password, totp_secret: row.totp_secret, ...(proxy ? { proxy: proxy as Account['proxy'] } : {}), ...(row.runtime_proxy ? { runtime_proxy: row.runtime_proxy as string } : {}) }
     })
   } else {
     accounts = text.split(/\r?\n/).filter(line => line.trim() !== '').map((line, i) => {
@@ -32,6 +32,15 @@ export function previewMatches(preview: { revision: number } | null, revision: n
 }
 export function createSubmission(input: GatewayInput, id: string): GatewayInput {
   return { ...input, request_id: id }
+}
+
+// Key selections by normalized identity so reordering rows cannot move a proxy.
+export function withAccountRuntimeProxies(accounts: Account[], overrides: Record<string, string>, repairing = false): Account[] {
+  return accounts.map(({ runtime_proxy, ...account }) => {
+    const key = account.identifier.trim().toLowerCase()
+    const selected = repairing ? '' : Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : runtime_proxy ?? ''
+    return { ...account, ...(selected ? { runtime_proxy: selected } : {}) }
+  })
 }
 
 export const pendingRequestStorageKey = 'codex2api:oauth-gateway:pending-request'

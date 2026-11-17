@@ -213,12 +213,18 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 		if !decodeOAuthGatewayJSON(c, &input) {
 			return
 		}
+		var accountProxies []string
+		for _, account := range input.Accounts {
+			if account.RuntimeProxy != "" {
+				accountProxies = append(accountProxies, account.RuntimeProxy)
+			}
+		}
 		if input.RecoveryAccountID > 0 {
-			if len(input.GroupIDs) > 0 || input.RuntimeProxy != "" {
+			if len(input.GroupIDs) > 0 || input.RuntimeProxy != "" || len(accountProxies) > 0 {
 				err = oauthGatewayFault(400, "invalid_recovery_destination", "修复原账号不能更改分组或运行代理。")
 				break
 			}
-		} else if err = h.validateOAuthGatewayDestination(ctx, input.GroupIDs, input.RuntimeProxy); err != nil {
+		} else if err = h.validateOAuthGatewayDestination(ctx, input.GroupIDs, input.RuntimeProxy, accountProxies...); err != nil {
 			break
 		}
 		if path == "preview" {

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseMaterial, previewMatches, createSubmission, readPendingRequest, rememberPendingRequest, forgetPendingRequest, pendingRequestStorageKey } from './oauthGateway.ts'
+import { parseMaterial, withAccountRuntimeProxies, previewMatches, createSubmission, readPendingRequest, rememberPendingRequest, forgetPendingRequest, pendingRequestStorageKey } from './oauthGateway.ts'
 
 test('TXT preserves password whitespace and rejects ambiguous delimiters', () => {
   assert.deepEqual(parseMaterial('user---- pass ----totp\n', 'txt'), [{ identifier: 'user', password: ' pass ', totp_secret: 'totp' }])
@@ -63,4 +63,22 @@ test('unavailable storage prevents submission but cannot undo a confirmed accept
     if (previous === undefined) delete globalThis.sessionStorage
     else globalThis.sessionStorage = previous
   }
+})
+
+test('runtime proxy overrides follow identity and never replace OAuth proxies', () => {
+  const rows = parseMaterial(JSON.stringify([
+    { identifier: 'One@example.invalid', password: ' pass ', totp_secret: 'totp', proxy: 'http://oauth.invalid', runtime_proxy: 'http://json-runtime.invalid' },
+    { identifier: 'two@example.invalid', password: 'pass', totp_secret: 'totp' },
+  ]), 'json')
+  const overrides = { 'one@example.invalid': 'http://chosen-runtime.invalid', 'two@example.invalid': 'http://two-runtime.invalid' }
+  const result = withAccountRuntimeProxies([...rows].reverse(), overrides)
+  assert.equal(result[0].runtime_proxy, 'http://two-runtime.invalid')
+  assert.equal(result[1].runtime_proxy, 'http://chosen-runtime.invalid')
+  assert.equal(result[1].proxy, 'http://oauth.invalid')
+  assert.equal(result[1].password, ' pass ')
+  assert.equal(rows[0].runtime_proxy, 'http://json-runtime.invalid')
+  assert.equal(withAccountRuntimeProxies(rows, { 'one@example.invalid': '' })[0].runtime_proxy, undefined)
+  assert.equal(withAccountRuntimeProxies(rows, overrides, true)[0].runtime_proxy, undefined)
+  assert.equal(withAccountRuntimeProxies(rows, overrides, true)[0].proxy, 'http://oauth.invalid')
+  assert.throws(() => parseMaterial(JSON.stringify([{ ...rows[0], runtime_proxy: {} }]), 'json'))
 })

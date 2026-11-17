@@ -84,7 +84,9 @@ func (a *App) Archive(id string, discardCredentials bool) (JobView, error) {
 				Total: current.Total, Imported: current.Imported, Failed: current.Failed,
 				CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, ArchivedAt: time.Now().UTC(),
 			}
-			state.Version = 3
+			if state.Version < 3 {
+				state.Version = 3
+			}
 			state.Archived = append(state.Archived, archived)
 			copy(state.Jobs[i:], state.Jobs[i+1:])
 			state.Jobs[len(state.Jobs)-1] = Job{}
