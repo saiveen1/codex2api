@@ -75,6 +75,7 @@ export default function ChatGPTWebSettings() {
     <p className="text-xs text-muted-foreground">{t('chatgptWeb.config')}</p>
     {deployment && <ChatGPTWebServiceControl deployment={deployment} onChange={setDeployment} />}
     <p className="text-sm leading-relaxed">{t('chatgptWeb.guide')}</p>
+    <p className="text-sm leading-relaxed">{t('chatgptWebAutoHint')}</p>
     <div className="flex flex-wrap gap-3 text-sm"><Link className="text-primary underline" to="/api-keys">{t('chatgptWeb.createKey')}</Link><Link className="text-primary underline" to="/images/studio">{t('chatgptWeb.studio')}</Link></div>
     <p className="break-words text-sm">{t('chatgptWeb.deployment')}: {deployment ? `${t(deployment.enabled ? 'chatgptWeb.enabled' : 'chatgptWeb.disabled')} · ${t(deployment.configured ? 'chatgptWeb.configured' : 'chatgptWeb.notConfigured')} · ${deployment.protocol_version || '—'} · ${(deployment.supported_models || []).join(', ') || '—'}` : '—'}</p>
     {deployment && (!deployment.enabled || !deployment.configured) && <p className="text-sm text-muted-foreground" role="status">{t('chatgptWeb.serviceNotReady')}</p>}

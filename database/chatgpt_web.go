@@ -23,10 +23,10 @@ var (
 	ErrChatGPTWebLease             = errors.New("chatgpt web account lease is not owned")
 )
 
-// ChatGPTWebAccountState is opt-in, secret-free web state, never a projection of
-// Codex usage. An absent row means disabled, not an implicitly eligible account.
-// Ready observations must also match the current AT fingerprint and egress at
-// dispatch time; a stored observation is not an authorization grant.
+// ChatGPTWebAccountState is secret-free web state, never a projection of Codex
+// usage. Group-bound Web keys may initialize absent rows, but never ready evidence.
+// Ready observations must match the current AT fingerprint and egress at dispatch;
+// neither enablement nor a stored observation is an authorization grant.
 type ChatGPTWebAccountState struct {
 	AccountID                   int64      `json:"account_id"`
 	Enabled                     bool       `json:"enabled"`
@@ -212,6 +212,26 @@ func (db *DB) chatGPTWebAccountCredentials(ctx context.Context, tx *sql.Tx, id i
 		return nil, errors.New("chatgpt web requires an OpenAI OAuth account")
 	}
 	return creds, nil
+}
+
+// InitChatGPTWebAccountEnabled is insert-only: an explicit administrator setting
+// wins even when it races with group-default initialization. The caller must
+// first establish current Web-key/group scope; no upstream observation is made.
+func (db *DB) InitChatGPTWebAccountEnabled(ctx context.Context, id int64) (*ChatGPTWebAccountState, error) {
+	var out *ChatGPTWebAccountState
+	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := db.chatGPTWebAccountCredentials(ctx, tx, id); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO chatgpt_web_account_states(account_id, enabled, device_id, session_id, status, updated_at)
+			VALUES($1,TRUE,$2,$3,'unverified',$4) ON CONFLICT(account_id) DO NOTHING`, id, uuid.NewString(), uuid.NewString(), time.Now().UTC().UnixNano())
+		if err != nil {
+			return err
+		}
+		out, err = scanChatGPTWebState(tx.QueryRowContext(ctx, `SELECT `+chatGPTWebStateColumns+` FROM chatgpt_web_account_states WHERE account_id=$1`, id))
+		return err
+	})
+	return out, err
 }
 
 func (db *DB) SetChatGPTWebAccountEnabled(ctx context.Context, id int64, enabled bool) (*ChatGPTWebAccountState, error) {

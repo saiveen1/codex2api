@@ -5,14 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"slices"
-	"strings"
-
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"io"
+	"net/http"
+	"slices"
 )
 
 const chatGPTWebBatchLimit = 1000
@@ -100,14 +98,7 @@ func decodeChatGPTWebBatch(r io.Reader) (chatGPTWebBatchSelection, *chatGPTWebBa
 
 // Match the database setter's OAuth shape, without runtime readiness gates.
 func chatGPTWebBatchEligible(row *database.AccountRow) bool {
-	if row == nil || row.ID <= 0 || row.DeletedAt.Valid || row.Status == "deleted" || row.ErrorMessage == "deleted" ||
-		(row.Platform != "" && row.Platform != "openai") || row.Type != "oauth" {
-		return false
-	}
-	upstream := strings.ToLower(strings.TrimSpace(row.GetCredential("upstream_type")))
-	mode := strings.ToLower(strings.TrimSpace(row.GetCredential("auth_mode")))
-	return (upstream == "" || upstream == "codex") && (mode == "" || mode == "oauth") &&
-		row.GetCredential("api_key") == "" && row.GetCredential("base_url") == ""
+	return auth.ChatGPTWebOAuthAccountEligible(row)
 }
 
 func resolveChatGPTWebBatch(ctx context.Context, db *database.DB, selection chatGPTWebBatchSelection) ([]int64, *chatGPTWebBatchError) {
@@ -217,9 +208,6 @@ func applyChatGPTWebBatch(ctx context.Context, db chatGPTWebBatchStateStore, ids
 		missing := errors.Is(err, sql.ErrNoRows)
 		if err == nil && state.Enabled == enabled {
 			result.State = state
-			out.Unchanged++
-		} else if missing && !enabled {
-			// An absent state is disabled; do not create a row for a no-op.
 			out.Unchanged++
 		} else {
 			if err == nil || missing {

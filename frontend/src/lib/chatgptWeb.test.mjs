@@ -30,3 +30,19 @@ test('both studios constrain known web keys and keep native controls', () => {
     assert.match(content, /upstreamChannelHint\.chatgpt_web/)
   }
 })
+
+test('web account guidance is discoverable in both key forms and the studio', () => {
+  const keys = source('../pages/APIKeys.tsx')
+  assert.match(keys, /value=\{createForm\.limits\.upstreamChannel\}/)
+  assert.match(keys, /value=\{editForm\.limits\.upstreamChannel\}/)
+  assert.match(keys, /value === "chatgpt_web" && \([\s\S]*?chatgptWebAutoHint[\s\S]*?to="\/settings#settings-codex-images"/)
+  const studio = source('../pages/ImageStudio.tsx')
+  assert.match(studio, /isWebKey && <div[^>]*>\s*<p>\{t\('chatgptWebAutoHint'\)\}<\/p>\s*<NavLink[^>]*to="\/settings#settings-codex-images"/)
+  assert.match(source('../components/ChatGPTWebSettings.tsx'), /chatgptWebAutoHint/)
+  for (const locale of ['en', 'zh', 'zh-TW']) {
+    const messages = JSON.parse(source(`../locales/${locale}.json`))
+    assert.match(messages.chatgptWebAutoHint, /30/)
+    assert.ok(messages.chatgptWebManageAccounts)
+    assert.doesNotMatch(messages.chatgptWeb.batchHint, /future members are not automatically enabled|后续新增成员不会自动启用|後續新增成員不會自動啟用/)
+  }
+})

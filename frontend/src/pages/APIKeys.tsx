@@ -2927,6 +2927,12 @@ function UpstreamChannelPicker({
       <p className="mt-1.5 text-xs text-muted-foreground">
         {t(`apiKeys.limits.upstreamChannelHint.${value}`)}
       </p>
+      {value === "chatgpt_web" && (
+        <div className="mt-2 space-y-1 rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed">
+          <p>{t("chatgptWebAutoHint")}</p>
+          <Link className="text-primary underline" to="/settings#settings-codex-images">{t("chatgptWebManageAccounts")}</Link>
+        </div>
+      )}
     </div>
   );
 }

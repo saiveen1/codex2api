@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/openaiidentity"
 )
@@ -124,6 +125,9 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 		return state, failure
 	}
 	if h.db == nil || h.store == nil {
+		return fail("internal_error", "admission", 0)
+	}
+	if _, err := auth.ListChatGPTWebAccountStates(ctx, h.db); err != nil {
 		return fail("internal_error", "admission", 0)
 	}
 	var err error

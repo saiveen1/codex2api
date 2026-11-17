@@ -173,11 +173,14 @@ func TestChatGPTWebBatchExplicitValidationAndNoop(t *testing.T) {
 		}
 	}
 	disabled := batchWebResponse(t, batchWebRequest(t, h, fmt.Sprintf(`{"scope":"accounts","enabled":false,"account_ids":[%d]}`, good), 200))
-	if disabled.Unchanged != 1 || disabled.Results[0].Changed {
-		t.Fatalf("absent disabled state was changed: %+v", disabled)
+	if disabled.Updated != 1 || !disabled.Results[0].Changed || disabled.Results[0].State.Enabled {
+		t.Fatalf("explicit disable must persist an override: %+v", disabled)
 	}
-	if _, err := db.GetChatGPTWebAccountState(ctx, good); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("no-op disable inserted state: %v", err)
+	if state, err := db.GetChatGPTWebAccountState(ctx, good); err != nil || state.Enabled {
+		t.Fatalf("explicit disable was not persisted: %+v %v", state, err)
+	}
+	if state, err := db.InitChatGPTWebAccountEnabled(ctx, good); err != nil || state.Enabled {
+		t.Fatalf("auto initialization bypassed batch disable: %+v %v", state, err)
 	}
 	body := fmt.Sprintf(`{"scope":"accounts","enabled":true,"account_ids":[%d,%d]}`, good, good)
 	first := batchWebResponse(t, batchWebRequest(t, h, body, 200))

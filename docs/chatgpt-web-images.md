@@ -31,7 +31,7 @@ a test gateway using production DATABASE_URL or copied production secrets.
 ### Built-in service control (recommended)
 
 The project Dockerfile bundles the existing locked Python worker. In Settings →
-ChatGPT Web → Service control, select **Built-in managed worker**, adjust the
+Codex → Image settings → ChatGPT Web → Service control, select **Built-in managed worker**, adjust the
 10–600 second timeout and click **Save and enable**. No worker URL, shared secret,
 server environment edit or gateway restart is needed. The default remains off.
 The manager creates a stable private secret and a loopback-only listener, verifies
@@ -96,13 +96,15 @@ or a claim that Docker images have been built or run.
 
 ## 中文快速使用
 
-Web 生图是默认关闭的实验性独立通道，不等同于 Codex 原生生图。在设置 → ChatGPT Web → 服务控制中选择“内置托管”，点击“保存并启用”并刷新确认运行状态；无需登录服务器填写地址或密钥。随后启用并检查现有 OAuth 账号，再创建通道为 `chatgpt_web` 的专用 API Key，最后在生图工作台选择 Web 来源和该 Key。检查环境只确认观察到的环境与额度信息，不能代替真实生图验收；Web 失败不会自动回退原生通道。
+Web 生图是默认关闭的实验性独立通道，不等同于 Codex 原生生图。在设置 → Codex → 生图设置 → ChatGPT Web 生图（实验性）→ 服务控制中选择“内置托管”，点击“保存并启用”并刷新确认运行状态。创建通道为 `chatgpt_web` 的专用 API Key 并绑定分组后，符合 Key 授权的 OAuth 账号默认启用；随后检查账号环境，在生图工作台选择 Web 来源和该 Key。API Key 配置及工作台均提供到上述设置的直达链接。检查环境不能代替真实生图验收，Web 失败不会自动回退原生通道。
 
 目前仅支持 `gpt-image-2`、自动质量和比例尺寸（不保证像素尺寸），最多两张参考图；不支持蒙版和指定背景等参数。门户通道无法确认时请重试，不要当作原生通道提交。
 
 在账号列表或卡片中点击 Web 状态/图片额度标识，即可查看该账号的网页生图剩余额度、重置时间和观察时间；弹窗可显式启用或停用该账号，无需跳转设置。打开弹窗只读取最近记录，启用不会自动检查或生图；手动点击“刷新额度（不生成图片）”才运行网页环境/额度检查。额度未知不等于 0 或无限；刷新失败保留旧额度观察，并单独显示最近检查时间、阶段、错误码及上游状态，同时撤销 Web 就绪状态，不影响原生 Codex 状态。
 
-设置页支持按勾选账号、现有 Codex 分组或 Web API Key 授权范围批量启用/停用。范围在服务端重新解析并遵循账号/分组/套餐授权，单次最多 1000 个账号，逐项返回更新、未变化和失败结果。它是对当前成员的显式批量操作，不是未来新增成员的自动启用策略；不会运行额度检查、刷新 token 或生成图片。
+自动启用在读取 Web 状态、模型列表、环境检查或生图调度时按当前数据库范围初始化，覆盖旧 Key 及后续加入分组的成员，不必重新保存 Key。仅有效（已启用、未过期且允许生图）的 Web Key 明确绑定的正数分组生效，并遵循套餐和账号 Key 授权；不限分组或仅选择“未分组”的 Key 不会自动启用全库。已有 Web 状态不覆盖：手动停用优先，设备身份、环境版本、ready/额度记录保持不变。取消绑定不自动关闭已有启用记录；实际调度始终仍受当前 Key 范围限制。自动启用不发送上游检查、不生成图片，仍需 30 分钟内的有效环境检查和可用额度。
+
+设置页的“批量控制 Web 账号”用于手动覆盖：按勾选账号、现有 Codex 分组或 Web API Key 授权范围启用/停用，单次最多 1000 个账号，逐项返回结果。对未配置账号停用也会保存显式停用记录，防止被自动启用；它不检查额度、刷新 token 或生成图片。
 
 Web 检查使用有效的显式 workspace，或通过同一凭据/出口认证后发现上游默认 workspace；`user-` 登录身份和缺失 JWT workspace 不会被误当作账号不可用。显式空间不存在或不属于该账号时不会切换到默认空间。导入/凭据更新也在公共流程中规范化用户与空间身份，缺失身份按受控预算补全；无法确认的身份保留待验证状态，不伪造 workspace。
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
@@ -26,7 +27,7 @@ func (h *Handler) GetChatGPTWebStatus(c *gin.Context) {
 }
 
 func (h *Handler) ListChatGPTWebAccounts(c *gin.Context) {
-	states, err := h.db.ListChatGPTWebAccountStates(c.Request.Context())
+	states, err := auth.ListChatGPTWebAccountStates(c.Request.Context(), h.db)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Unable to load web account states"})
 		return

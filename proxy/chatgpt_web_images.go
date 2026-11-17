@@ -75,7 +75,7 @@ func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIK
 	if checkAPIKeyModel("gpt-image-2", row.Limits) != "" || row.Limits.ResolveImageGenerationPolicy() != database.ImageGenerationPolicyAllow {
 		return records
 	}
-	states, err := h.db.ListChatGPTWebAccountStates(ctx)
+	states, err := auth.ListChatGPTWebAccountStates(ctx, h.db)
 	if err != nil {
 		return records
 	}
@@ -99,7 +99,7 @@ func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIK
 }
 
 func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string, until time.Time, pinnedID int64) (*auth.Account, *database.ChatGPTWebAccountState, string, error) {
-	states, err := h.db.ListChatGPTWebAccountStates(c.Request.Context())
+	states, err := auth.ListChatGPTWebAccountStates(c.Request.Context(), h.db)
 	if err != nil {
 		return nil, nil, "", errors.New("web account state is unavailable")
 	}

@@ -6,7 +6,7 @@ This opt-in image provider leaves all existing channels unchanged. The gateway o
 
 Gateway: `CHATGPT_WEB_ENABLED` (default false), `CHATGPT_WEB_WORKER_URL` (private HTTP URL or trusted HTTPS), `CHATGPT_WEB_WORKER_SECRET`, `CHATGPT_WEB_TIMEOUT_SECONDS` (default 180, bounded 10..600). Worker: the same secret, `CHATGPT_WEB_STATE_DIR` (private durable volume). No raw upstream endpoint override in request payloads. The worker authenticates every route except a secret-free liveness check. Its default listener is loopback; Compose exposes it only to the gateway network.
 
-API Key channel: `chatgpt_web`. Only Images and image job entrypoints are supported; text, WebSocket, compact and live entrypoints fail closed. Models for the first implementation: exactly `gpt-image-2`. Existing `auto` and `codex` routing remain unchanged. Accounts need an explicit web enable flag and verified web environment/capabilities, tracked separately from native Codex quota and model cooldowns.
+API Key channel: `chatgpt_web`. Only Images and image job entrypoints are supported; text, WebSocket, compact and live entrypoints fail closed. Models for the first implementation: exactly `gpt-image-2`. Existing `auto` and `codex` routing remain unchanged. Web enablement is tracked separately from native Codex quota/model cooldowns. Active, unexpired Web keys that allow images and explicitly bind positive group IDs initialize eligible, previously unconfigured OAuth members on Web state/model/check/dispatch reads. Current group/plan/account-key authorization applies; unrestricted or ungrouped-only keys do not opt in the whole pool. Existing state, especially explicit disable, is never overwritten. New state is enabled/unverified, not ready; no upstream check or generation is triggered. Unbinding does not undo persisted enablement, but dispatch still enforces current authorization and observation freshness.
 
 ## Worker requests
 
@@ -86,8 +86,8 @@ Before any upstream generation POST, atomically persist a submission fence. Reco
 ## Gateway administrative contract
 
 - `GET /api/admin/chatgpt-web`: deployment status (`enabled`, `configured`, `protocol_version`, `supported_models`); no secret value.
-- `GET /api/admin/chatgpt-web/accounts`: array of account web states.
-- `PUT /api/admin/chatgpt-web/accounts/:id`: `{enabled: boolean}` only; changing enable/environment invalidates readiness until check.
+- `GET /api/admin/chatgpt-web/accounts`: array of account web states, after insert-only group-default initialization; includes future group members without resaving keys.
+- `PUT /api/admin/chatgpt-web/accounts/:id`: `{enabled: boolean}` only; changing enable/environment invalidates readiness until check. Explicit disable, including for an absent row and through the batch endpoint, persists and wins over default initialization.
 - `POST /api/admin/chatgpt-web/accounts/:id/check`: explicit environment/capability check, no generation.
 - `GET /api/admin/chatgpt-web/executions?account_id=...`: bounded recent execution summaries; no prompt, token, raw URL, or image data.
 
