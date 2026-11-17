@@ -1916,6 +1916,8 @@ type APIKeyLimits struct {
 	//   - claude:      仅 Claude OAuth / Anthropic Messages 账号
 	//   - chatgpt_web: 显式启用的 ChatGPT Web 图片渠道（不参与原生调度）
 	UpstreamChannel string `json:"upstream_channel,omitempty"`
+	// WebSchedulingMode controls only new ChatGPT Web image executions. Empty keeps fill_first.
+	WebSchedulingMode string `json:"web_scheduling_mode,omitempty"`
 	// ScopeLimits 是「该 Key × 某账号分组 / 某账号」维度的用量上限（issue #439）。
 	// 与上面的 Cost/Token 限额不同，它只统计该 Key 打到对应 scope 的用量，超额后默认
 	// 把该 scope 的账号从候选池剔除（自动落到其它分组），详见 APIKeyScopeLimit。
@@ -1931,6 +1933,11 @@ const (
 	ImageGenerationPolicyAllow = "allow"
 	ImageGenerationPolicyStrip = "strip"
 	ImageGenerationPolicyBlock = "block"
+)
+
+const (
+	WebSchedulingFillFirst  = "fill_first"
+	WebSchedulingRoundRobin = "round_robin"
 )
 
 // 上游渠道限定取值。
@@ -2013,6 +2020,7 @@ func (l APIKeyLimits) IsZero() bool {
 		!l.AutoCompactOnOverflow &&
 		!l.AllowLive &&
 		!l.ExternalScheduler &&
+		l.WebSchedulingMode == "" &&
 		l.ResolveImageGenerationPolicy() == ImageGenerationPolicyAllow &&
 		l.ResolveUpstreamChannel() == UpstreamChannelAuto
 }

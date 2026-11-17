@@ -49,6 +49,7 @@ type Handler struct {
 	chatGPTWebRuntime        func() (chatGPTWebConfig, error)
 	chatGPTWebAdmissionOnce  sync.Once
 	chatGPTWebAdmissionSlots chan struct{}
+	chatGPTWebLastAccount    sync.Map // round-robin key ID -> last successfully leased account ID
 	store                    *auth.Store
 	configKeys               map[string]bool // 配置文件中的静态 key
 	db                       *database.DB

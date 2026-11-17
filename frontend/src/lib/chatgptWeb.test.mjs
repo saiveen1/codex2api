@@ -10,6 +10,10 @@ test('web channel is explicit and survives key editing', () => {
   assert.match(keys, /limits\.upstream_channel === "chatgpt_web"/)
   assert.match(keys, /form\.upstreamChannel === "auto" \? undefined : form\.upstreamChannel/)
   assert.match(keys, /upstreamChannel: "auto"/)
+  assert.match(keys, /webMode=\{createForm\.limits\.webSchedulingMode\}/)
+  assert.match(keys, /webMode=\{editForm\.limits\.webSchedulingMode\}/)
+  assert.match(keys, /webSchedulingMode: limits\.web_scheduling_mode \?\? "fill_first"/)
+  assert.match(keys, /web_scheduling_mode: form\.upstreamChannel === "chatgpt_web" \? form\.webSchedulingMode : undefined/)
 })
 
 test('web controls require explicit actions and executions are bounded', () => {
@@ -56,6 +60,7 @@ test('web account guidance is discoverable in both key forms and the studio', ()
     assert.match(messages.chatgptWebAutoHint, /automatic checks|自动检查|自動檢查/)
     assert.match(messages.chatgptWeb.guide, /manual|手动|手動/)
     assert.ok(messages.chatgptWebManageAccounts)
+    for (const key of ['label', 'fillFirst', 'roundRobin', 'hint']) assert.ok(messages.chatgptWebScheduling[key])
     assert.doesNotMatch(messages.chatgptWeb.batchHint, /future members are not automatically enabled|后续新增成员不会自动启用|後續新增成員不會自動啟用/)
   }
 })

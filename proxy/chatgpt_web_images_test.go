@@ -406,6 +406,7 @@ func TestChatGPTWebCachedCompletionMayOmitHistoricalStages(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(chatGPTWebEvent{Type: "image", Image: &chatGPTWebImage{B64JSON: tinyPNGBase64, MIMEType: "image/png", Width: 1, Height: 1, AssetID: "file_output"}})
+		_ = json.NewEncoder(w).Encode(chatGPTWebEvent{Type: "image", Image: &chatGPTWebImage{B64JSON: tinyPNGBase64, MIMEType: "image/png", Width: 1, Height: 1, AssetID: "file_extra_cached"}})
 		fmt.Fprintln(w, `{"type":"completed","usage_known":false}`)
 	})
 	first := f.request(t, "/v1/images/generations", `{"prompt":"square"}`, "cached")
@@ -426,7 +427,7 @@ func TestChatGPTWebCachedCompletionMayOmitHistoricalStages(t *testing.T) {
 		t.Fatalf("cache replay failed: %s", r.Body.String())
 	}
 	rows, _ := f.db.ListChatGPTWebExecutions(context.Background(), f.account.ID(), 10)
-	if len(rows) != 1 || rows[0].Stage != "completed" || rows[0].ConversationID != "original-conversation" || attempts.Load() != 2 {
+	if len(rows) != 1 || rows[0].Stage != "completed" || len(rows[0].AssetIDs) != 2 || gjson.Get(r.Body.String(), "data.#").Int() != 1 || rows[0].ConversationID != "original-conversation" || attempts.Load() != 2 {
 		t.Fatalf("bad completed state: %+v", rows)
 	}
 }

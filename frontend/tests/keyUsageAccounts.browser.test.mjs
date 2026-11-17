@@ -40,7 +40,7 @@ before(async () => {
 })
 after(async () => { await browser?.close() })
 
-test('key permissions retain an in-flight save across edit tabs', async t => {
+test('Web scheduling and key permissions persist across edit tabs', async t => {
   const page = await browser.newPage()
   page.setDefaultTimeout(5000)
   const errors = []
@@ -61,9 +61,13 @@ test('key permissions retain an in-flight save across edit tabs', async t => {
       let body = {}
       if (path === '/api/admin/keys') body = { keys: [{
         id: 10, name: 'fixture-key', key: 'sk-fixture', status: 'active',
-        quota_limit: 0, quota_used: 0, total_used: 0, allowed_group_ids: [], limits: {},
+        quota_limit: 0, quota_used: 0, total_used: 0, allowed_group_ids: [], limits: { upstream_channel: 'chatgpt_web' },
         created_at: '2026-01-01T00:00:00Z',
       }] }
+      else if (path === '/api/admin/keys/10' && options.method === 'PATCH') {
+        window.__savedKeyLimits = JSON.parse(options.body).limits
+        body = { message: 'ok', limits: window.__savedKeyLimits }
+      }
       else if (path === '/api/admin/account-groups') body = { groups: [] }
       else if (path === '/api/admin/models') body = { models: ['gpt-5.5'] }
       else if (path === '/api/admin/settings') body = { public_key_usage_page_enabled: true }
@@ -106,6 +110,13 @@ test('key permissions retain an in-flight save across edit tabs', async t => {
     { view_enabled: false, reset_enabled: true },
     { view_enabled: false, reset_enabled: false },
   ])
+  const mode = dialog.getByRole('button', { name: 'Web 生图账号选择', exact: true })
+  assert.match(await mode.innerText(), /优先用满/)
+  await mode.click()
+  await page.getByRole('option', { name: '均匀分布（轮转）', exact: true }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await page.waitForFunction(() => window.__savedKeyLimits?.web_scheduling_mode === 'round_robin')
+  assert.equal(await page.evaluate(() => window.__savedKeyLimits.upstream_channel), 'chatgpt_web')
 })
 
 test('portal filters groups, confirms redemption and uses a UUID on HTTP', async t => {

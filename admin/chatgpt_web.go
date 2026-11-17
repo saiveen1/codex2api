@@ -110,6 +110,10 @@ func (h *Handler) ListChatGPTWebExecutions(c *gin.Context) {
 			return
 		}
 	}
+	if executionID, present := c.GetQuery("execution_id"); present {
+		h.reconcileChatGPTWebExecution(c, executionID, id)
+		return
+	}
 	rows, err := h.db.ListChatGPTWebExecutions(c.Request.Context(), id, 50)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Unable to load web executions"})

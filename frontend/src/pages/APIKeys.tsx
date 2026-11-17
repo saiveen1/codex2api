@@ -146,6 +146,7 @@ interface LimitsFormState {
   allowLive: boolean;
   externalScheduler: boolean;
   upstreamChannel: UpstreamChannel;
+  webSchedulingMode: NonNullable<APIKeyLimits["web_scheduling_mode"]>;
   scopeLimits: ScopeLimitFormState[];
   modelRequestLimits: ModelRequestLimitFormState[];
 }
@@ -268,6 +269,7 @@ const emptyLimitsForm: LimitsFormState = {
   allowLive: false,
   externalScheduler: false,
   upstreamChannel: "auto",
+  webSchedulingMode: "fill_first",
   scopeLimits: [],
   modelRequestLimits: [],
 };
@@ -2295,6 +2297,8 @@ export default function APIKeys() {
               <UpstreamChannelPicker
                 value={createForm.limits.upstreamChannel}
                 onChange={updateCreateUpstreamChannel}
+                webMode={createForm.limits.webSchedulingMode}
+                onWebModeChange={(webSchedulingMode) => updateCreateForm({ limits: { ...createForm.limits, webSchedulingMode } })}
               />
             </FormField>
             {supportsChatGPTLive(createForm.limits.upstreamChannel) ? (
@@ -2503,6 +2507,8 @@ export default function APIKeys() {
                     <UpstreamChannelPicker
                       value={editForm.limits.upstreamChannel}
                       onChange={updateEditUpstreamChannel}
+                      webMode={editForm.limits.webSchedulingMode}
+                      onWebModeChange={(webSchedulingMode) => updateEditForm({ limits: { ...editForm.limits, webSchedulingMode } })}
                     />
                   </FormField>
                   {supportsChatGPTLive(editForm.limits.upstreamChannel) ? (
@@ -2792,6 +2798,7 @@ function limitsFromAPIKey(limits: APIKeyLimits | undefined): LimitsFormState {
     imageGenerationPolicy: resolveImageGenerationPolicy(limits),
     allowLive: Boolean(limits.allow_live),
     externalScheduler: Boolean(limits.external_scheduler),
+    webSchedulingMode: limits.web_scheduling_mode ?? "fill_first",
     upstreamChannel:
       limits.upstream_channel === "codex" ||
       limits.upstream_channel === "grok" ||
@@ -2859,9 +2866,13 @@ function scopeLimitRowHasLimit(row: ScopeLimitFormState): boolean {
 function UpstreamChannelPicker({
   value,
   onChange,
+  webMode,
+  onWebModeChange,
 }: {
   value: UpstreamChannel;
   onChange: (next: UpstreamChannel) => void;
+  webMode: LimitsFormState["webSchedulingMode"];
+  onWebModeChange: (mode: LimitsFormState["webSchedulingMode"]) => void;
 }) {
   const { t } = useTranslation();
   const options: Array<{
@@ -2931,6 +2942,14 @@ function UpstreamChannelPicker({
       </p>
       {value === "chatgpt_web" && (
         <div className="mt-2 space-y-1 rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed">
+          <span className="text-sm font-medium">{t("chatgptWebScheduling.label")}</span>
+          <Select compact aria-label={t("chatgptWebScheduling.label")} value={webMode}
+            onValueChange={(value) => onWebModeChange(value === "round_robin" ? "round_robin" : "fill_first")}
+            options={[
+              { value: "fill_first", label: t("chatgptWebScheduling.fillFirst") },
+              { value: "round_robin", label: t("chatgptWebScheduling.roundRobin") },
+            ]} />
+          <p>{t("chatgptWebScheduling.hint")}</p>
           <p>{t("chatgptWebAutoHint")}</p>
           <Link className="text-primary underline" to="/settings#settings-codex-images">{t("chatgptWebManageAccounts")}</Link>
         </div>
@@ -3057,6 +3076,7 @@ function limitsFormToPayload(form: LimitsFormState, t: Translator): APIKeyLimits
     external_scheduler: form.externalScheduler || undefined,
     upstream_channel:
       form.upstreamChannel === "auto" ? undefined : form.upstreamChannel,
+    web_scheduling_mode: form.upstreamChannel === "chatgpt_web" ? form.webSchedulingMode : undefined,
     model_request_limits: modelRequestLimitsToPayload(form.modelRequestLimits, t),
     scope_limits: form.scopeLimits
       .filter((row) => Number(row.scopeId.trim()) > 0)

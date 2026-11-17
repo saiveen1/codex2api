@@ -8815,8 +8815,10 @@ func generateKey() (string, error) {
 // CreateAPIKey 创建新 API 密钥（增强版，带输入验证）
 func (h *Handler) CreateAPIKey(c *gin.Context) {
 	var req createKeyReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req.Name = ""
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		// Never create a key using partially decoded limits.
+		writeError(c, http.StatusBadRequest, "请求体 JSON 格式无效")
+		return
 	}
 
 	// 输入验证和清理
@@ -8901,6 +8903,10 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 
 	limits := sanitizeAPIKeyLimits(req.Limits.withDefaults())
 	if req.Limits != nil {
+		if err := validateWebSchedulingMode(limits); err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		limits.ModelRequestLimits, err = normalizeAdminAPIKeyModelRequestLimits(req.Limits.ModelRequestLimits, nil)
 		if err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())
@@ -9070,6 +9076,10 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 	}
 	if req.Limits != nil {
 		update.Limits = sanitizeAPIKeyLimits(*req.Limits)
+		if err := validateWebSchedulingMode(update.Limits); err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		update.Limits.ModelRequestLimits, err = normalizeAdminAPIKeyModelRequestLimits(req.Limits.ModelRequestLimits, row.Limits.ModelRequestLimits)
 		if err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())
@@ -9152,6 +9162,7 @@ func sanitizeAPIKeyLimits(in database.APIKeyLimits) database.APIKeyLimits {
 		AllowLive:              in.AllowLive,
 		ExternalScheduler:      in.ExternalScheduler,
 		UpstreamChannel:        in.ResolveUpstreamChannel(),
+		WebSchedulingMode:      in.WebSchedulingMode,
 		ScopeLimits:            database.NormalizeAPIKeyScopeLimits(in.ScopeLimits),
 		ModelRequestLimits:     in.ModelRequestLimits,
 	}
@@ -9161,6 +9172,19 @@ func sanitizeAPIKeyLimits(in database.APIKeyLimits) database.APIKeyLimits {
 		out.ImageGenerationPolicy = ""
 	}
 	return out
+}
+
+func validateWebSchedulingMode(limits database.APIKeyLimits) error {
+	if limits.WebSchedulingMode == "" {
+		return nil
+	}
+	if limits.UpstreamChannel != database.UpstreamChannelChatGPTWeb {
+		return errors.New("limits.web_scheduling_mode requires the chatgpt_web channel")
+	}
+	if limits.WebSchedulingMode != database.WebSchedulingFillFirst && limits.WebSchedulingMode != database.WebSchedulingRoundRobin {
+		return errors.New("limits.web_scheduling_mode must be fill_first or round_robin")
+	}
+	return nil
 }
 
 func (h *Handler) validateAPIKeyGroupIDs(ctx context.Context, groupIDs []int64, field string) error {

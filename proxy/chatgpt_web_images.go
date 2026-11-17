@@ -91,14 +91,28 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 		return nil, nil, "", errors.New("web account state is unavailable")
 	}
 	filter := h.chatGPTWebRequestFilter(c)
-	for _, state := range states {
+	keyID := requestAPIKeyID(c)
+	key := apiKeyRowFromContext(c)
+	roundRobin := pinnedID == 0 && key != nil && key.Limits.WebSchedulingMode == database.WebSchedulingRoundRobin
+	start := 0
+	if roundRobin {
+		if last, ok := h.chatGPTWebLastAccount.Load(keyID); ok {
+			// The DB returns ID order. Advance past the winner, not one raw
+			// list entry, so gaps of unusable accounts don't bias rotation.
+			if next := slices.IndexFunc(states, func(s database.ChatGPTWebAccountState) bool { return s.AccountID > last.(int64) }); next >= 0 {
+				start = next
+			}
+		}
+	}
+	for i := range states {
+		state := states[(start+i)%len(states)]
 		if pinnedID != 0 && state.AccountID != pinnedID {
 			continue
 		}
 		if !chatGPTWebStateReady(state, operation, time.Now()) {
 			continue
 		}
-		account := h.store.TakeChatGPTWebAccount(state.AccountID, requestAPIKeyID(c), filter)
+		account := h.store.TakeChatGPTWebAccount(state.AccountID, keyID, filter)
 		if account == nil {
 			continue
 		}
@@ -143,24 +157,40 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 			continue
 		}
 		h.AcquireAPIKeyScopeConcurrency(c, account)
+		if roundRobin {
+			h.chatGPTWebLastAccount.Store(keyID, state.AccountID)
+		}
 		return account, latest, proxyURL, nil
 	}
 	return nil, nil, "", &chatGPTWebFailure{"web_account_unavailable", http.StatusServiceUnavailable, false}
 }
 
-func writeChatGPTWebError(c *gin.Context, err error, executionID string) {
+func chatGPTWebErrorFields(err error, executionID string) (gin.H, int) {
 	failure := &chatGPTWebFailure{code: "upstream_error", status: 502}
 	if !errors.As(err, &failure) {
 		failure = &chatGPTWebFailure{code: "upstream_error", status: 503}
 	}
-	payload := gin.H{"error": gin.H{"type": "chatgpt_web_error", "code": failure.code, "message": failure.Error(), "execution_id": executionID, "result_unknown": failure.unknown, "retryable": false}}
+	body := gin.H{"type": "chatgpt_web_error", "code": failure.code, "message": failure.Error(), "execution_id": executionID, "result_unknown": failure.unknown, "retryable": false}
+	var detail *webExecutionFailure
+	if errors.As(err, &detail) {
+		body["last_confirmed_stage"] = detail.stage
+		body["asset_count"] = detail.assets
+		body["recovery_ids_known"] = detail.recoveryIDs
+		body["validated_image"] = detail.imageValidated
+	}
+	return body, failure.status
+}
+
+func writeChatGPTWebError(c *gin.Context, err error, executionID string) {
+	body, status := chatGPTWebErrorFields(err, executionID)
+	payload := gin.H{"error": body}
 	if c.Writer.Written() {
 		b, _ := json.Marshal(payload)
 		_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", b)
 		c.Writer.Flush()
 		return
 	}
-	c.JSON(failure.status, payload)
+	c.JSON(status, payload)
 }
 
 func chatGPTWebProgress(c *gin.Context, stream bool, id, stage string) error {
@@ -247,6 +277,7 @@ func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, pro
 	var failed error
 	var lastID string
 	for i := 0; i < options.N; i++ {
+		lastID = "" // A Key limit may reject this item before an execution exists.
 		if i > 0 {
 			h.attachAPIKeyModelRequestQuota(c, true)
 			if status, _ := h.enforceAPIKeyLimits(c, model); status != 0 {
@@ -281,21 +312,26 @@ func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, pro
 			p.finalize(cleanup)
 		}()
 	}
+	// Only successful executions reached response assembly. A failure here is
+	// local delivery failure, not an ambiguous upstream generation.
+	lastCompletedID := fmt.Sprintf("web-%s-%d", base, len(results)-1)
 	if p := pipelineFromContext(ctx); p != nil {
 		if err := p.Acquire(ctx); err != nil {
-			writeChatGPTWebError(c, &chatGPTWebFailure{"image_download_failed", 502, true}, lastID)
+			writeChatGPTWebError(c, &chatGPTWebFailure{"image_delivery_failed", 502, false}, lastCompletedID)
 			return
 		}
 	}
 	out, err := buildImagesAPIResponse(ctx, results, time.Now().Unix(), nil, firstMeta, responseFormat, urlFor)
 	if err != nil {
-		writeChatGPTWebError(c, &chatGPTWebFailure{"image_download_failed", 502, true}, lastID)
+		writeChatGPTWebError(c, &chatGPTWebFailure{"image_delivery_failed", 502, false}, lastCompletedID)
 		return
 	}
 	out, _ = sjson.SetBytes(out, "channel", database.UpstreamChannelChatGPTWeb)
 	out, _ = sjson.SetBytes(out, "usage_known", false)
 	if failed != nil {
-		out, _ = sjson.SetBytes(out, "warning", chatGPTWebErrorMessage("upstream_error"))
+		itemError, _ := chatGPTWebErrorFields(failed, lastID)
+		out, _ = sjson.SetBytes(out, "warning", itemError["message"])
+		out, _ = sjson.SetBytes(out, "partial_error", itemError)
 		out, _ = sjson.SetBytes(out, "partial_success", true)
 	}
 	if stream {
@@ -306,8 +342,9 @@ func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, pro
 		if operation == "edit" {
 			event = "image_edit.completed"
 		}
-		for _, result := range results {
+		for i, result := range results {
 			payload := buildImagesStreamCompletedPayload(event, result, responseFormat, time.Now().Unix(), nil)
+			payload, _ = sjson.SetBytes(payload, "execution_id", fmt.Sprintf("web-%s-%d", base, i))
 			payload, _ = sjson.SetBytes(payload, "channel", database.UpstreamChannelChatGPTWeb)
 			payload, _ = sjson.SetBytes(payload, "usage_known", false)
 			_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, payload)
@@ -431,16 +468,20 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 	}
 	started := time.Now()
 	submitted := false
+	imageValidated := false
 	defer func() {
 		status := 200
 		code := ""
 		unknown := false
+		lastStage := execution.Stage
 		if runErr != nil {
 			failure := &chatGPTWebFailure{code: "upstream_error", status: 502, unknown: submitted}
 			if !errors.As(runErr, &failure) {
 				failure = &chatGPTWebFailure{code: "upstream_error", status: 502, unknown: submitted}
 			}
-			status, code, unknown = failure.status, failure.code, failure.unknown
+			detail := describeWebFailure(failure, execution, imageValidated)
+			runErr = detail
+			status, code, unknown = detail.status, detail.code, detail.unknown
 			uncertain = unknown
 			execution.ErrorCode = code
 			execution.ResultUnknown = unknown
@@ -466,10 +507,15 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 		} else {
 			applyImageUsageLogInfo(logInput, imageUsageLogInfoFromImages([]imageCallResult{result}))
 		}
-		if runErr == nil {
-			contextJSON, _ := json.Marshal(map[string]any{"schema": 2, "request_id": snapshotUpstreamTrace(ctx).RequestID, "account_id": account.ID(), "provider": database.UpstreamChannelChatGPTWeb, "execution_id": execution.ID, "usage_known": false, "outcome": "success"})
-			logInput.DiagnosticContext = string(contextJSON)
+		outcome := "success"
+		if runErr != nil {
+			outcome = "failed"
+			if unknown {
+				outcome = "unconfirmed"
+			}
 		}
+		contextJSON, _ := json.Marshal(map[string]any{"schema": 2, "request_id": snapshotUpstreamTrace(ctx).RequestID, "account_id": account.ID(), "provider": database.UpstreamChannelChatGPTWeb, "execution_id": execution.ID, "usage_known": false, "outcome": outcome, "last_confirmed_stage": lastStage, "asset_count": len(execution.AssetIDs), "error_code": code, "result_unknown": unknown, "validated_image": imageValidated})
+		logInput.DiagnosticContext = string(contextJSON)
 		h.logUsageForRequest(c, logInput)
 	}()
 	if existing == nil {
@@ -504,10 +550,12 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/x-ndjson") {
 		return result, &chatGPTWebFailure{"submission_unknown", 502, true}
 	}
-	limited := &io.LimitedReader{R: resp.Body, N: chatGPTWebMaxResponseBytes + 1}
+	// Keep individual events bounded while consuming legitimate extra assets.
+	limited := &io.LimitedReader{R: resp.Body, N: 8*chatGPTWebMaxResponseBytes + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), chatGPTWebMaxResponseBytes)
-	gotImage := false
+	imageEvents := 0
+	declaredAssets := len(execution.AssetIDs) > 0
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return result, &chatGPTWebFailure{"submission_unknown", 502, true}
@@ -518,7 +566,7 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 		}
 		var event chatGPTWebEvent
 		if json.Unmarshal(line, &event) != nil {
-			return result, &chatGPTWebFailure{"submission_unknown", 502, true}
+			return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 		}
 		switch event.Type {
 		case "stage":
@@ -529,7 +577,7 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			switch stage {
 			case "submitted", "generated", "downloading":
 			default:
-				return result, &chatGPTWebFailure{"submission_unknown", 502, true}
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
 			// Validate before mutating the snapshot: an invalid event must not
 			// poison the subsequent failure-record save.
@@ -563,12 +611,16 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
 			*execution = next
+			if len(event.AssetIDs) > 0 {
+				declaredAssets = true
+			}
 			if err := chatGPTWebProgress(c, stream, req.ExecutionID, stage); err != nil {
 				return result, &chatGPTWebFailure{"submission_unknown", 502, true}
 			}
 		case "image":
-			if gotImage || event.Image == nil {
-				return result, &chatGPTWebFailure{"upstream_error", 502, true}
+			imageEvents++
+			if imageEvents > 8 || event.Image == nil {
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
 			im, err := chatGPTWebDecodeImage(event.Image.B64JSON)
 			if err != nil {
@@ -581,35 +633,31 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			if !webasset.Valid(assetID) {
 				return result, &chatGPTWebFailure{"image_download_failed", 502, true}
 			}
-			if len(execution.AssetIDs) == 0 {
-				execution.AssetIDs = []string{assetID}
-			} else {
-				found := false
-				for _, id := range execution.AssetIDs {
-					if id == assetID {
-						found = true
-						break
-					}
+			if !slices.Contains(execution.AssetIDs, assetID) {
+				if declaredAssets || len(execution.AssetIDs) >= 8 {
+					return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 				}
-				if !found {
-					return result, &chatGPTWebFailure{"image_download_failed", 502, true}
-				}
+				// Cached replay can emit images without repeating the stage list.
+				execution.AssetIDs = append(execution.AssetIDs, assetID)
 			}
+			if imageValidated {
+				continue
+			} // n=1: extra valid assets are not additional outputs.
 			decoded, _ := decodeImageBase64(im.B64JSON)
 			result = imageCallResult{Result: im.B64JSON, Model: req.Model, OutputFormat: strings.TrimPrefix(im.MIMEType, "image/"), Quality: req.Quality, Size: fmt.Sprintf("%dx%d", im.Width, im.Height), Width: im.Width, Height: im.Height, ByteSize: len(decoded)}
-			gotImage = true
+			imageValidated = true
 		case "completed":
-			if !gotImage || limited.N <= 0 {
+			if !imageValidated || limited.N <= 0 {
 				return result, &chatGPTWebFailure{"image_download_failed", 502, true}
 			}
 			if err := h.completeChatGPTWebExecution(ctx, execution); err != nil {
-				return result, &chatGPTWebFailure{"submission_unknown", 502, true}
+				return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 			}
 			return result, nil
 		case "error":
 			return result, chatGPTWebFailureFromEvent(event)
 		default:
-			return result, &chatGPTWebFailure{"submission_unknown", 502, true}
+			return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}
 		}
 	}
 	return result, &chatGPTWebFailure{"submission_unknown", 502, true}

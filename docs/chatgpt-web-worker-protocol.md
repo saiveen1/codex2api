@@ -46,6 +46,8 @@ Unlike check, execute requires a concrete, nonempty, non-`user-` workspace in `c
 
 One worker execution submits at most one generation. The gateway owns batch decomposition and partial-success reporting. Images are bounded, validated binary input transported as base64; the worker must not fetch caller supplied image URLs. Unsupported options are rejected before submission. Size/quality mapping must be explicit; exact output dimensions are not promised. Model and output format are checked, never arbitrary upstream parameters.
 
+One logical output (`n=1` per execution) does not imply that the website returns only one asset. The gateway validates and consumes up to eight image events, retains the first validated image for delivery, and requires terminal `completed`. Extra assets remain traceable; they do not increase the public output count or create additional usage charges. A later terminal error still prevents success. Failures after execution creation include the execution ID and gateway evidence (last confirmed stage, asset count, validated image, known recovery IDs). A transport break with no evidence is still unconfirmed; never regenerate automatically to hide that uncertainty.
+
 Execute response is `application/x-ndjson`, with one event per line:
 
 ```json
@@ -94,6 +96,7 @@ Before any upstream generation POST, atomically persist a submission fence. Reco
 - `PUT /api/admin/chatgpt-web/accounts/:id`: `{enabled: boolean}` only; changing enable/environment invalidates readiness until check. Explicit disable, including for an absent row and through the batch endpoint, persists and wins over default initialization.
 - `POST /api/admin/chatgpt-web/accounts/:id/check`: explicit environment/capability check, no generation.
 - `GET /api/admin/chatgpt-web/executions?account_id=...`: bounded recent execution summaries; no prompt, token, raw URL, or image data.
+- `GET /api/admin/chatgpt-web/executions?execution_id=...`: authenticated, exact read-only lookup, optionally narrowed by `account_id`. Returns gateway state and a separately verified or explicitly unverified worker observation. Does not deliver images, change either ledger, or submit a request.
 
 Gateway exported methods used by the admin package:
 `ChatGPTWebDeploymentStatus() map[string]any` and `(*Handler).CheckChatGPTWebAccount(ctx context.Context, accountID int64) (*database.ChatGPTWebAccountState, error)`.

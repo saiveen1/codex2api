@@ -4004,6 +4004,7 @@ export interface APIKeyLimits {
   /** 图片工具策略：""/"allow" 放行、"strip" 剥离后继续文本请求、"block" 命中即 403。 */
   image_generation_policy?: "allow" | "strip" | "block"
   upstream_channel?: UpstreamChannel | 'chatgpt_web'
+  web_scheduling_mode?: 'fill_first' | 'round_robin'
   /** 允许该 Key 使用 ChatGPT Live（/v1/live）。新建自动/Codex 渠道 Key 默认开启。 */
   allow_live?: boolean
   /** 外部调度模式（issue #831）：请求用 X-Codex2API-Account-ID 指定账号，网关不选号、不换号、不重试。 */

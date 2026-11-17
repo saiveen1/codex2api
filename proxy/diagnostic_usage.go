@@ -83,6 +83,12 @@ func applyDiagnosticTraceSnapshot(s upstreamTraceSnapshot, input *database.Usage
 }
 
 func saveDiagnosticUsageContext(input *database.UsageLogInput, e diagnosticEvent) {
+	// Web executions carry a bounded, provider-specific ledger receipt. The
+	// generic trace cannot reconstruct its execution ID or delivery evidence.
+	if input.Channel == database.UpstreamChannelChatGPTWeb && input.DiagnosticContext != "" {
+		writeDiagnostic(json.RawMessage(input.DiagnosticContext))
+		return
+	}
 	input.DiagnosticContext = encodeDiagnosticEvent(e)
 	message := strings.TrimSpace(input.ErrorMessage)
 	if e.Outcome == "failure" && (message == "" || message == fmt.Sprintf("HTTP %d", input.StatusCode)) {

@@ -96,6 +96,10 @@ or a claim that Docker images have been built or run.
 
 ## 中文快速使用
 
+Web Key 的「账号调度」可选：**优先用满**（默认，保持原行为）或**均匀分布**（在本 Key 当前可用的账号间轮转）。只对新执行选号；不扩大 Key 授权、不更改原生 Codex 设置，单账号 Web 独占租约不变。轮转位置在网关进程内按 Key 保存，重启会重置；已有执行只在原账号恢复。
+
+每个图片执行只交付一张。若 Worker 为同一次生成返回多张合法资产，网关保留资产引用、校验事件，在收到完成标志后交付第一张，不为额外资产重复计费。断流或拒绝不算交付成功。排障时从错误响应取 `execution_id`；管理员通过 `GET /api/admin/chatgpt-web/executions?execution_id=...` 只读核对网关与 Worker，不会重新生成。Worker 完成或有缓存不代表客户端收到图片。
+
 Web 生图是默认关闭的独立通道，不等同于 Codex 原生生图。在设置 → Codex → 生图设置 → ChatGPT Web 生图（实验性）→ 服务控制中保存并启用服务。创建通道为 `chatgpt_web` 的专用 API Key 并绑定分组后，即可在生图工作台选择该 Key 发起生成；没有就绪账号时会在授权范围内做有界按需检查，不必先逐个手动检查。API Key 配置及工作台保留设置直达链接，便于手动诊断认证、额度或代理问题。Web 失败不会自动回退原生通道。
 
 支持七个调用名称：`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst`。这些是受控兼容名称，按所选名称记账和绑定执行；不保证能锁定上游图片引擎版本。仅支持自动质量、比例尺寸、PNG/JPEG/WebP和最多两张参考图；不新增2k/4k后缀、GIF、蒙版等未经适配的参数。外部Worker需同步更新到支持这些名称的版本。

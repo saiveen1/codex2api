@@ -191,14 +191,20 @@ func chatGPTWebErrorMessage(code string) string {
 		return "Requested image options cannot be preserved by the ChatGPT Web provider"
 	case "execution_conflict":
 		return "This image execution already exists; inspect its status instead of generating again"
+	case "image_delivery_failed":
+		return "Image generation completed, but the gateway could not prepare the client response. Inspect the existing execution; do not regenerate"
 	case "image_download_failed":
 		return "The image may have been generated but download failed; do not regenerate automatically"
 	case "content_policy_violation":
 		return "The upstream refused this image request"
 	case "upstream_text_reply":
 		return "The upstream returned text instead of an image"
-	case "submission_unknown", "image_stream_interrupted", "image_poll_timeout":
-		return "Image submission outcome is unknown; do not submit the same generation again"
+	case "image_stream_interrupted":
+		return "The worker stream ended before delivery was confirmed. Inspect this execution ID; do not start another generation"
+	case "image_poll_timeout":
+		return "Polling ended before the image was available. Inspect the existing execution; do not start another generation"
+	case "submission_unknown":
+		return "Submission could not be confirmed. Inspect this execution ID and the worker ledger; do not start another generation"
 	case "invalid_request":
 		return "Invalid ChatGPT Web image request"
 	default:
