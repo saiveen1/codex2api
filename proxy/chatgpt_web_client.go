@@ -79,7 +79,7 @@ func loadChatGPTWebConfig() (chatGPTWebConfig, error) {
 // ChatGPTWebDeploymentStatus deliberately excludes worker URLs and credentials.
 func ChatGPTWebDeploymentStatus() map[string]any {
 	cfg, err := loadChatGPTWebConfig()
-	return map[string]any{"enabled": cfg.enabled, "configured": err == nil, "protocol_version": chatGPTWebProtocolVersion, "supported_models": []string{"gpt-image-2"}}
+	return map[string]any{"enabled": cfg.enabled, "configured": err == nil, "protocol_version": chatGPTWebProtocolVersion, "supported_models": append([]string(nil), chatGPTWebImageModels...)}
 }
 
 func chatGPTWebHash(s string) string {
@@ -176,7 +176,7 @@ func (e *chatGPTWebFailure) Error() string { return chatGPTWebErrorMessage(e.cod
 func chatGPTWebErrorMessage(code string) string {
 	switch code {
 	case "web_account_unavailable":
-		return "No eligible in-scope Web account is available: check a recent (under 30 minutes) Web observation, unchanged credentials/workspace/proxy, and available account capacity"
+		return "No eligible in-scope Web account is available; automatic checks are bounded. Review account authorization, Web status, quota, credentials, workspace, proxy and capacity"
 	case "worker_protocol_error":
 		return "The Web worker event could not be validated or persisted; inspect the execution record before retrying"
 	case "auth_required":
@@ -186,7 +186,7 @@ func chatGPTWebErrorMessage(code string) string {
 	case "quota_exhausted":
 		return "ChatGPT Web image quota is exhausted"
 	case "unsupported_model":
-		return "ChatGPT Web currently supports only gpt-image-2"
+		return "Requested model is not supported by the ChatGPT Web image channel"
 	case "unsupported_parameter":
 		return "Requested image options cannot be preserved by the ChatGPT Web provider"
 	case "execution_conflict":

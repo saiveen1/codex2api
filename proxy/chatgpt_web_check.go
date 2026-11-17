@@ -101,9 +101,45 @@ func webCheckHTTPStatus(code string) int {
 }
 
 func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (*database.ChatGPTWebAccountState, error) {
+	return h.checkChatGPTWebAccount(ctx, accountID, true)
+}
+
+type chatGPTWebCheckAdmissionKey struct{}
+
+type chatGPTWebCheckAdmission struct {
+	validate  func(context.Context) error
+	operation string
+}
+
+func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, initializeDefaults bool) (*database.ChatGPTWebAccountState, error) {
+	admission, _ := ctx.Value(chatGPTWebCheckAdmissionKey{}).(*chatGPTWebCheckAdmission)
+	admit := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if admission != nil {
+			return admission.validate(ctx)
+		}
+		return nil
+	}
 	started := time.Now().UTC()
 	var state *database.ChatGPTWebAccountState
 	var token, binding string
+	// Failure diagnostics and lease release must survive cancellation, but share
+	// one bounded cleanup budget. This context is never used for upstream work.
+	var cleanupCtx context.Context
+	var cleanupCancel context.CancelFunc
+	defer func() {
+		if cleanupCancel != nil {
+			cleanupCancel()
+		}
+	}()
+	cleanupContext := func() context.Context {
+		if cleanupCtx == nil {
+			cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), 3*time.Second)
+		}
+		return cleanupCtx
+	}
 	fail := func(code, stage string, upstream int) (*database.ChatGPTWebAccountState, error) {
 		code, stage = webCheckCode(code), webCheckStage(stage)
 		if upstream < 100 || upstream > 599 {
@@ -111,7 +147,7 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 		}
 		failure := &ChatGPTWebCheckError{Code: code, Stage: stage, HTTPStatus: webCheckHTTPStatus(code), UpstreamStatus: upstream}
 		if state != nil && h.db != nil && code != "account_busy" && code != "observation_stale" {
-			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			cleanup := cleanupContext()
 			applied, err := h.db.RecordChatGPTWebCheckFailure(cleanup, state, token, binding, started, code, stage, upstream)
 			if err == nil && applied {
 				failure.Recorded = true
@@ -119,7 +155,6 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 					state = latest
 				}
 			}
-			cancel()
 		}
 		log.Printf("[ChatGPTWebCheck] account_id=%d code=%s stage=%s upstream_status=%d recorded=%t", accountID, code, stage, upstream, failure.Recorded)
 		return state, failure
@@ -127,8 +162,10 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 	if h.db == nil || h.store == nil {
 		return fail("internal_error", "admission", 0)
 	}
-	if _, err := auth.ListChatGPTWebAccountStates(ctx, h.db); err != nil {
-		return fail("internal_error", "admission", 0)
+	if initializeDefaults {
+		if _, err := auth.ListChatGPTWebAccountStates(ctx, h.db); err != nil {
+			return fail("internal_error", "admission", 0)
+		}
 	}
 	var err error
 	state, err = h.db.GetChatGPTWebAccountState(ctx, accountID)
@@ -161,6 +198,9 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 	if !usable {
 		return fail("egress_unavailable", "admission", 0)
 	}
+	if err := admit(); err != nil {
+		return state, err
+	}
 	owner := "check-" + NewUpstreamSessionUUID()
 	lease, err := h.db.AcquireChatGPTWebAccountLease(ctx, accountID, owner, started.Add(40*time.Second))
 	if err != nil {
@@ -170,12 +210,26 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 		return fail("account_busy", "admission", 0)
 	}
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = h.db.ReleaseChatGPTWebAccountLease(cleanup, accountID, owner)
+		_ = h.db.ReleaseChatGPTWebAccountLease(cleanupContext(), accountID, owner)
 	}()
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := admit(); err != nil {
+		return state, err
+	}
+	if !initializeDefaults {
+		// A preceding check may have finished between selection and the lease.
+		state, err = h.db.GetChatGPTWebAccountState(ctx, accountID)
+		if err != nil {
+			return fail("internal_error", "admission", 0)
+		}
+		if !state.Enabled {
+			return fail("account_disabled", "admission", 0)
+		}
+		if admission != nil && !chatGPTWebAutoCheckNeeded(state, admission.operation, token, requested, proxyURL, expired, time.Now()) {
+			return state, nil
+		}
+	}
 	if expired {
 		// Reuse the existing single-owner refresh/rotation lifecycle, never a
 		// worker refresh or a second refresh-token loop.
@@ -195,7 +249,21 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 			return fail("egress_unavailable", "admission", 0)
 		}
 	}
+	if err := admit(); err != nil {
+		return state, err
+	}
 	request := chatGPTWebAccountRequest{AccountID: accountID, AccessToken: token, ChatGPTAccountID: requested, ExpectedEmail: email, CredentialRevision: chatGPTWebHash(token), EnvironmentRevision: state.EnvironmentRevision, ProxyURL: proxyURL, Environment: chatGPTWebEnvironment{state.DeviceID, state.SessionID}, TimeoutSeconds: 30}
+	if !initializeDefaults {
+		if deadline, ok := checkCtx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return state, context.DeadlineExceeded
+			}
+			if seconds := int((remaining + time.Second - 1) / time.Second); seconds < request.TimeoutSeconds {
+				request.TimeoutSeconds = seconds
+			}
+		}
+	}
 	client := newChatGPTWebHTTPClient()
 	defer client.CloseIdleConnections()
 	resp, err := chatGPTWebPost(checkCtx, client, cfg, "/v1/accounts/check", request)
@@ -266,6 +334,9 @@ func (h *Handler) CheckChatGPTWebAccount(ctx context.Context, accountID int64) (
 	}
 	if observation.Status == "quota_exhausted" && *observation.ImageQuotaRemaining != 0 {
 		return fail("worker_protocol_error", "quota", observation.UpstreamStatus)
+	}
+	if err := admit(); err != nil {
+		return state, err
 	}
 	currentToken, currentRequested, _, _, currentErr := account.ChatGPTWebIdentity()
 	currentProxy, currentUsable := h.store.ResolveChatGPTWebProxy(account)

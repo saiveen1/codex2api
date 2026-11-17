@@ -49,7 +49,7 @@ func parseChatGPTWebImageOptions(raw []byte, model, mask string) (chatGPTWebImag
 	invalid := func() (chatGPTWebImageOptions, error) {
 		return o, &chatGPTWebFailure{"unsupported_parameter", 400, false}
 	}
-	if model != "gpt-image-2" {
+	if !isChatGPTWebImageModel(model) {
 		return o, &chatGPTWebFailure{"unsupported_model", 400, false}
 	}
 	if mask != "" {

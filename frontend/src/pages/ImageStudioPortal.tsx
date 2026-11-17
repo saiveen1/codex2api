@@ -1,4 +1,4 @@
-import { imageReferenceLimit, portalChannelReady, webImageParams } from '../lib/imageStudioChannel'
+import { imageReferenceLimit, portalChannelReady, webImageModelOptions, webImageParams } from '../lib/imageStudioChannel'
 import { formatImageStudioQuota } from '../lib/imageStudioQuota'
 import { IMAGE_MODELS, imageQualityOptions, normalizeImageQualityForModel } from '../lib/imageStudioModels'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -249,18 +249,19 @@ export default function ImageStudioPortal() {
     return stored.key ? stored.remember : true
   })
   const [activeAPIKey, setActiveAPIKey] = useState(() => readStoredAPIKey().key)
-  const [channelSnapshot, setChannelSnapshot] = useState<{key: string; channel?: string} | null>(null)
+  const [channelSnapshot, setChannelSnapshot] = useState<{key: string; channel?: string; limits?: { model_allow?: string[]; model_deny?: string[] }} | null>(null)
   const [channelRetry, setChannelRetry] = useState(0)
   useEffect(() => {
     if (!activeAPIKey) { setChannelSnapshot(null); return }
     let cancelled = false
     void api.getPublicAPIKeyUsage(activeAPIKey, 'today', { page: 1, pageSize: 1 }).then(result => {
-      if (!cancelled) setChannelSnapshot({ key: activeAPIKey, channel: result.key.limits.upstream_channel })
+      if (!cancelled) setChannelSnapshot({ key: activeAPIKey, channel: result.key.limits.upstream_channel, limits: result.key.limits })
     }).catch(() => { if (!cancelled) setChannelSnapshot(null) })
     return () => { cancelled = true }
   }, [activeAPIKey, channelRetry])
   const channelReady = portalChannelReady(activeAPIKey, channelSnapshot?.key)
   const isWebKey = channelReady && channelSnapshot?.channel === 'chatgpt_web'
+  const webModels = webImageModelOptions(channelReady ? channelSnapshot?.limits : undefined)
   const maxInputImages = imageReferenceLimit(isWebKey)
   const [quotaSnapshot, setQuotaSnapshot] = useState<{ key: string; value: ImageStudioQuota } | null>(null)
   const [quotaLoading, setQuotaLoading] = useState(false)
@@ -287,11 +288,11 @@ export default function ImageStudioPortal() {
   const [inputImageDataURLs, setInputImageDataURLs] = useState<string[]>([])
   useEffect(() => {
     if (!isWebKey) return
-    setModel('gpt-image-2')
+    if (webModels.length && !webModels.some(option => option.value === model)) setModel(webModels[0].value)
     setSize(current => webImageParams({ size: current }).size)
     setQuality('auto')
     setOutputFormat(current => webImageParams({ output_format: current }).output_format)
-  }, [isWebKey, model, size, quality, outputFormat])
+  }, [isWebKey, channelSnapshot, model, size, quality, outputFormat])
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false)
@@ -707,7 +708,7 @@ export default function ImageStudioPortal() {
     if (isWebKey && imageToImageMode && inputImageDataURLs.length > imageReferenceLimit(true)) {
       showToast(t('images.maxInputImages', { max: imageReferenceLimit(true) })); return
     }
-    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+    if (isWebKey && (!webModels.some(option => option.value === model) || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
       showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'))
       setAdvancedOpen(true)
       return
@@ -1059,7 +1060,7 @@ export default function ImageStudioPortal() {
 
                   <div className="portal-model-settings">
                     <Field label={t('images.model')}>
-                      <Select value={model} onValueChange={setModel} options={isWebKey ? IMAGE_MODELS.filter(option => option.value === 'gpt-image-2') : IMAGE_MODELS} compact />
+                      <Select value={model} onValueChange={setModel} options={isWebKey ? webModels : IMAGE_MODELS} compact />
                     </Field>
                     <Field label={t('images.size')}>
                       <Select value={size} onValueChange={setSize} options={isWebKey ? ['auto', '1:1', '3:2', '2:3', '16:9', '9:16'].map(value => ({ value, label: value === 'auto' ? t('imageStudioPortal.design.autoSize') : value })) : SIZE_OPTIONS.map(option => ({ ...option, label: option.value === 'auto' ? t('imageStudioPortal.design.autoSize') : option.label.replace('x', ' × ') }))} compact />

@@ -1,4 +1,4 @@
-import { imageKeyMatchesSource, imageReferenceLimit, webImageParams } from '../lib/imageStudioChannel'
+import { imageKeyMatchesSource, imageReferenceLimit, webImageModelOptions, webImageParams } from '../lib/imageStudioChannel'
 import { IMAGE_MODELS, imageQualityOptions, normalizeImageQualityForModel } from '../lib/imageStudioModels'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -563,6 +563,7 @@ export default function ImageStudio() {
   const [imageSource, setImageSource] = useState<'default' | 'web'>('default')
   const selectedKey = apiKeys.find(key => String(key.id) === apiKeyID)
   const isWebKey = imageSource === 'web'
+  const webModels = webImageModelOptions(selectedKey?.limits)
   const [webDeployment, setWebDeployment] = useState<ChatGPTWebDeployment | null>(null)
   const [webDeploymentError, setWebDeploymentError] = useState(false)
   const webServiceReady = Boolean(webDeployment?.enabled && webDeployment.configured)
@@ -578,12 +579,12 @@ export default function ImageStudio() {
   }, [isWebKey])
   useEffect(() => {
     if (!isWebKey) return
-    setModel('gpt-image-2')
+    if (webModels.length && !webModels.some(option => option.value === model)) setModel(webModels[0].value)
     setSize(current => webImageParams({ size: current }).size)
     setQuality('auto')
     setBackground('auto')
     setOutputFormat(current => webImageParams({ output_format: current }).output_format)
-  }, [isWebKey, model, size, quality, background, outputFormat])
+  }, [isWebKey, apiKeyID, apiKeys, model, size, quality, background, outputFormat])
   const [templateName, setTemplateName] = useState('')
   const [templateTags, setTemplateTags] = useState('')
   const [imageToImageMode, setImageToImageMode] = useState(false)
@@ -1028,6 +1029,10 @@ export default function ImageStudio() {
     }
     payload = { ...payload, api_key_id: apiKeyID ? Number(apiKeyID) : undefined }
     if (isWebKey) {
+      if (!webModels.some(option => option.value === payload.model)) {
+        showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'), 'error')
+        return
+      }
       payload = webImageParams(payload)
       if ((payload.input_images?.length || 0) > imageReferenceLimit(true)) {
         showToast(t('images.maxInputImages', { max: imageReferenceLimit(true) }), 'error')
@@ -1386,7 +1391,7 @@ export default function ImageStudio() {
   }
 
   const submitGeneration = () => {
-    if (isWebKey && (model !== 'gpt-image-2' || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || background !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
+    if (isWebKey && (!webModels.some(option => option.value === model) || !['auto', '1:1', '3:2', '2:3', '16:9', '9:16', '3:4', '4:3'].includes(size) || quality !== 'auto' || background !== 'auto' || !['png', 'jpeg', 'webp'].includes(outputFormat))) {
       showToast(t('apiKeys.limits.upstreamChannelHint.chatgpt_web'), 'error')
       setAdvancedOpen(true)
       return
@@ -1500,7 +1505,7 @@ export default function ImageStudio() {
 
         <div className="studio-settings-section">
           <Field label={t('images.model')}>
-            <Select value={model} onValueChange={changeGenerationModel} options={isWebKey ? IMAGE_MODELS.filter(option => option.value === 'gpt-image-2') : IMAGE_MODELS} compact />
+            <Select value={model} onValueChange={changeGenerationModel} options={isWebKey ? webModels : IMAGE_MODELS} compact />
           </Field>
           <div>
             <div className="studio-field-heading">

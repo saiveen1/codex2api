@@ -1,4 +1,5 @@
 import { ANTIGRAVITY_DEFAULT_MODELS as DEFAULT_ANTIGRAVITY_MODEL_OPTIONS } from "../lib/antigravityModels";
+import { WEB_IMAGE_MODELS } from "../lib/imageStudioChannel";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import {
   useCallback,
@@ -462,6 +463,7 @@ export default function APIKeys() {
       : DEFAULT_CLAUDE_MODEL_OPTIONS;
   const modelOptionsForChannel = useCallback(
     (channel: UpstreamChannel): string[] => {
+      if (channel === "chatgpt_web") return WEB_IMAGE_MODELS;
       if (channel === "grok") return grokModelOptions;
       if (channel === "antigravity") return antigravityModelOptions;
       if (channel === "codex") return modelOptions;

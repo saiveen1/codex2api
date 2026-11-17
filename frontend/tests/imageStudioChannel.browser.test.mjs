@@ -43,7 +43,7 @@ before(async () => {
 })
 after(async () => { await browser?.close() })
 
-async function fixture(t, { webKey = true, serviceReady = true, portal = false, viewport = { width: 1440, height: 1000 } } = {}) {
+async function fixture(t, { webKey = true, serviceReady = true, portal = false, metadataReady = false, modelAllow = null, viewport = { width: 1440, height: 1000 } } = {}) {
   const page = await browser.newPage({ viewport })
   page.setDefaultTimeout(5000)
   const errors = []
@@ -52,7 +52,7 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
   t.after(() => page.close())
   await page.route('http://image.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }))
   await page.goto('http://image.test/')
-  await page.evaluate(({ webKey, serviceReady, portal }) => {
+  await page.evaluate(({ webKey, serviceReady, portal, metadataReady, modelAllow }) => {
     localStorage.setItem('lang', 'zh')
     if (portal) localStorage.setItem('codex2api_image_studio_api_key', JSON.stringify({ key: 'sk-synthetic-web', remember: true }))
     window.__portal = portal
@@ -60,17 +60,20 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
     const keys = [
       { id: 10, name: 'native-fixture', key: 'sk-native***', limits: { upstream_channel: 'codex' } },
       { id: 30, name: 'grok-fixture', key: 'sk-grok***', limits: { upstream_channel: 'grok' } },
-      ...(webKey ? [{ id: 20, name: 'web-fixture', key: 'sk-web***', limits: { upstream_channel: 'chatgpt_web' } }] : []),
+      ...(webKey ? [{ id: 20, name: 'web-fixture', key: 'sk-web***', limits: { upstream_channel: 'chatgpt_web', ...(modelAllow ? { model_allow: modelAllow } : {}) } }] : []),
     ].map(key => ({ ...key, status: 'active', quota_limit: 0, quota_used: 0, total_used: 0, allowed_group_ids: [], created_at: '2026-01-01T00:00:00Z' }))
     window.fetch = async (url, options = {}) => {
       const pathname = new URL(String(url), location.origin).pathname
       let body = {}, status = 200
       if (pathname === '/api/admin/keys') body = { keys }
-      else if (pathname === '/api/admin/chatgpt-web') body = { enabled: serviceReady, configured: serviceReady, supported_models: ['gpt-image-2'], protocol_version: 'fixture' }
+      else if (pathname === '/api/admin/chatgpt-web') body = { enabled: serviceReady, configured: serviceReady, supported_models: ['gpt-image-2', 'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.6', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst'], protocol_version: 'fixture' }
       else if (pathname === '/api/admin/image-prompts') body = { templates: [] }
       else if (pathname.endsWith('/assets')) body = { assets: [], total: 0 }
       else if (pathname.endsWith('/quota')) body = { quota_limit: 0, quota_used: 0, quota_remaining: null, expires_at: null, status: 'active', refresh_after_seconds: 3600 }
-      else if (pathname.startsWith('/api/key-usage/')) { status = 503; body = { error: 'Synthetic metadata failure' } }
+      else if (pathname.startsWith('/api/key-usage/')) {
+        if (metadataReady) body = { key: { limits: { upstream_channel: 'chatgpt_web', ...(modelAllow ? { model_allow: modelAllow } : {}) } } }
+        else { status = 503; body = { error: 'Synthetic metadata failure' } }
+      }
       else if (pathname.endsWith('/jobs') || pathname.endsWith('/edit-jobs')) {
         if (options.method === 'POST') {
           window.__submissions.push(JSON.parse(options.body))
@@ -79,7 +82,7 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
       } else if (options.method && options.method !== 'GET') throw new Error('Unexpected write: ' + pathname)
       return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
     }
-  }, { webKey, serviceReady, portal })
+  }, { webKey, serviceReady, portal, metadataReady, modelAllow })
   await page.addStyleTag({ content: css })
   await page.addScriptTag({ content: script })
   return page
@@ -140,7 +143,32 @@ test('Web source clearly blocks submission until its service is configured', asy
   await page.getByRole('button', { name: 'API Key', exact: true }).click()
   await page.getByRole('option').filter({ hasText: 'web-fixture' }).click()
   await page.locator('#image-studio-prompt').fill('A synthetic red square')
-  await page.getByText('Web 服务未配置或未启用，请先在服务器完成配置。', { exact: false }).waitFor()
+  await page.getByText(/Web 服务.*(未配置|尚未就绪)/).first().waitFor()
   assert.equal(await page.locator('.studio-submit-button').isDisabled(), true)
   assert.equal(await page.evaluate(() => window.__submissions.length), 0)
+})
+
+test('Web studio preserves a selected compatibility model in the submitted job', async t => {
+  const page = await fixture(t)
+  await chooseWeb(page)
+  await page.getByRole('button', { name: 'API Key', exact: true }).click()
+  await page.getByRole('option').filter({ hasText: 'web-fixture' }).click()
+  await page.getByRole('button', { name: '模型', exact: true }).click()
+  assert.equal(await page.getByRole('option').count(), 7)
+  await page.getByRole('option', { name: 'gpt-image-2.6-flare', exact: true }).click()
+  await page.locator('#image-studio-prompt').fill('A synthetic blue star')
+  await page.locator('.studio-submit-button').click()
+  await page.waitForFunction(() => window.__submissions.length === 1)
+  assert.equal(await page.evaluate(() => window.__submissions[0].model), 'gpt-image-2.6-flare')
+})
+
+test('Web portal exposes only the current key model allowlist and preserves its alias', async t => {
+  const page = await fixture(t, { portal: true, metadataReady: true, modelAllow: ['gpt-image-2.5-sunburst'] })
+  await page.getByRole('button', { name: '模型', exact: true }).click()
+  assert.equal(await page.getByRole('option').count(), 1)
+  await page.getByRole('option', { name: 'gpt-image-2.5-sunburst', exact: true }).click()
+  await page.locator('textarea').first().fill('A synthetic green square')
+  await page.locator('.portal-generate').click()
+  await page.waitForFunction(() => window.__submissions.length === 1)
+  assert.equal(await page.evaluate(() => window.__submissions[0].model), 'gpt-image-2.5-sunburst')
 })

@@ -185,6 +185,32 @@ async def execute(tmp_path, script, acc=None):
     result = [event async for event in Executor(ledger, script.backend).events(acc or account())]
     return result, ledger
 
+@pytest.mark.parametrize("model,route", [
+    ("gpt-image-2", "gpt-5-3"), ("gpt-image-2.5", "auto"),
+    ("gpt-image-2.5-flare", "auto"), ("gpt-image-2.5-sunburst", "auto"),
+    ("gpt-image-2.6", "auto"), ("gpt-image-2.6-flare", "auto"),
+    ("gpt-image-2.6-sunburst", "auto"),
+])
+async def test_web_model_routes_and_binding(tmp_path, model, route):
+    script = Script()
+    acc = account(model=model)
+    events, _ = await execute(tmp_path, script, acc)
+    assert events[-1]["type"] == "completed"
+    prepared = next(c for c in script.calls if c[1].endswith("/f/conversation/prepare"))
+    assert prepared[2]["json"]["model"] == script.submits()[0][2]["json"]["model"] == route
+    other = "gpt-image-2.6" if model != "gpt-image-2.6" else "gpt-image-2.5"
+    assert acc.binding()["payload_hash"] != account(model=other).binding()["payload_hash"]
+    replay = [e async for e in Executor(Ledger(tmp_path), script.backend).events(account(model=other))]
+    assert replay[-1]["code"] == "execution_conflict"
+    assert len(script.submits()) == 1
+
+
+@pytest.mark.parametrize("model", ["unknown", "auto", "gpt-image-2-2k", "gpt-image-2.6-4k", None, []])
+def test_unknown_web_models_fail_closed(model):
+    with pytest.raises(SafeError) as error:
+        account(model=model)
+    assert error.value.code == "unsupported_model"
+
 
 async def test_generate_fence_success_and_cache_replay(tmp_path):
     script = Script()

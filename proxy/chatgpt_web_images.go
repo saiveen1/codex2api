@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,47 +65,32 @@ func chatGPTWebStateReady(state database.ChatGPTWebAccountState, operation strin
 	return false
 }
 
-func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
+func (h *Handler) chatGPTWebModelRecords(_ context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
 	records := map[string]*scopedModelRecord{}
-	if h.db == nil || h.store == nil || row == nil {
+	if row == nil || row.Limits.ResolveUpstreamChannel() != database.UpstreamChannelChatGPTWeb || row.Limits.ResolveImageGenerationPolicy() != database.ImageGenerationPolicyAllow {
 		return records
 	}
-	if _, err := h.loadChatGPTWebConfig(); err != nil {
-		return records
-	}
-	if checkAPIKeyModel("gpt-image-2", row.Limits) != "" || row.Limits.ResolveImageGenerationPolicy() != database.ImageGenerationPolicyAllow {
-		return records
-	}
-	states, err := auth.ListChatGPTWebAccountStates(ctx, h.db)
-	if err != nil {
-		return records
-	}
-	for _, state := range states {
-		if !chatGPTWebStateReady(state, "generate", time.Now()) && !chatGPTWebStateReady(state, "edit", time.Now()) {
-			continue
+	// Discovery describes the supported channel/key contract. It must neither
+	// probe upstream nor hide models because an account observation expired.
+	for _, model := range chatGPTWebImageModels {
+		if checkAPIKeyModel(model, row.Limits) == "" {
+			addScopedModel(records, model, modelBackingCodex, time.Time{}, false)
 		}
-		account := h.store.FindByID(state.AccountID)
-		if account == nil || account.IsRelayStyle() || !h.store.ChatGPTWebAccountVisibleToKey(row.ID, account) {
-			continue
-		}
-		token, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
-		proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
-		if !usable || expired || identityErr != nil || !chatGPTWebStateMatches(state, token, requested, proxyURL) {
-			continue
-		}
-		addScopedModel(records, "gpt-image-2", modelBackingCodex, time.Time{}, false)
-		break
 	}
 	return records
 }
 
+func (h *Handler) chatGPTWebRequestFilter(c *gin.Context) auth.AccountFilter {
+	identity := resolveRequestSessionIdentity(c.Request.Header, nil)
+	return h.applyScopeBudgetFilter(c, applyAffinityGroupRouting(c, identity, func(a *auth.Account) bool { return a != nil && !a.IsRelayStyle() }))
+}
+
 func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string, until time.Time, pinnedID int64) (*auth.Account, *database.ChatGPTWebAccountState, string, error) {
-	states, err := auth.ListChatGPTWebAccountStates(c.Request.Context(), h.db)
+	states, err := h.db.ListChatGPTWebAccountStates(c.Request.Context())
 	if err != nil {
 		return nil, nil, "", errors.New("web account state is unavailable")
 	}
-	identity := resolveRequestSessionIdentity(c.Request.Header, nil)
-	filter := h.applyScopeBudgetFilter(c, applyAffinityGroupRouting(c, identity, func(a *auth.Account) bool { return a != nil && !a.IsRelayStyle() }))
+	filter := h.chatGPTWebRequestFilter(c)
 	for _, state := range states {
 		if pinnedID != 0 && state.AccountID != pinnedID {
 			continue
@@ -121,6 +107,20 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 		if !usable || expired || identityErr != nil || !chatGPTWebStateMatches(state, token, requested, proxyURL) {
 			h.store.Release(account)
 			continue
+		}
+		if guard, ok := c.Get(chatGPTWebAdmissionSelectionGuard); ok {
+			if err := guard.(func(context.Context, *auth.Account) error)(c.Request.Context(), account); err != nil {
+				h.store.Release(account)
+				return nil, nil, "", err
+			}
+			latest, readErr := h.db.GetChatGPTWebAccountState(c.Request.Context(), account.ID())
+			proxyURL, usable = h.store.ResolveChatGPTWebProxy(account)
+			token, requested, _, expired, identityErr = account.ChatGPTWebIdentity()
+			if readErr != nil || !usable || expired || identityErr != nil || !chatGPTWebStateReady(*latest, operation, time.Now()) || !chatGPTWebStateMatches(*latest, token, requested, proxyURL) {
+				h.store.Release(account)
+				continue
+			}
+			state = *latest
 		}
 		acquired, err := h.db.AcquireChatGPTWebAccountLease(c.Request.Context(), state.AccountID, owner, until)
 		if err != nil {
@@ -260,7 +260,8 @@ func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, pro
 	// Persist via the existing pipeline/gallery. Web usage is deliberately absent
 	// rather than reporting estimated tokens as provider-measured usage.
 	var urlFor imageURLBuilder
-	syntheticBody := buildImagesResponsesRequest(prompt, nil, []byte(`{"type":"image_generation","model":"gpt-image-2"}`))
+	tool, _ := json.Marshal(map[string]string{"type": "image_generation", "model": model})
+	syntheticBody := buildImagesResponsesRequest(prompt, nil, tool)
 	if p := h.newImageGalleryPersister(c, responseFormat, model, syntheticBody); p != nil {
 		urlFor = p.buildURL
 		defer func() {
@@ -343,6 +344,9 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 	// Only a previously submitted execution with recovery IDs and an expired
 	// lease may resume; the worker will perform reads/downloads, never generation.
 	existing, lookupErr := h.db.GetChatGPTWebExecution(ctx, req.ExecutionID, requestAPIKeyID(c))
+	if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+		return result, &chatGPTWebFailure{"internal_error", http.StatusInternalServerError, false}
+	}
 	var pinnedID int64
 	if lookupErr == nil && existing != nil {
 		if !chatGPTWebCanResume(existing, requestHash, now) {
@@ -355,6 +359,18 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 		until = deadline.Add(30 * time.Second)
 	}
 	account, state, proxyURL, err := h.takeChatGPTWebAccount(c, req.Operation, owner, until, pinnedID)
+	if err != nil && existing == nil {
+		var unavailable *chatGPTWebFailure
+		if errors.As(err, &unavailable) && unavailable.code == "web_account_unavailable" {
+			if checkErr := h.prepareChatGPTWebAccounts(c, req.Operation, req.Model); checkErr != nil {
+				if errors.Is(checkErr, context.DeadlineExceeded) {
+					return result, &chatGPTWebFailure{"worker_timeout", http.StatusGatewayTimeout, false}
+				}
+				return result, checkErr
+			}
+			account, state, proxyURL, err = h.takeChatGPTWebAccount(c, req.Operation, owner, until, 0)
+		}
+	}
 	if err != nil {
 		return result, err
 	}

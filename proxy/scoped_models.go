@@ -135,13 +135,16 @@ func exactModelAliases(mappingJSON string, targetExists func(string) bool) []str
 
 func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
 	records := make(map[string]*scopedModelRecord)
-	if h == nil || h.store == nil || row == nil {
+	if h == nil || row == nil {
 		return records
 	}
-	h.syncAPIKeyAllowedGroups(row)
 	if row.Limits.ResolveUpstreamChannel() == database.UpstreamChannelChatGPTWeb {
 		return h.chatGPTWebModelRecords(ctx, row)
 	}
+	if h.store == nil {
+		return records
+	}
+	h.syncAPIKeyAllowedGroups(row)
 	now := time.Now()
 	accounts := h.store.Accounts()
 	sort.SliceStable(accounts, func(i, j int) bool {

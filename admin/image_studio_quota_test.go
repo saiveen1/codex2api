@@ -96,6 +96,9 @@ func TestPortalQuotaReadAndGenerationBoundaries(t *testing.T) {
 				if (result.QuotaRemaining == nil) != tc.unlimited || (!tc.unlimited && *result.QuotaRemaining != tc.remaining) {
 					t.Fatalf("unexpected remaining quota: %+v", result)
 				}
+				if _, ok := result.ImagePricing["gpt-image-2.5"]; !ok {
+					t.Fatal("missing supported Web compatibility model pricing entry")
+				}
 				if rec.Header().Get("Cache-Control") != "no-store" || strings.Contains(rec.Body.String(), "sk-quota-") {
 					t.Fatal("quota response must not be cached or disclose credentials")
 				}

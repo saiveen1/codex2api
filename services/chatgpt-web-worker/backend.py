@@ -11,7 +11,7 @@ from datetime import datetime
 from curl_cffi import CurlECode, CurlError
 from PIL import Image
 
-from contract import ID, MAX_OUTPUT, SafeError, image_info, safe_id, valid_workspace
+from contract import ID, MAX_OUTPUT, WEB_IMAGE_MODELS, SafeError, image_info, safe_id, valid_workspace
 from conversation import Conversation, sse_events
 from proof import Resources, proof_token, requirements_token
 from transport import CurlTransport, authenticated_asset_url, json_response, read_bounded
@@ -210,7 +210,7 @@ class Backend:
             references.append({"file_id": file_id, "file_name": filename, "file_size": len(data),
                                "mime_type": mime, "width": width, "height": height})
         prepared = await self.api("POST", "/backend-api/f/conversation/prepare", json={"action": "next",
-                                  "fork_from_shared_post": False, "parent_message_id": uid(), "model": "gpt-5-3",
+                                  "fork_from_shared_post": False, "parent_message_id": uid(), "model": WEB_IMAGE_MODELS[self.raw["model"]],
                                   "client_prepare_state": "success", "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
                                   "conversation_mode": {"kind": "primary_assistant"}, "system_hints": ["picture_v2"],
                                   "partial_query": {"id": uid(), "author": {"role": "user"},
@@ -232,7 +232,7 @@ class Backend:
                                         "size": r["file_size"], "width": r["width"], "height": r["height"]} for r in references]
         return {"action": "next", "messages": [{"id": uid(), "author": {"role": "user"}, "create_time": time.time(),
                 "content": {"content_type": "multimodal_text" if references else "text", "parts": parts}, "metadata": metadata}],
-                "parent_message_id": uid(), "model": "gpt-5-3", "client_prepare_state": "sent", "timezone_offset_min": -480,
+                "parent_message_id": uid(), "model": WEB_IMAGE_MODELS[self.raw["model"]], "client_prepare_state": "sent", "timezone_offset_min": -480,
                 "timezone": "Asia/Shanghai", "conversation_mode": {"kind": "primary_assistant"}, "enable_message_followups": True,
                 "system_hints": ["picture_v2"], "supports_buffering": True, "supported_encodings": ["v1"],
                 "client_contextual_info": {"is_dark_mode": False, "time_since_loaded": 1200, "page_height": 1072,

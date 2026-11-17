@@ -68,11 +68,28 @@ func chatGPTWebNativeCooldown(reason string) bool {
 	return false
 }
 
+// ChatGPTWebCheckEligible is the cheap in-memory candidate gate only. Callers
+// must still apply fresh authorization, Store auth-cache/egress fences and lease.
+func (a *Account) ChatGPTWebCheckEligible() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.chatGPTWebEligibleLocked(time.Now(), true)
+}
+
 func (a *Account) chatGPTWebDispatchEligibleLocked(now time.Time) bool {
+	return a.chatGPTWebEligibleLocked(now, false)
+}
+
+// Checks may use RefreshSingle for an expired AT; dispatch still requires a
+// current AT. All authentication and administrative fences remain identical.
+func (a *Account) chatGPTWebEligibleLocked(now time.Time, allowExpired bool) bool {
 	upstream := strings.ToLower(strings.TrimSpace(a.UpstreamType))
 	authMode := strings.ToLower(strings.TrimSpace(a.CodexAuthMode))
 	if (upstream != "" && upstream != "codex") || (authMode != "" && authMode != "oauth") || a.APIKey != "" || a.BaseURL != "" ||
-		strings.TrimSpace(a.AccessToken) == "" || (!a.ExpiresAt.IsZero() && !a.ExpiresAt.After(now)) ||
+		strings.TrimSpace(a.AccessToken) == "" || (!allowExpired && !a.ExpiresAt.IsZero() && !a.ExpiresAt.After(now)) ||
 		accountDispatchBlocked(a) || atomic.LoadInt32(&a.Locked) != 0 || a.Status == StatusError || a.healthTierLocked() == HealthTierBanned {
 		return false
 	}

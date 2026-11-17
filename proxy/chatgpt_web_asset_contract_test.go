@@ -111,7 +111,7 @@ func TestChatGPTWebSedimentDownloadRecoveryKeepsExecution(t *testing.T) {
 	}
 }
 
-func TestChatGPTWebExpiredObservationExplainsUnavailable(t *testing.T) {
+func TestChatGPTWebExpiredObservationRefreshesOnDemand(t *testing.T) {
 	f := newWebFixture(t, nil)
 	raw, err := sql.Open("sqlite", f.dbPath)
 	if err != nil {
@@ -122,8 +122,8 @@ func TestChatGPTWebExpiredObservationExplainsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := f.request(t, "/v1/images/generations", `{"prompt":"synthetic"}`, "stale-observation")
-	if r.Code != 503 || gjson.Get(r.Body.String(), "error.code").String() != "web_account_unavailable" || f.calls.Load() != 0 {
-		t.Fatalf("stale observation diagnostics: %s", r.Body.String())
+	if r.Code != 200 || f.calls.Load() != 1 || f.checks.Load() != 2 {
+		t.Fatalf("expired observation was not checked before generation: %s", r.Body.String())
 	}
 	if f.account.OccupiedRequests.Load() != 0 || f.account.ActiveRequests.Load() != 0 {
 		t.Fatal("expired observation leaked concurrency")

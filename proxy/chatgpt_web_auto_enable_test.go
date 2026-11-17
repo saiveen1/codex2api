@@ -38,31 +38,31 @@ func TestChatGPTWebAutoEnableEntrypointsKeepReadinessGate(t *testing.T) {
 			if _, err := f.db.GetChatGPTWebAccountState(ctx, id); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatal("fixture is not unconfigured", err)
 			}
-			switch entry {
-			case "models":
-				if got := f.handler.chatGPTWebModelRecords(ctx, f.key); len(got) != 0 {
-					t.Fatal("unverified default advertised ready model")
+			if entry == "models" {
+				if got := f.handler.chatGPTWebModelRecords(ctx, f.key); len(got) != 7 {
+					t.Fatal("missing supported catalog")
 				}
-			case "generation":
-				r := f.request(t, "/v1/images/generations", `{"prompt":"synthetic square"}`, "not-checked")
-				if r.Code != http.StatusServiceUnavailable || f.calls.Load() != 0 {
-					t.Fatalf("unverified default generated: %d %s", r.Code, r.Body.String())
+				if _, err := f.db.GetChatGPTWebAccountState(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatal("catalog initialized account state", err)
 				}
-			}
-			if entry != "check" {
-				state, err := f.db.GetChatGPTWebAccountState(ctx, id)
-				if err != nil || !state.Enabled || state.Status != "unverified" || state.ObservedAt != nil {
-					t.Fatalf("missing safe default: %+v %v", state, err)
+				if f.checks.Load() != 1 {
+					t.Fatal("catalog contacted Worker")
 				}
 			}
-			// No explicit enable call. The normal check must initialize group defaults.
-			state, err := f.handler.CheckChatGPTWebAccount(ctx, id)
-			if err != nil || !state.Enabled || state.Status != "ready" {
-				t.Fatalf("check could not use automatic enablement: %+v %v", state, err)
+			if entry != "generation" {
+				state, err := f.handler.CheckChatGPTWebAccount(ctx, id)
+				if err != nil || !state.Enabled || state.Status != "ready" {
+					t.Fatalf("explicit check failed: %+v %v", state, err)
+				}
 			}
+			// A new request may check a scoped default account, but never skip the check.
 			r := f.request(t, "/v1/images/generations", `{"prompt":"synthetic square"}`, "checked")
-			if r.Code != http.StatusOK || f.calls.Load() != 1 {
-				t.Fatalf("checked default unavailable: %d %s", r.Code, r.Body.String())
+			if r.Code != http.StatusOK || f.calls.Load() != 1 || f.checks.Load() != 2 {
+				t.Fatalf("scoped readiness was not established: %d %s", r.Code, r.Body.String())
+			}
+			state, err := f.db.GetChatGPTWebAccountState(ctx, id)
+			if err != nil || !state.Enabled || state.Status != "ready" || state.ObservedAt == nil {
+				t.Fatalf("missing checked state: %+v %v", state, err)
 			}
 			if _, err := f.db.SetChatGPTWebAccountEnabled(ctx, id, false); err != nil {
 				t.Fatal(err)
@@ -73,8 +73,8 @@ func TestChatGPTWebAutoEnableEntrypointsKeepReadinessGate(t *testing.T) {
 				t.Fatalf("manual disable ignored: %v", err)
 			}
 			r = f.request(t, "/v1/images/generations", `{"prompt":"synthetic square"}`, "disabled")
-			if r.Code != http.StatusServiceUnavailable || f.calls.Load() != 1 {
-				t.Fatal("manual disable allowed another generation")
+			if r.Code != http.StatusServiceUnavailable || f.calls.Load() != 1 || f.checks.Load() != 2 {
+				t.Fatal("manual disable allowed another check/generation")
 			}
 		})
 	}

@@ -15,6 +15,15 @@ MAX_OUTPUT = 32 * 1024 * 1024
 MAX_BODY = 58 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 40_000_000
 SIZES = {"auto", "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"}
+WEB_IMAGE_MODELS = {
+    "gpt-image-2": "gpt-5-3",
+    "gpt-image-2.5": "auto",
+    "gpt-image-2.5-flare": "auto",
+    "gpt-image-2.5-sunburst": "auto",
+    "gpt-image-2.6": "auto",
+    "gpt-image-2.6-flare": "auto",
+    "gpt-image-2.6-sunburst": "auto",
+}
 ID = re.compile(r"[A-Za-z0-9_-]{1,160}\Z")
 
 MESSAGES = {
@@ -137,7 +146,7 @@ class Account:
         if execute:
             if not isinstance(raw.get("execution_id"), str) or not ID.fullmatch(raw["execution_id"]):
                 raise SafeError("invalid_request", 400)
-            if raw.get("model") != "gpt-image-2":
+            if not isinstance(raw.get("model"), str) or raw["model"] not in WEB_IMAGE_MODELS:
                 raise SafeError("unsupported_model", 400)
             if raw.get("operation") not in {"generate", "edit"}:
                 raise SafeError("invalid_request", 400)

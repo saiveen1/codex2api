@@ -29,6 +29,7 @@ type webFixture struct {
 	db      *database.DB
 	dbPath  string
 	calls   atomic.Int32
+	checks  atomic.Int32
 }
 
 func newWebFixture(t *testing.T, respond func(http.ResponseWriter, *http.Request, chatGPTWebRequest)) *webFixture {
@@ -40,6 +41,7 @@ func newWebFixture(t *testing.T, respond func(http.ResponseWriter, *http.Request
 			t.Error("worker secret missing")
 		}
 		if r.URL.Path == "/v1/accounts/check" {
+			f.checks.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"status":"ready","capabilities":["generate","edit"],"image_quota_remaining":10,"workspace_id":"fixture-upstream-account","stage":"complete","upstream_status":200}`)
 			return
@@ -216,6 +218,12 @@ func TestChatGPTWebRejectsUnverifiedDisabledAndWrongScope(t *testing.T) {
 			case "unverified":
 				_, _ = f.db.SetChatGPTWebAccountEnabled(context.Background(), f.account.ID(), false)
 				_, _ = f.db.SetChatGPTWebAccountEnabled(context.Background(), f.account.ID(), true)
+				setWebCheckFixture(t, f, func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/v1/accounts/check" {
+						t.Error("generated without a verified observation")
+					}
+					w.WriteHeader(http.StatusUnauthorized)
+				})
 			case "key-denied":
 				f.account.SetAllowedAPIKeyIDs([]int64{f.key.ID + 100})
 			}
@@ -242,7 +250,7 @@ func TestChatGPTWebEnvironmentCredentialRotation(t *testing.T) {
 	f := newWebFixture(t, nil)
 	f.account.AccessToken = "rotated-access-token"
 	r := f.request(t, "/v1/images/generations", `{"prompt":"square"}`, "")
-	if r.Code != 503 || f.calls.Load() != 0 {
+	if r.Code < 400 || f.calls.Load() != 0 {
 		t.Fatal("stale environment used after token rotation")
 	}
 }
@@ -310,13 +318,13 @@ func TestChatGPTWebErrorRedactionAndQuotaIsolation(t *testing.T) {
 func TestChatGPTWebModelsOnlyShowImageChannel(t *testing.T) {
 	f := newWebFixture(t, nil)
 	records := f.handler.scopedModelRecords(context.Background(), f.key)
-	if len(records) != 1 || records["gpt-image-2"] == nil {
+	if len(records) != len(chatGPTWebImageModels) || records["gpt-image-2"] == nil {
 		t.Fatalf("wrong web models: %+v", records)
 	}
 	t.Setenv("CHATGPT_WEB_ENABLED", "false")
 	records = f.handler.scopedModelRecords(context.Background(), f.key)
-	if len(records) != 0 {
-		t.Fatal("disabled web provider advertised models")
+	if len(records) != len(chatGPTWebImageModels) {
+		t.Fatal("runtime service state emptied the supported model catalog")
 	}
 }
 

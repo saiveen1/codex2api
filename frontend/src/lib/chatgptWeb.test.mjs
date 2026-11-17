@@ -31,6 +31,17 @@ test('both studios constrain known web keys and keep native controls', () => {
   }
 })
 
+test('studio Web model choice and submission use key-scoped aliases without rewriting', () => {
+  for (const page of ['../pages/ImageStudio.tsx', '../pages/ImageStudioPortal.tsx']) {
+    const content = source(page)
+    assert.match(content, /options=\{isWebKey \? webModels : IMAGE_MODELS\}/)
+    assert.match(content, /webModels\.some\(option => option\.value === model\)/)
+    assert.doesNotMatch(content, /setModel\('gpt-image-2'\)\s*\n\s*setSize\(current => webImageParams/)
+  }
+  assert.match(source('../pages/ImageStudio.tsx'), /webModels\.some\(option => option\.value === payload\.model\)/)
+  assert.match(source('../pages/ImageStudioPortal.tsx'), /limits: result\.key\.limits/)
+})
+
 test('web account guidance is discoverable in both key forms and the studio', () => {
   const keys = source('../pages/APIKeys.tsx')
   assert.match(keys, /value=\{createForm\.limits\.upstreamChannel\}/)
@@ -41,7 +52,9 @@ test('web account guidance is discoverable in both key forms and the studio', ()
   assert.match(source('../components/ChatGPTWebSettings.tsx'), /chatgptWebAutoHint/)
   for (const locale of ['en', 'zh', 'zh-TW']) {
     const messages = JSON.parse(source(`../locales/${locale}.json`))
-    assert.match(messages.chatgptWebAutoHint, /30/)
+    assert.doesNotMatch(messages.chatgptWebAutoHint, /30 minutes|30 分钟|30 分鐘/)
+    assert.match(messages.chatgptWebAutoHint, /automatic checks|自动检查|自動檢查/)
+    assert.match(messages.chatgptWeb.guide, /manual|手动|手動/)
     assert.ok(messages.chatgptWebManageAccounts)
     assert.doesNotMatch(messages.chatgptWeb.batchHint, /future members are not automatically enabled|后续新增成员不会自动启用|後續新增成員不會自動啟用/)
   }
