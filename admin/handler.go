@@ -8189,34 +8189,38 @@ type opsErrorExportOptions struct {
 }
 
 type opsErrorExportEntry struct {
-	Signature          string    `json:"signature"`
-	Occurrences        int       `json:"occurrences"`
-	FirstSeen          time.Time `json:"first_seen"`
-	LastSeen           time.Time `json:"last_seen"`
-	SampleIDs          []int64   `json:"sample_ids"`
-	AffectedAccountIDs []int64   `json:"affected_account_ids,omitempty"`
-	AffectedAPIKeyIDs  []int64   `json:"affected_api_key_ids,omitempty"`
-	ID                 int64     `json:"id"`
-	CreatedAt          time.Time `json:"created_at"`
-	StatusCode         int       `json:"status_code"`
-	ErrorKind          string    `json:"error_kind"`
-	ErrorMessage       string    `json:"error_message"`
-	DiagnosticContext  string    `json:"diagnostic_context,omitempty"`
-	AccountID          int64     `json:"account_id"`
-	AccountName        string    `json:"account_name"`
-	AccountEmail       string    `json:"account_email"`
-	APIKeyID           int64     `json:"api_key_id"`
-	APIKeyName         string    `json:"api_key_name"`
-	APIKeyMasked       string    `json:"api_key_masked"`
-	Endpoint           string    `json:"endpoint"`
-	UpstreamEndpoint   string    `json:"upstream_endpoint"`
-	Model              string    `json:"model"`
-	EffectiveModel     string    `json:"effective_model"`
-	Stream             bool      `json:"stream"`
-	DurationMs         int       `json:"duration_ms"`
-	FirstTokenMs       int       `json:"first_token_ms"`
-	IsRetryAttempt     bool      `json:"is_retry_attempt"`
-	AttemptIndex       int       `json:"attempt_index"`
+	Signature               string    `json:"signature"`
+	Occurrences             int       `json:"occurrences"`
+	FirstSeen               time.Time `json:"first_seen"`
+	LastSeen                time.Time `json:"last_seen"`
+	SampleIDs               []int64   `json:"sample_ids"`
+	AffectedAccountIDs      []int64   `json:"affected_account_ids,omitempty"`
+	AffectedAPIKeyIDs       []int64   `json:"affected_api_key_ids,omitempty"`
+	ID                      int64     `json:"id"`
+	CreatedAt               time.Time `json:"created_at"`
+	StatusCode              int       `json:"status_code"`
+	ErrorKind               string    `json:"error_kind"`
+	ErrorMessage            string    `json:"error_message"`
+	DiagnosticContext       string    `json:"diagnostic_context,omitempty"`
+	AccountID               int64     `json:"account_id"`
+	AccountName             string    `json:"account_name"`
+	AccountEmail            string    `json:"account_email"`
+	APIKeyID                int64     `json:"api_key_id"`
+	APIKeyName              string    `json:"api_key_name"`
+	APIKeyMasked            string    `json:"api_key_masked"`
+	Endpoint                string    `json:"endpoint"`
+	UpstreamEndpoint        string    `json:"upstream_endpoint"`
+	Model                   string    `json:"model"`
+	EffectiveModel          string    `json:"effective_model"`
+	Stream                  bool      `json:"stream"`
+	DurationMs              int       `json:"duration_ms"`
+	FirstTokenMs            int       `json:"first_token_ms"`
+	UpstreamRoundDurationMs int       `json:"upstream_round_duration_ms"`
+	UpstreamFirstContentMs  int       `json:"upstream_first_content_ms"`
+	UpstreamRoundIndex      int       `json:"upstream_round_index"`
+	HiddenContinuationRound bool      `json:"hidden_continuation_round"`
+	IsRetryAttempt          bool      `json:"is_retry_attempt"`
+	AttemptIndex            int       `json:"attempt_index"`
 }
 
 // GetOpsErrorLogs 获取运维错误日志
@@ -8380,34 +8384,38 @@ func opsErrorExportFiltersFromUsageFilter(filter database.UsageLogFilter) opsErr
 
 func newOpsErrorExportEntry(logRow *database.UsageLog) opsErrorExportEntry {
 	entry := opsErrorExportEntry{
-		Signature:          opsErrorSignature(logRow),
-		Occurrences:        1,
-		FirstSeen:          logRow.CreatedAt,
-		LastSeen:           logRow.CreatedAt,
-		SampleIDs:          []int64{logRow.ID},
-		AffectedAccountIDs: appendUniqueInt64(nil, logRow.AccountID, 50),
-		AffectedAPIKeyIDs:  appendUniqueInt64(nil, logRow.APIKeyID, 50),
-		ID:                 logRow.ID,
-		CreatedAt:          logRow.CreatedAt,
-		StatusCode:         logRow.StatusCode,
-		ErrorKind:          logRow.UpstreamErrorKind,
-		ErrorMessage:       logRow.ErrorMessage,
-		DiagnosticContext:  logRow.DiagnosticContext,
-		AccountID:          logRow.AccountID,
-		AccountName:        logRow.AccountName,
-		AccountEmail:       logRow.AccountEmail,
-		APIKeyID:           logRow.APIKeyID,
-		APIKeyName:         logRow.APIKeyName,
-		APIKeyMasked:       logRow.APIKeyMasked,
-		Endpoint:           firstNonEmpty(logRow.InboundEndpoint, logRow.Endpoint),
-		UpstreamEndpoint:   logRow.UpstreamEndpoint,
-		Model:              logRow.Model,
-		EffectiveModel:     logRow.EffectiveModel,
-		Stream:             logRow.Stream,
-		DurationMs:         logRow.DurationMs,
-		FirstTokenMs:       logRow.FirstTokenMs,
-		IsRetryAttempt:     logRow.IsRetryAttempt,
-		AttemptIndex:       logRow.AttemptIndex,
+		Signature:               opsErrorSignature(logRow),
+		Occurrences:             1,
+		FirstSeen:               logRow.CreatedAt,
+		LastSeen:                logRow.CreatedAt,
+		SampleIDs:               []int64{logRow.ID},
+		AffectedAccountIDs:      appendUniqueInt64(nil, logRow.AccountID, 50),
+		AffectedAPIKeyIDs:       appendUniqueInt64(nil, logRow.APIKeyID, 50),
+		ID:                      logRow.ID,
+		CreatedAt:               logRow.CreatedAt,
+		StatusCode:              logRow.StatusCode,
+		ErrorKind:               logRow.UpstreamErrorKind,
+		ErrorMessage:            logRow.ErrorMessage,
+		DiagnosticContext:       logRow.DiagnosticContext,
+		AccountID:               logRow.AccountID,
+		AccountName:             logRow.AccountName,
+		AccountEmail:            logRow.AccountEmail,
+		APIKeyID:                logRow.APIKeyID,
+		APIKeyName:              logRow.APIKeyName,
+		APIKeyMasked:            logRow.APIKeyMasked,
+		Endpoint:                firstNonEmpty(logRow.InboundEndpoint, logRow.Endpoint),
+		UpstreamEndpoint:        logRow.UpstreamEndpoint,
+		Model:                   logRow.Model,
+		EffectiveModel:          logRow.EffectiveModel,
+		Stream:                  logRow.Stream,
+		DurationMs:              logRow.DurationMs,
+		FirstTokenMs:            logRow.FirstTokenMs,
+		UpstreamRoundDurationMs: logRow.UpstreamRoundDurationMs,
+		UpstreamFirstContentMs:  logRow.UpstreamFirstContentMs,
+		UpstreamRoundIndex:      logRow.UpstreamRoundIndex,
+		HiddenContinuationRound: logRow.HiddenContinuationRound,
+		IsRetryAttempt:          logRow.IsRetryAttempt,
+		AttemptIndex:            logRow.AttemptIndex,
 	}
 	return entry
 }

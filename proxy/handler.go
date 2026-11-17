@@ -1811,8 +1811,8 @@ func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInp
 // （res.Rounds 除最后一条）以及失败的续想开轮（res.FailedContinuation），
 // 使账面消耗与实际上游请求数一致，且不与收尾记账重复计费。
 func (h *Handler) logContinueThinkingRounds(c *gin.Context, res continueFoldResult, account *auth.Account, logModel, logEffectiveModel, reasoningEffort string, useWebsocket bool, requestedServiceTier string) {
-	logRound := func(round continueRoundStat) {
-		usageTiers := resolveUsageServiceTiers("", requestedServiceTier)
+	logRound := func(round continueRoundStat, index int) {
+		usageTiers := hiddenRoundServiceTiers(round.Trace.round.actualTier, requestedServiceTier)
 		statusCode := round.StatusCode
 		if statusCode == 0 {
 			statusCode = http.StatusOK
@@ -1841,6 +1841,8 @@ func (h *Handler) logContinueThinkingRounds(c *gin.Context, res continueFoldResu
 			logInput.UpstreamErrorKind = "continue_thinking_error"
 		}
 		round.Trace.apply(logInput)
+		logInput.UpstreamRoundIndex = index
+		logInput.HiddenContinuationRound = true
 		if round.Usage != nil {
 			logInput.PromptTokens = round.Usage.PromptTokens
 			logInput.CompletionTokens = round.Usage.CompletionTokens
@@ -1849,16 +1851,17 @@ func (h *Handler) logContinueThinkingRounds(c *gin.Context, res continueFoldResu
 			logInput.OutputTokens = round.Usage.OutputTokens
 			logInput.ReasoningTokens = round.Usage.ReasoningTokens
 			logInput.CachedTokens = round.Usage.CachedTokens
+			round.Trace.round.apply(logInput)
 		}
 		h.logUsageForRequest(c, logInput)
 	}
 
 	// res.Rounds 的最后一条是最终成功轮，其用量由本 attempt 收尾统一记账，此处排除。
 	for i := 0; i+1 < len(res.Rounds); i++ {
-		logRound(res.Rounds[i])
+		logRound(res.Rounds[i], i+1)
 	}
 	if res.FailedContinuation != nil {
-		logRound(*res.FailedContinuation)
+		logRound(*res.FailedContinuation, len(res.Rounds)+1)
 	}
 }
 
@@ -5708,6 +5711,8 @@ func (h *Handler) Responses(c *gin.Context) {
 		// 的失败抑制/真实错误码/事件缓冲决策改用本标志。
 		contentTokenSeen := false
 		var responseJSON []byte
+		var finalRoundTiming upstreamRoundTiming
+		var finalRoundIndex int
 		var imageLogInfo imageUsageLogInfo
 		var terminalFailurePayload []byte
 		var preContentErrorCandidate []byte
@@ -5926,10 +5931,11 @@ func (h *Handler) Responses(c *gin.Context) {
 			if contEnabled {
 				requestKeepaliveOwnsWrites := continuousRetryKeepaliveActive(c.Request.Context()) && continuousRetryKeepaliveInterval > 0
 				fold := &continueFold{
-					trace:     func() upstreamTraceSnapshot { return snapshotUpstreamTrace(c.Request.Context()) },
-					baseBody:  upstreamBody,
-					maxRounds: contMaxRounds,
-					forward:   forward,
+					trace:      func() upstreamTraceSnapshot { return snapshotUpstreamTrace(c.Request.Context()) },
+					observeRaw: func(kind string, data []byte) { observeUpstreamRound(readCtx, kind, data) },
+					baseBody:   upstreamBody,
+					maxRounds:  contMaxRounds,
+					forward:    forward,
 					observe: func(data []byte) {
 						// 被缓冲（暂未转发给客户端）的事件只用来保活首字超时 guard，
 						// 避免纯 message 响应在整体缓冲期间被误判超时。这里不置位
@@ -6009,6 +6015,8 @@ func (h *Handler) Responses(c *gin.Context) {
 				// 折叠拦截了各轮真实终态，forward 未必看到 response.completed，
 				// 用折叠汇总的最终轮真实 usage 作为本 attempt 收尾计费值。
 				if foldRes.FinalUsage != nil {
+					finalRoundIndex = len(foldRes.Rounds)
+					finalRoundTiming = foldRes.Rounds[finalRoundIndex-1].Trace.round
 					usage = foldRes.FinalUsage
 				}
 				// 除最终轮外的各真实轮 + 失败的续想开轮各补记一条真实用量，
@@ -6366,6 +6374,10 @@ func (h *Handler) Responses(c *gin.Context) {
 			logInput.ReasoningTokens = usage.ReasoningTokens
 			logInput.CachedTokens = usage.CachedTokens
 			logInput.ImageInputTokens, logInput.ImageOutputTokens, logInput.CachedImageInputTokens = usage.ImageInputTokens, usage.ImageOutputTokens, usage.CachedImageInputTokens
+		}
+		if finalRoundIndex > 0 {
+			logInput.UpstreamRoundIndex = finalRoundIndex
+			finalRoundTiming.apply(logInput)
 		}
 		applyImageUsageLogInfo(logInput, imageLogInfo)
 		// sentModel 优先取 attempt 实发模型（账号级映射可能改写 attemptEffectiveModel），

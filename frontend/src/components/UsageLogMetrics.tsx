@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '../lib/utils'
 import { getUsageTokenBreakdown } from '../lib/usageTokenDisplay'
 import { formatUsageNumber as formatTokens } from '../lib/usageFormat'
-import { computeOutputTokensPerSec, durationTone, firstTokenTone, formatLatencyMs, formatTokensPerSec } from '../lib/usageTiming'
+import { computeOutputTokensPerSec, durationTone, firstTokenTone, formatLatencyMs, formatTokensPerSec, hasMeasuredDuration } from '../lib/usageTiming'
 import { Badge } from './ui/badge'
 import UsageTimingBadge from './UsageTimingBadge'
 
@@ -18,6 +18,10 @@ type UsageMetricLog = {
   cache_write_1h_tokens?: number
   duration_ms: number
   first_token_ms: number
+  upstream_round_duration_ms?: number
+  upstream_first_content_ms?: number
+  upstream_round_index?: number
+  hidden_continuation_round?: boolean
 }
 
 const usageTableMonoClass = 'font-mono text-[13px] tabular-nums'
@@ -90,14 +94,27 @@ function tokensPerSecClassName(value: number): string {
 }
 
 export function TokensPerSecCell({ log }: { log: UsageMetricLog }) {
+  const { t } = useTranslation()
   const value = computeOutputTokensPerSec(log)
-  if (value == null) {
-    return <span className={`${usageTableMonoClass} text-muted-foreground/50`}>-</span>
-  }
+  const roundMs = log.upstream_round_duration_ms
+  const firstMs = log.upstream_first_content_ms
+  const title = [
+    value == null ? t(hasMeasuredDuration(roundMs) ? 'usage.roundThroughputUnavailable' : 'usage.roundTimingNotRecorded') : `${value.toFixed(2)} tok/s`,
+    hasMeasuredDuration(roundMs) ? `${t('usage.upstreamRoundDuration')}: ${roundMs} ms` : null,
+    hasMeasuredDuration(firstMs) ? `${t('usage.upstreamFirstContent')}: ${firstMs} ms` : null,
+  ].filter(Boolean).join(' · ')
+  const roundIndex = log.upstream_round_index
+  const hiddenLabel = log.hidden_continuation_round
+    ? (typeof roundIndex === 'number' && Number.isInteger(roundIndex) && roundIndex > 0
+      ? t('usage.hiddenContinuationRound', { count: roundIndex })
+      : t('usage.hiddenContinuation'))
+    : null
   return (
-    <span className={`${usageTableMonoClass} ${tokensPerSecClassName(value)}`} title={`${value.toFixed(2)} tok/s`}>
-      {formatTokensPerSec(value)}
-      <span className="ml-0.5 text-[11px] font-medium opacity-70">tok/s</span>
+    <span className="inline-flex flex-wrap items-center gap-1" title={title}>
+      <span className={`${usageTableMonoClass} ${value == null ? 'text-muted-foreground/50' : tokensPerSecClassName(value)}`}>
+        {value == null ? '—' : <>{formatTokensPerSec(value)}<span className="ml-0.5 text-[11px] font-medium opacity-70">tok/s</span></>}
+      </span>
+      {hiddenLabel && <Badge variant="outline" className={usageTableBadgeClass}>{hiddenLabel}</Badge>}
     </span>
   )
 }

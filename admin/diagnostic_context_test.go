@@ -19,3 +19,20 @@ func TestOpsErrorExportRetainsDiagnosticContext(t *testing.T) {
 		t.Fatal("export dropped diagnostic evidence")
 	}
 }
+
+func TestOpsErrorExportRetainsUpstreamRoundTiming(t *testing.T) {
+	entry := newOpsErrorExportEntry(&database.UsageLog{UpstreamRoundDurationMs: 800, UpstreamFirstContentMs: 120, UpstreamRoundIndex: 2, HiddenContinuationRound: true})
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{"upstream_round_duration_ms": float64(800), "upstream_first_content_ms": float64(120), "upstream_round_index": float64(2), "hidden_continuation_round": true} {
+		if got[key] != want {
+			t.Fatalf("%s = %v, want %v", key, got[key], want)
+		}
+	}
+}

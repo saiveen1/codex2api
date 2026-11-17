@@ -98,9 +98,10 @@ type continueFoldResult struct {
 
 // continueFold 是折叠状态机的外部依赖与配置。
 type continueFold struct {
-	trace     func() upstreamTraceSnapshot
-	baseBody  []byte // 本 attempt 实际发出的上游请求体（已过 prepare 管线）
-	maxRounds int    // 最大轮数（含首轮）
+	trace      func() upstreamTraceSnapshot
+	observeRaw func(kind string, data []byte) // upstream arrival only; never called during flushBuffered
+	baseBody   []byte                         // 本 attempt 实际发出的上游请求体（已过 prepare 管线）
+	maxRounds  int                            // 最大轮数（含首轮）
 
 	forward    func(data []byte) bool                    // 现有下游事件回调，返回 false 表示中止
 	observe    func(data []byte)                         // 对被缓冲（未转发）的事件做旁路观察（TTFT 等）
@@ -343,6 +344,9 @@ func (st *foldState) readRound(body io.Reader, roundNo int, f *continueFold) rou
 	out.readErr = ReadSSEStream(body, func(data []byte) bool {
 		parsed := gjson.ParseBytes(data)
 		eventType := parsed.Get("type").String()
+		if f.observeRaw != nil {
+			f.observeRaw(eventType, data)
+		}
 
 		switch eventType {
 		case "response.created", "response.in_progress":

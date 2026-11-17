@@ -259,7 +259,7 @@ const (
 	maxUsageLogFlushIntervalSeconds     = 300
 
 	postgresMaxBindParams       = 65535
-	usageLogInsertColumnCount   = 73
+	usageLogInsertColumnCount   = 77
 	maxUsageLogInsertRowsPerSQL = postgresMaxBindParams / usageLogInsertColumnCount
 
 	// usageLogBufferHardLimit 内存缓冲的硬上限。PG 长时间不可用时（维护、主从切换、
@@ -331,53 +331,57 @@ type usageLogEntry struct {
 	// UpstreamResponseModel 是上游响应自报的模型名（观测值，未自报为空串）。
 	UpstreamResponseModel string
 	// UpstreamModelMismatch 三态：nil=上游未自报；true/false=自报与实发是否一致。
-	UpstreamModelMismatch  *bool
-	PromptTokens           int
-	CompletionTokens       int
-	TotalTokens            int
-	StatusCode             int
-	DurationMs             int
-	InputTokens            int
-	OutputTokens           int
-	ReasoningTokens        int
-	FirstTokenMs           int
-	WsAcquireMs            int
-	ReasoningEffort        string
-	InboundEndpoint        string
-	UpstreamEndpoint       string
-	Stream                 bool
-	Compact                bool
-	HasCompactionHistory   bool
-	Ultra                  bool
-	ViaWebsocket           bool
-	CachedTokens           int
-	ImageInputTokens       int
-	ImageOutputTokens      int
-	CachedImageInputTokens int
-	CacheWrite5mTokens     int
-	CacheWrite1hTokens     int
-	ServiceTier            string
-	RequestedServiceTier   string
-	ActualServiceTier      string
-	BillingServiceTier     string
-	APIKeyID               int64
-	APIKeyName             string
-	APIKeyMasked           string
-	ImageCount             int
-	ImageWidth             int
-	ImageHeight            int
-	ImageBytes             int
-	ImageFormat            string
-	ImageSize              string
-	VideoSeconds           int
-	AccountBilled          float64
-	UserBilled             float64
-	IsRetryAttempt         bool
-	AttemptIndex           int
-	UpstreamErrorKind      string
-	ErrorMessage           string
-	DiagnosticContext      string
-	PromptPolicyIncidentID string
+	UpstreamModelMismatch   *bool
+	PromptTokens            int
+	CompletionTokens        int
+	TotalTokens             int
+	StatusCode              int
+	DurationMs              int
+	InputTokens             int
+	OutputTokens            int
+	ReasoningTokens         int
+	FirstTokenMs            int
+	UpstreamRoundDurationMs int
+	UpstreamFirstContentMs  int
+	UpstreamRoundIndex      int
+	HiddenContinuationRound bool
+	WsAcquireMs             int
+	ReasoningEffort         string
+	InboundEndpoint         string
+	UpstreamEndpoint        string
+	Stream                  bool
+	Compact                 bool
+	HasCompactionHistory    bool
+	Ultra                   bool
+	ViaWebsocket            bool
+	CachedTokens            int
+	ImageInputTokens        int
+	ImageOutputTokens       int
+	CachedImageInputTokens  int
+	CacheWrite5mTokens      int
+	CacheWrite1hTokens      int
+	ServiceTier             string
+	RequestedServiceTier    string
+	ActualServiceTier       string
+	BillingServiceTier      string
+	APIKeyID                int64
+	APIKeyName              string
+	APIKeyMasked            string
+	ImageCount              int
+	ImageWidth              int
+	ImageHeight             int
+	ImageBytes              int
+	ImageFormat             string
+	ImageSize               string
+	VideoSeconds            int
+	AccountBilled           float64
+	UserBilled              float64
+	IsRetryAttempt          bool
+	AttemptIndex            int
+	UpstreamErrorKind       string
+	ErrorMessage            string
+	DiagnosticContext       string
+	PromptPolicyIncidentID  string
 	// CreatedAt 是请求完成、进缓冲的时刻,落库为 created_at。
 	CreatedAt time.Time
 }
@@ -1261,6 +1265,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS output_tokens INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS reasoning_tokens INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS first_token_ms INT DEFAULT 0;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_round_duration_ms INT;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_first_content_ms INT;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS upstream_round_index INT;
+	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS hidden_continuation_round BOOLEAN;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS ws_acquire_ms INT DEFAULT 0;
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS reasoning_effort VARCHAR(100) DEFAULT '';
 	ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS via_websocket BOOLEAN DEFAULT FALSE;
@@ -4339,74 +4347,78 @@ type UsageLog struct {
 	UpstreamResponseModel string `json:"upstream_response_model,omitempty"`
 	// UpstreamModelMismatch 三态：nil=上游未自报（或历史行），无法比对；
 	// true/false=已比对，上游自报与实发模型是否一致。
-	UpstreamModelMismatch  *bool     `json:"upstream_model_mismatch,omitempty"`
-	PromptTokens           int       `json:"prompt_tokens"`
-	CompletionTokens       int       `json:"completion_tokens"`
-	TotalTokens            int       `json:"total_tokens"`
-	StatusCode             int       `json:"status_code"`
-	DurationMs             int       `json:"duration_ms"`
-	InputTokens            int       `json:"input_tokens"`
-	OutputTokens           int       `json:"output_tokens"`
-	ReasoningTokens        int       `json:"reasoning_tokens"`
-	FirstTokenMs           int       `json:"first_token_ms"`
-	WsAcquireMs            int       `json:"ws_acquire_ms"`
-	ReasoningEffort        string    `json:"reasoning_effort"`
-	InboundEndpoint        string    `json:"inbound_endpoint"`
-	UpstreamEndpoint       string    `json:"upstream_endpoint"`
-	Stream                 bool      `json:"stream"`
-	Compact                bool      `json:"compact"`
-	HasCompactionHistory   bool      `json:"has_compaction_history"`
-	Ultra                  bool      `json:"ultra"`
-	ViaWebsocket           bool      `json:"via_websocket"`
-	CachedTokens           int       `json:"cached_tokens"`
-	ImageInputTokens       int       `json:"image_input_tokens"`
-	ImageOutputTokens      int       `json:"image_output_tokens"`
-	CachedImageInputTokens int       `json:"cached_image_input_tokens"`
-	CacheWrite5mTokens     int       `json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens     int       `json:"cache_write_1h_tokens"`
-	ServiceTier            string    `json:"service_tier"`
-	RequestedServiceTier   string    `json:"requested_service_tier"`
-	ActualServiceTier      string    `json:"actual_service_tier"`
-	BillingServiceTier     string    `json:"billing_service_tier"`
-	APIKeyID               int64     `json:"api_key_id"`
-	APIKeyName             string    `json:"api_key_name"`
-	APIKeyMasked           string    `json:"api_key_masked"`
-	ImageCount             int       `json:"image_count"`
-	ImageWidth             int       `json:"image_width"`
-	ImageHeight            int       `json:"image_height"`
-	ImageBytes             int       `json:"image_bytes"`
-	ImageFormat            string    `json:"image_format"`
-	ImageSize              string    `json:"image_size"`
-	VideoSeconds           int       `json:"video_seconds"`
-	AccountName            string    `json:"account_name"`
-	AccountEmail           string    `json:"account_email"`
-	CreatedAt              time.Time `json:"created_at"`
-	AccountBilled          float64   `json:"account_billed"`
-	UserBilled             float64   `json:"user_billed"`
-	ImageInputCost         float64   `json:"image_input_cost"`
-	ImageCacheReadCost     float64   `json:"image_cache_read_cost"`
-	ImageInputPrice        float64   `json:"image_input_price_per_mtoken"`
-	CachedImageInputPrice  float64   `json:"cached_image_input_price_per_mtoken"`
-	InputCost              float64   `json:"input_cost"`
-	OutputCost             float64   `json:"output_cost"`
-	CacheReadCost          float64   `json:"cache_read_cost"`
-	CacheWrite5mCost       float64   `json:"cache_write_5m_cost"`
-	CacheWrite1hCost       float64   `json:"cache_write_1h_cost"`
-	CacheWrite5mPrice      float64   `json:"cache_write_5m_price_per_mtoken"`
-	CacheWrite1hPrice      float64   `json:"cache_write_1h_price_per_mtoken"`
-	TotalCost              float64   `json:"total_cost"`
-	InputPrice             float64   `json:"input_price_per_mtoken"`
-	OutputPrice            float64   `json:"output_price_per_mtoken"`
-	CacheReadPrice         float64   `json:"cache_read_price_per_mtoken"`
-	RateMultiplier         float64   `json:"rate_multiplier"`
-	LongContext            bool      `json:"long_context"`
-	LongContextThreshold   int       `json:"long_context_threshold"`
-	IsRetryAttempt         bool      `json:"is_retry_attempt"`
-	AttemptIndex           int       `json:"attempt_index"`
-	UpstreamErrorKind      string    `json:"upstream_error_kind"`
-	ErrorMessage           string    `json:"error_message"`
-	DiagnosticContext      string    `json:"diagnostic_context,omitempty"`
-	PromptPolicyIncidentID string    `json:"prompt_policy_incident_id,omitempty"`
+	UpstreamModelMismatch   *bool     `json:"upstream_model_mismatch,omitempty"`
+	PromptTokens            int       `json:"prompt_tokens"`
+	CompletionTokens        int       `json:"completion_tokens"`
+	TotalTokens             int       `json:"total_tokens"`
+	StatusCode              int       `json:"status_code"`
+	DurationMs              int       `json:"duration_ms"`
+	InputTokens             int       `json:"input_tokens"`
+	OutputTokens            int       `json:"output_tokens"`
+	ReasoningTokens         int       `json:"reasoning_tokens"`
+	FirstTokenMs            int       `json:"first_token_ms"`
+	UpstreamRoundDurationMs int       `json:"upstream_round_duration_ms"`
+	UpstreamFirstContentMs  int       `json:"upstream_first_content_ms"`
+	UpstreamRoundIndex      int       `json:"upstream_round_index"`
+	HiddenContinuationRound bool      `json:"hidden_continuation_round"`
+	WsAcquireMs             int       `json:"ws_acquire_ms"`
+	ReasoningEffort         string    `json:"reasoning_effort"`
+	InboundEndpoint         string    `json:"inbound_endpoint"`
+	UpstreamEndpoint        string    `json:"upstream_endpoint"`
+	Stream                  bool      `json:"stream"`
+	Compact                 bool      `json:"compact"`
+	HasCompactionHistory    bool      `json:"has_compaction_history"`
+	Ultra                   bool      `json:"ultra"`
+	ViaWebsocket            bool      `json:"via_websocket"`
+	CachedTokens            int       `json:"cached_tokens"`
+	ImageInputTokens        int       `json:"image_input_tokens"`
+	ImageOutputTokens       int       `json:"image_output_tokens"`
+	CachedImageInputTokens  int       `json:"cached_image_input_tokens"`
+	CacheWrite5mTokens      int       `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens      int       `json:"cache_write_1h_tokens"`
+	ServiceTier             string    `json:"service_tier"`
+	RequestedServiceTier    string    `json:"requested_service_tier"`
+	ActualServiceTier       string    `json:"actual_service_tier"`
+	BillingServiceTier      string    `json:"billing_service_tier"`
+	APIKeyID                int64     `json:"api_key_id"`
+	APIKeyName              string    `json:"api_key_name"`
+	APIKeyMasked            string    `json:"api_key_masked"`
+	ImageCount              int       `json:"image_count"`
+	ImageWidth              int       `json:"image_width"`
+	ImageHeight             int       `json:"image_height"`
+	ImageBytes              int       `json:"image_bytes"`
+	ImageFormat             string    `json:"image_format"`
+	ImageSize               string    `json:"image_size"`
+	VideoSeconds            int       `json:"video_seconds"`
+	AccountName             string    `json:"account_name"`
+	AccountEmail            string    `json:"account_email"`
+	CreatedAt               time.Time `json:"created_at"`
+	AccountBilled           float64   `json:"account_billed"`
+	UserBilled              float64   `json:"user_billed"`
+	ImageInputCost          float64   `json:"image_input_cost"`
+	ImageCacheReadCost      float64   `json:"image_cache_read_cost"`
+	ImageInputPrice         float64   `json:"image_input_price_per_mtoken"`
+	CachedImageInputPrice   float64   `json:"cached_image_input_price_per_mtoken"`
+	InputCost               float64   `json:"input_cost"`
+	OutputCost              float64   `json:"output_cost"`
+	CacheReadCost           float64   `json:"cache_read_cost"`
+	CacheWrite5mCost        float64   `json:"cache_write_5m_cost"`
+	CacheWrite1hCost        float64   `json:"cache_write_1h_cost"`
+	CacheWrite5mPrice       float64   `json:"cache_write_5m_price_per_mtoken"`
+	CacheWrite1hPrice       float64   `json:"cache_write_1h_price_per_mtoken"`
+	TotalCost               float64   `json:"total_cost"`
+	InputPrice              float64   `json:"input_price_per_mtoken"`
+	OutputPrice             float64   `json:"output_price_per_mtoken"`
+	CacheReadPrice          float64   `json:"cache_read_price_per_mtoken"`
+	RateMultiplier          float64   `json:"rate_multiplier"`
+	LongContext             bool      `json:"long_context"`
+	LongContextThreshold    int       `json:"long_context_threshold"`
+	IsRetryAttempt          bool      `json:"is_retry_attempt"`
+	AttemptIndex            int       `json:"attempt_index"`
+	UpstreamErrorKind       string    `json:"upstream_error_kind"`
+	ErrorMessage            string    `json:"error_message"`
+	DiagnosticContext       string    `json:"diagnostic_context,omitempty"`
+	PromptPolicyIncidentID  string    `json:"prompt_policy_incident_id,omitempty"`
 }
 
 // usage_logs 中受 varchar 长度约束的列宽。这些字段大多直接来自下游请求体或上游响应
@@ -4499,78 +4511,82 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 
 	db.logMu.Lock()
 	db.logBuf = append(db.logBuf, usageLogEntry{
-		RequestID:              clampUsageLogText(log.RequestID, usageLogRequestIDMaxLen),
-		UpstreamRequestID:      clampUsageLogText(log.UpstreamRequestID, usageLogRequestIDMaxLen),
-		UpstreamProxyID:        log.UpstreamProxyID,
-		UpstreamProxyName:      clampUsageLogText(log.UpstreamProxyName, usageLogAPIKeyNameMaxLen),
-		InjectedTurnState:      clampUsageLogText(log.InjectedTurnState, usageLogTurnStateMaxLen),
-		UpstreamTurnState:      clampUsageLogText(log.UpstreamTurnState, usageLogTurnStateMaxLen),
-		StoreUsageLog:          storeUsageLog,
-		AccountID:              log.AccountID,
-		CredentialGeneration:   log.CredentialGeneration,
-		Channel:                clampUsageLogText(log.Channel, usageLogChannelMaxLen),
-		ClientIP:               clampUsageLogText(log.ClientIP, usageLogShortTextMaxLen),
-		ClientUserAgent:        log.ClientUserAgent,
-		UpstreamUserAgent:      log.UpstreamUserAgent,
-		UserAgentOverridden:    log.UserAgentOverridden,
-		TurnStateOverridden:    log.TurnStateOverridden,
-		TurnStateRewriteNote:   clampUsageLogText(log.TurnStateRewriteNote, usageLogShortTextMaxLen),
-		InternalReason:         clampUsageLogText(log.InternalReason, usageLogShortTextMaxLen),
-		ParentRequestID:        clampUsageLogText(log.ParentRequestID, usageLogRequestIDMaxLen),
-		Endpoint:               clampUsageLogText(log.Endpoint, usageLogTextMaxLen),
-		Model:                  clampUsageLogText(log.Model, usageLogTextMaxLen),
-		EffectiveModel:         clampUsageLogText(log.EffectiveModel, usageLogTextMaxLen),
-		DaybreakProgram:        clampUsageLogText(log.DaybreakProgram, usageLogShortTextMaxLen),
-		UpstreamResponseModel:  clampUsageLogText(log.UpstreamResponseModel, upstreamResponseModelMaxLen),
-		UpstreamModelMismatch:  log.UpstreamModelMismatch,
-		PromptTokens:           log.PromptTokens,
-		CompletionTokens:       log.CompletionTokens,
-		TotalTokens:            log.TotalTokens,
-		StatusCode:             log.StatusCode,
-		DurationMs:             log.DurationMs,
-		InputTokens:            log.InputTokens,
-		OutputTokens:           log.OutputTokens,
-		ReasoningTokens:        log.ReasoningTokens,
-		FirstTokenMs:           log.FirstTokenMs,
-		WsAcquireMs:            log.WsAcquireMs,
-		ReasoningEffort:        clampUsageLogText(log.ReasoningEffort, usageLogTextMaxLen),
-		InboundEndpoint:        clampUsageLogText(log.InboundEndpoint, usageLogTextMaxLen),
-		UpstreamEndpoint:       clampUsageLogText(log.UpstreamEndpoint, usageLogTextMaxLen),
-		Stream:                 log.Stream,
-		Compact:                log.Compact,
-		HasCompactionHistory:   log.HasCompactionHistory,
-		Ultra:                  log.Ultra,
-		ViaWebsocket:           log.ViaWebsocket,
-		CachedTokens:           log.CachedTokens,
-		ImageInputTokens:       log.ImageInputTokens,
-		ImageOutputTokens:      log.ImageOutputTokens,
-		CachedImageInputTokens: log.CachedImageInputTokens,
-		CacheWrite5mTokens:     log.CacheWrite5mTokens,
-		CacheWrite1hTokens:     log.CacheWrite1hTokens,
-		ServiceTier:            clampUsageLogText(serviceTier, usageLogTextMaxLen),
-		RequestedServiceTier:   clampUsageLogText(log.RequestedServiceTier, usageLogTextMaxLen),
-		ActualServiceTier:      clampUsageLogText(log.ActualServiceTier, usageLogTextMaxLen),
-		BillingServiceTier:     clampUsageLogText(billingServiceTier, usageLogTextMaxLen),
-		APIKeyID:               log.APIKeyID,
-		APIKeyName:             clampUsageLogText(log.APIKeyName, usageLogAPIKeyNameMaxLen),
-		APIKeyMasked:           clampUsageLogText(log.APIKeyMasked, usageLogShortTextMaxLen),
-		ImageCount:             log.ImageCount,
-		ImageWidth:             log.ImageWidth,
-		ImageHeight:            log.ImageHeight,
-		ImageBytes:             log.ImageBytes,
-		ImageFormat:            clampUsageLogText(log.ImageFormat, usageLogTextMaxLen),
-		ImageSize:              clampUsageLogText(log.ImageSize, usageLogImageSizeMaxLen),
-		AccountBilled:          accountBilled,
-		UserBilled:             userBilled,
-		UserBilling:            log.UserBillingDetails(),
-		VideoSeconds:           log.VideoSeconds,
-		IsRetryAttempt:         log.IsRetryAttempt,
-		AttemptIndex:           log.AttemptIndex,
-		UpstreamErrorKind:      clampUsageLogText(log.UpstreamErrorKind, usageLogShortTextMaxLen),
-		ErrorMessage:           log.ErrorMessage,
-		DiagnosticContext:      NormalizeUsageDiagnosticContext(log.DiagnosticContext),
-		PromptPolicyIncidentID: clampUsageLogText(log.PromptPolicyIncidentID, usageLogShortTextMaxLen),
-		CreatedAt:              createdAt,
+		RequestID:               clampUsageLogText(log.RequestID, usageLogRequestIDMaxLen),
+		UpstreamRequestID:       clampUsageLogText(log.UpstreamRequestID, usageLogRequestIDMaxLen),
+		UpstreamProxyID:         log.UpstreamProxyID,
+		UpstreamProxyName:       clampUsageLogText(log.UpstreamProxyName, usageLogAPIKeyNameMaxLen),
+		InjectedTurnState:       clampUsageLogText(log.InjectedTurnState, usageLogTurnStateMaxLen),
+		UpstreamTurnState:       clampUsageLogText(log.UpstreamTurnState, usageLogTurnStateMaxLen),
+		StoreUsageLog:           storeUsageLog,
+		AccountID:               log.AccountID,
+		CredentialGeneration:    log.CredentialGeneration,
+		Channel:                 clampUsageLogText(log.Channel, usageLogChannelMaxLen),
+		ClientIP:                clampUsageLogText(log.ClientIP, usageLogShortTextMaxLen),
+		ClientUserAgent:         log.ClientUserAgent,
+		UpstreamUserAgent:       log.UpstreamUserAgent,
+		UserAgentOverridden:     log.UserAgentOverridden,
+		TurnStateOverridden:     log.TurnStateOverridden,
+		TurnStateRewriteNote:    clampUsageLogText(log.TurnStateRewriteNote, usageLogShortTextMaxLen),
+		InternalReason:          clampUsageLogText(log.InternalReason, usageLogShortTextMaxLen),
+		ParentRequestID:         clampUsageLogText(log.ParentRequestID, usageLogRequestIDMaxLen),
+		Endpoint:                clampUsageLogText(log.Endpoint, usageLogTextMaxLen),
+		Model:                   clampUsageLogText(log.Model, usageLogTextMaxLen),
+		EffectiveModel:          clampUsageLogText(log.EffectiveModel, usageLogTextMaxLen),
+		DaybreakProgram:         clampUsageLogText(log.DaybreakProgram, usageLogShortTextMaxLen),
+		UpstreamResponseModel:   clampUsageLogText(log.UpstreamResponseModel, upstreamResponseModelMaxLen),
+		UpstreamModelMismatch:   log.UpstreamModelMismatch,
+		PromptTokens:            log.PromptTokens,
+		CompletionTokens:        log.CompletionTokens,
+		TotalTokens:             log.TotalTokens,
+		StatusCode:              log.StatusCode,
+		DurationMs:              log.DurationMs,
+		InputTokens:             log.InputTokens,
+		OutputTokens:            log.OutputTokens,
+		ReasoningTokens:         log.ReasoningTokens,
+		FirstTokenMs:            log.FirstTokenMs,
+		UpstreamRoundDurationMs: log.UpstreamRoundDurationMs,
+		UpstreamFirstContentMs:  log.UpstreamFirstContentMs,
+		UpstreamRoundIndex:      log.UpstreamRoundIndex,
+		HiddenContinuationRound: log.HiddenContinuationRound,
+		WsAcquireMs:             log.WsAcquireMs,
+		ReasoningEffort:         clampUsageLogText(log.ReasoningEffort, usageLogTextMaxLen),
+		InboundEndpoint:         clampUsageLogText(log.InboundEndpoint, usageLogTextMaxLen),
+		UpstreamEndpoint:        clampUsageLogText(log.UpstreamEndpoint, usageLogTextMaxLen),
+		Stream:                  log.Stream,
+		Compact:                 log.Compact,
+		HasCompactionHistory:    log.HasCompactionHistory,
+		Ultra:                   log.Ultra,
+		ViaWebsocket:            log.ViaWebsocket,
+		CachedTokens:            log.CachedTokens,
+		ImageInputTokens:        log.ImageInputTokens,
+		ImageOutputTokens:       log.ImageOutputTokens,
+		CachedImageInputTokens:  log.CachedImageInputTokens,
+		CacheWrite5mTokens:      log.CacheWrite5mTokens,
+		CacheWrite1hTokens:      log.CacheWrite1hTokens,
+		ServiceTier:             clampUsageLogText(serviceTier, usageLogTextMaxLen),
+		RequestedServiceTier:    clampUsageLogText(log.RequestedServiceTier, usageLogTextMaxLen),
+		ActualServiceTier:       clampUsageLogText(log.ActualServiceTier, usageLogTextMaxLen),
+		BillingServiceTier:      clampUsageLogText(billingServiceTier, usageLogTextMaxLen),
+		APIKeyID:                log.APIKeyID,
+		APIKeyName:              clampUsageLogText(log.APIKeyName, usageLogAPIKeyNameMaxLen),
+		APIKeyMasked:            clampUsageLogText(log.APIKeyMasked, usageLogShortTextMaxLen),
+		ImageCount:              log.ImageCount,
+		ImageWidth:              log.ImageWidth,
+		ImageHeight:             log.ImageHeight,
+		ImageBytes:              log.ImageBytes,
+		ImageFormat:             clampUsageLogText(log.ImageFormat, usageLogTextMaxLen),
+		ImageSize:               clampUsageLogText(log.ImageSize, usageLogImageSizeMaxLen),
+		AccountBilled:           accountBilled,
+		UserBilled:              userBilled,
+		UserBilling:             log.UserBillingDetails(),
+		VideoSeconds:            log.VideoSeconds,
+		IsRetryAttempt:          log.IsRetryAttempt,
+		AttemptIndex:            log.AttemptIndex,
+		UpstreamErrorKind:       clampUsageLogText(log.UpstreamErrorKind, usageLogShortTextMaxLen),
+		ErrorMessage:            log.ErrorMessage,
+		DiagnosticContext:       NormalizeUsageDiagnosticContext(log.DiagnosticContext),
+		PromptPolicyIncidentID:  clampUsageLogText(log.PromptPolicyIncidentID, usageLogShortTextMaxLen),
+		CreatedAt:               createdAt,
 	})
 	db.trimUsageLogBufferLocked()
 	bufLen := len(db.logBuf)
@@ -4618,44 +4634,48 @@ type UsageLogInput struct {
 	// UpstreamResponseModel 是上游响应自报的模型名（观测值，未自报为空串）。
 	UpstreamResponseModel string
 	// UpstreamModelMismatch 三态：nil=上游未自报；true/false=自报与实发是否一致。
-	UpstreamModelMismatch  *bool
-	PromptTokens           int
-	CompletionTokens       int
-	TotalTokens            int
-	StatusCode             int
-	DurationMs             int
-	InputTokens            int
-	OutputTokens           int
-	ReasoningTokens        int
-	FirstTokenMs           int
-	WsAcquireMs            int
-	ReasoningEffort        string
-	InboundEndpoint        string
-	UpstreamEndpoint       string
-	Stream                 bool
-	Compact                bool
-	HasCompactionHistory   bool
-	Ultra                  bool
-	ViaWebsocket           bool
-	CachedTokens           int
-	ImageInputTokens       int
-	ImageOutputTokens      int
-	CachedImageInputTokens int
-	CacheWrite5mTokens     int
-	CacheWrite1hTokens     int
-	ServiceTier            string
-	RequestedServiceTier   string
-	ActualServiceTier      string
-	BillingServiceTier     string
-	APIKeyID               int64
-	APIKeyName             string
-	APIKeyMasked           string
-	ImageCount             int
-	ImageWidth             int
-	ImageHeight            int
-	ImageBytes             int
-	ImageFormat            string
-	ImageSize              string
+	UpstreamModelMismatch   *bool
+	PromptTokens            int
+	CompletionTokens        int
+	TotalTokens             int
+	StatusCode              int
+	DurationMs              int
+	InputTokens             int
+	OutputTokens            int
+	ReasoningTokens         int
+	FirstTokenMs            int
+	UpstreamRoundDurationMs int
+	UpstreamFirstContentMs  int
+	UpstreamRoundIndex      int
+	HiddenContinuationRound bool
+	WsAcquireMs             int
+	ReasoningEffort         string
+	InboundEndpoint         string
+	UpstreamEndpoint        string
+	Stream                  bool
+	Compact                 bool
+	HasCompactionHistory    bool
+	Ultra                   bool
+	ViaWebsocket            bool
+	CachedTokens            int
+	ImageInputTokens        int
+	ImageOutputTokens       int
+	CachedImageInputTokens  int
+	CacheWrite5mTokens      int
+	CacheWrite1hTokens      int
+	ServiceTier             string
+	RequestedServiceTier    string
+	ActualServiceTier       string
+	BillingServiceTier      string
+	APIKeyID                int64
+	APIKeyName              string
+	APIKeyMasked            string
+	ImageCount              int
+	ImageWidth              int
+	ImageHeight             int
+	ImageBytes              int
+	ImageFormat             string
+	ImageSize               string
 	// VideoCount / VideoSeconds 只在 Grok 生视频结算行填写:成功交付的视频数与
 	// 上游生成时长(秒,计费依据,与 HTTP 耗时 DurationMs 无关)。
 	VideoCount   int
@@ -4990,8 +5010,9 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 				  requested_service_tier, actual_service_tier, billing_service_tier,
 				  api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 				  is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-				  client_user_agent, upstream_user_agent, user_agent_overridden, turn_state_overridden, turn_state_rewrite_note, internal_reason, parent_request_id, prompt_policy_incident_id, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, injected_turn_state, upstream_turn_state, user_billing_mode, image_unit_price, billed_image_count, daybreak_program, video_seconds, created_at, diagnostic_context)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73)`)
+				  client_user_agent, upstream_user_agent, user_agent_overridden, turn_state_overridden, turn_state_rewrite_note, internal_reason, parent_request_id, prompt_policy_incident_id, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, injected_turn_state, upstream_turn_state, user_billing_mode, image_unit_price, billed_image_count, daybreak_program, video_seconds, created_at, diagnostic_context,
+				  upstream_round_duration_ms, upstream_first_content_ms, upstream_round_index, hidden_continuation_round)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77)`)
 		if err != nil {
 			return fmt.Errorf("准备语句: %w", err)
 		}
@@ -5003,7 +5024,8 @@ func (db *DB) insertSQLiteUsageLogBatch(ctx context.Context, batch []usageLogEnt
 				e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 				e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 				e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.TurnStateOverridden, e.TurnStateRewriteNote, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.InjectedTurnState, e.UpstreamTurnState, e.UserBillingMode, e.ImageUnitPrice, e.BilledImageCount, e.DaybreakProgram, e.VideoSeconds, db.usageLogCreatedAtArg(e.CreatedAt), e.DiagnosticContext)
+				e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.TurnStateOverridden, e.TurnStateRewriteNote, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.InjectedTurnState, e.UpstreamTurnState, e.UserBillingMode, e.ImageUnitPrice, e.BilledImageCount, e.DaybreakProgram, e.VideoSeconds, db.usageLogCreatedAtArg(e.CreatedAt), e.DiagnosticContext,
+				e.UpstreamRoundDurationMs, e.UpstreamFirstContentMs, e.UpstreamRoundIndex, e.HiddenContinuationRound)
 			if err != nil {
 				return fmt.Errorf("执行插入: %w", err)
 			}
@@ -5108,7 +5130,8 @@ func (db *DB) batchInsertLogsChunk(ctx context.Context, tx *sql.Tx, batch []usag
 			e.RequestedServiceTier, e.ActualServiceTier, e.BillingServiceTier,
 			e.APIKeyID, e.APIKeyName, e.APIKeyMasked, e.ImageCount, e.ImageWidth, e.ImageHeight, e.ImageBytes, e.ImageFormat, e.ImageSize, e.AccountBilled, e.UserBilled,
 			e.IsRetryAttempt, e.AttemptIndex, e.UpstreamErrorKind, e.ErrorMessage, e.ViaWebsocket,
-			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.TurnStateOverridden, e.TurnStateRewriteNote, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.InjectedTurnState, e.UpstreamTurnState, e.UserBillingMode, e.ImageUnitPrice, e.BilledImageCount, e.DaybreakProgram, e.VideoSeconds, db.usageLogCreatedAtArg(e.CreatedAt), e.DiagnosticContext)
+			e.ClientUserAgent, e.UpstreamUserAgent, e.UserAgentOverridden, e.TurnStateOverridden, e.TurnStateRewriteNote, e.InternalReason, e.ParentRequestID, nullablePromptPolicyIncidentID(e.PromptPolicyIncidentID), e.RequestID, e.UpstreamRequestID, e.UpstreamProxyID, e.UpstreamProxyName, e.InjectedTurnState, e.UpstreamTurnState, e.UserBillingMode, e.ImageUnitPrice, e.BilledImageCount, e.DaybreakProgram, e.VideoSeconds, db.usageLogCreatedAtArg(e.CreatedAt), e.DiagnosticContext,
+			e.UpstreamRoundDurationMs, e.UpstreamFirstContentMs, e.UpstreamRoundIndex, e.HiddenContinuationRound)
 		argIdx += usageLogInsertColumnCount
 	}
 
@@ -5117,7 +5140,8 @@ func (db *DB) batchInsertLogsChunk(ctx context.Context, tx *sql.Tx, batch []usag
 		requested_service_tier, actual_service_tier, billing_service_tier,
 		api_key_id, api_key_name, api_key_masked, image_count, image_width, image_height, image_bytes, image_format, image_size, account_billed, user_billed,
 		is_retry_attempt, attempt_index, upstream_error_kind, error_message, via_websocket,
-		client_user_agent, upstream_user_agent, user_agent_overridden, turn_state_overridden, turn_state_rewrite_note, internal_reason, parent_request_id, prompt_policy_incident_id, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, injected_turn_state, upstream_turn_state, user_billing_mode, image_unit_price, billed_image_count, daybreak_program, video_seconds, created_at, diagnostic_context)
+		client_user_agent, upstream_user_agent, user_agent_overridden, turn_state_overridden, turn_state_rewrite_note, internal_reason, parent_request_id, prompt_policy_incident_id, request_id, upstream_request_id, upstream_proxy_id, upstream_proxy_name, injected_turn_state, upstream_turn_state, user_billing_mode, image_unit_price, billed_image_count, daybreak_program, video_seconds, created_at, diagnostic_context,
+		upstream_round_duration_ms, upstream_first_content_ms, upstream_round_index, hidden_continuation_round)
 		VALUES %s
 		RETURNING id`, strings.Join(valueStrings, ","))
 
@@ -5749,6 +5773,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''), COALESCE(u.diagnostic_context, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.turn_state_overridden, false), COALESCE(u.turn_state_rewrite_note, ''), COALESCE(u.channel, ''),
 	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.injected_turn_state, ''), COALESCE(u.upstream_turn_state, ''), COALESCE(u.daybreak_program, ''),
+	            COALESCE(u.upstream_round_duration_ms, 0), COALESCE(u.upstream_first_content_ms, 0), COALESCE(u.upstream_round_index, 0), COALESCE(u.hidden_continuation_round, false),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -5773,6 +5798,7 @@ func (db *DB) ListRecentUsageLogs(ctx context.Context, limit int) ([]*UsageLog, 
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled, &l.UserBillingMode, &l.ImageUnitPrice, &l.BilledImageCount, &l.VideoSeconds,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.DiagnosticContext, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.TurnStateOverridden, &l.TurnStateRewriteNote, &l.Channel,
 			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.InjectedTurnState, &l.UpstreamTurnState, &l.DaybreakProgram,
+			&l.UpstreamRoundDurationMs, &l.UpstreamFirstContentMs, &l.UpstreamRoundIndex, &l.HiddenContinuationRound,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6229,6 +6255,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 	            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''), COALESCE(u.diagnostic_context, ''),
 	            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.turn_state_overridden, false), COALESCE(u.turn_state_rewrite_note, ''), COALESCE(u.channel, ''),
 	            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.injected_turn_state, ''), COALESCE(u.upstream_turn_state, ''), COALESCE(u.daybreak_program, ''),
+	            COALESCE(u.upstream_round_duration_ms, 0), COALESCE(u.upstream_first_content_ms, 0), COALESCE(u.upstream_round_index, 0), COALESCE(u.hidden_continuation_round, false),
 	            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM usage_logs u
 	           LEFT JOIN accounts a ON u.account_id = a.id
@@ -6254,6 +6281,7 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 			&l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize, &l.AccountBilled, &l.UserBilled, &l.UserBillingMode, &l.ImageUnitPrice, &l.BilledImageCount, &l.VideoSeconds,
 			&l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.DiagnosticContext, &l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.TurnStateOverridden, &l.TurnStateRewriteNote, &l.Channel,
 			&l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.InjectedTurnState, &l.UpstreamTurnState, &l.DaybreakProgram,
+			&l.UpstreamRoundDurationMs, &l.UpstreamFirstContentMs, &l.UpstreamRoundIndex, &l.HiddenContinuationRound,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6734,6 +6762,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 			            COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''), COALESCE(u.diagnostic_context, ''),
 			            COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.turn_state_overridden, false), COALESCE(u.turn_state_rewrite_note, ''), COALESCE(u.channel, ''),
 			            COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.injected_turn_state, ''), COALESCE(u.upstream_turn_state, ''), COALESCE(u.daybreak_program, ''),
+	            COALESCE(u.upstream_round_duration_ms, 0), COALESCE(u.upstream_first_content_ms, 0), COALESCE(u.upstream_round_index, 0), COALESCE(u.hidden_continuation_round, false),
 			            COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 	           FROM (` + pageIDs + `) page
 	           JOIN usage_logs u ON u.id = page.id
@@ -6757,6 +6786,7 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.UserBillingMode, &l.ImageUnitPrice, &l.BilledImageCount, &l.VideoSeconds, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.DiagnosticContext,
 			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.TurnStateOverridden, &l.TurnStateRewriteNote, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.InjectedTurnState, &l.UpstreamTurnState, &l.DaybreakProgram,
+			&l.UpstreamRoundDurationMs, &l.UpstreamFirstContentMs, &l.UpstreamRoundIndex, &l.HiddenContinuationRound,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}
@@ -6793,6 +6823,7 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 			COALESCE(u.is_retry_attempt, false), COALESCE(u.attempt_index, 0), COALESCE(u.upstream_error_kind, ''), COALESCE(u.error_message, ''), COALESCE(u.diagnostic_context, ''),
 			COALESCE(u.client_user_agent, ''), COALESCE(u.upstream_user_agent, ''), COALESCE(u.user_agent_overridden, false), COALESCE(u.turn_state_overridden, false), COALESCE(u.turn_state_rewrite_note, ''), COALESCE(u.channel, ''),
 			COALESCE(u.internal_reason, ''), COALESCE(u.parent_request_id, ''), COALESCE(u.prompt_policy_incident_id, ''), COALESCE(u.request_id, ''), COALESCE(u.upstream_request_id, ''), COALESCE(u.upstream_proxy_id, 0), COALESCE(u.upstream_proxy_name, ''), COALESCE(u.injected_turn_state, ''), COALESCE(u.upstream_turn_state, ''), COALESCE(u.daybreak_program, ''),
+	            COALESCE(u.upstream_round_duration_ms, 0), COALESCE(u.upstream_first_content_ms, 0), COALESCE(u.upstream_round_index, 0), COALESCE(u.hidden_continuation_round, false),
 			COALESCE(CAST(a.credentials AS TEXT), '{}'), COALESCE(a.name, ''), u.created_at
 		FROM usage_logs u
 		LEFT JOIN accounts a ON u.account_id = a.id
@@ -6816,6 +6847,7 @@ func (db *DB) ListUsageLogsByFilter(ctx context.Context, f UsageLogFilter) ([]*U
 			&l.ServiceTier, &l.RequestedServiceTier, &l.ActualServiceTier, &l.BillingServiceTier, &l.APIKeyID, &l.APIKeyName, &l.APIKeyMasked, &l.ImageCount, &l.ImageWidth, &l.ImageHeight, &l.ImageBytes, &l.ImageFormat, &l.ImageSize,
 			&l.AccountBilled, &l.UserBilled, &l.UserBillingMode, &l.ImageUnitPrice, &l.BilledImageCount, &l.VideoSeconds, &l.IsRetryAttempt, &l.AttemptIndex, &l.UpstreamErrorKind, &l.ErrorMessage, &l.DiagnosticContext,
 			&l.ClientUserAgent, &l.UpstreamUserAgent, &l.UserAgentOverridden, &l.TurnStateOverridden, &l.TurnStateRewriteNote, &l.Channel, &l.InternalReason, &l.ParentRequestID, &l.PromptPolicyIncidentID, &l.RequestID, &l.UpstreamRequestID, &l.UpstreamProxyID, &l.UpstreamProxyName, &l.InjectedTurnState, &l.UpstreamTurnState, &l.DaybreakProgram,
+			&l.UpstreamRoundDurationMs, &l.UpstreamFirstContentMs, &l.UpstreamRoundIndex, &l.HiddenContinuationRound,
 			&credentialRaw, &l.AccountName, &createdAtRaw); err != nil {
 			return nil, err
 		}

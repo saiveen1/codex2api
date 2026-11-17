@@ -15,6 +15,7 @@ import (
 
 type upstreamTraceContextKey struct{}
 type upstreamTraceAttempt struct {
+	round      upstreamRoundTiming
 	accountID  int64
 	requestID  string
 	proxy      auth.ProxyAuditLabel
@@ -24,6 +25,7 @@ type upstreamTraceAttempt struct {
 }
 
 type upstreamTraceSnapshot struct {
+	round             upstreamRoundTiming
 	RequestID         string
 	accountID         int64
 	UpstreamRequestID string
@@ -44,6 +46,7 @@ func snapshotUpstreamTrace(ctx context.Context) upstreamTraceSnapshot {
 	result := upstreamTraceSnapshot{RequestID: a.requestID, ParentRequestID: a.parentRequestID}
 	if a.current != nil {
 		result.accountID = a.current.accountID
+		result.round = a.current.round
 		result.UpstreamRequestID = a.current.requestID
 		result.Proxy = a.current.proxy
 		result.UpstreamTurnState = a.current.upstreamTurnState
@@ -144,6 +147,9 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	}
 	label.Name = security.MaskSensitiveData(label.Name)
 	attempt := &upstreamTraceAttempt{accountID: account.ID(), proxy: label}
+	if ws {
+		attempt.round.started = time.Now()
+	}
 	a.mu.Lock()
 	a.attempts++
 	attempt.diagnostic = diagnosticAttempt{Index: a.attempts, RequestBytes: -1, Error: diagnosticError{Detail: "unavailable"}}
@@ -204,6 +210,9 @@ func noteUpstreamTurnState(ctx context.Context, state string) {
 func doTracedUpstreamRequest(client *http.Client, req *http.Request, account *auth.Account, proxyURL string) (*http.Response, error) {
 	record := beginUpstreamTrace(req.Context(), account, proxyURL, false)
 	noteDiagnosticHTTPRequest(req)
+	if account != nil && (!account.IsRelayStyle() || account.IsOpenAIResponsesAPI()) {
+		startUpstreamRound(req.Context())
+	}
 	resp, err := client.Do(req)
 	record(resp)
 	noteDiagnosticHTTPDispatch(req, resp, err)
@@ -231,5 +240,9 @@ func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
 		input.UpstreamTurnState = current.upstreamTurnState
 		input.TraceAttemptIndex = current.diagnostic.Index
 		input.TraceHTTPStatus = current.diagnostic.HTTPStatus
+		// Folded rows already carry the snapshot matching their terminal usage.
+		if input.UpstreamRoundIndex == 0 {
+			current.round.apply(input)
+		}
 	}
 }

@@ -541,6 +541,7 @@ func readSSEStreamWithContinuousRetryKeepalive(ctx context.Context, body io.Read
 	ctx = bindDiagnosticAttempt(ctx)
 	err := readStreamWithContinuousRetryKeepalive(ctx, func(yield func(continuousRetrySSEEvent) bool) error {
 		return ReadSSEStreamWithEvent(body, func(event string, data []byte) bool {
+			observeUpstreamRound(ctx, normalizedUpstreamSSEEventType(event, data), data)
 			return yield(continuousRetrySSEEvent{event: event, data: data})
 		})
 	}, func(item continuousRetrySSEEvent) bool {

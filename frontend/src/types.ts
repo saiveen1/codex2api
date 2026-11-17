@@ -3732,6 +3732,10 @@ export interface UsageLog {
   output_tokens: number
   reasoning_tokens: number
   first_token_ms: number
+  upstream_round_duration_ms?: number
+  upstream_first_content_ms?: number
+  upstream_round_index?: number
+  hidden_continuation_round?: boolean
   ws_acquire_ms?: number
   reasoning_effort: string
   inbound_endpoint: string
@@ -4202,6 +4206,11 @@ export interface PublicAPIKeyUsageLog {
   status_code: number
   duration_ms: number
   first_token_ms: number
+  upstream_round_duration_ms?: number
+  upstream_first_content_ms?: number
+  upstream_round_index?: number
+  hidden_continuation_round?: boolean
+  completion_tokens?: number
   input_tokens: number
   output_tokens: number
   reasoning_tokens: number
