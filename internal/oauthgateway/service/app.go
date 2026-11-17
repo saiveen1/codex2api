@@ -32,8 +32,11 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 	}
 	a := &App{store: store, target: target, allowHTTP: allowHTTP, wake: make(chan struct{}, 1)}
 	err := store.Update(func(s *State) error {
-		if (s.Version < 1 || s.Version > 4) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
+		if (s.Version < 1 || s.Version > 5) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
 			return errors.New("unsupported encrypted state version")
+		}
+		if s.Version < 5 && len(retryReferences(*s)) != 0 {
+			return errors.New("reauthorization references require encrypted state version 5")
 		}
 		if s.Settings.OAuthURL == "" {
 			if s.Settings.OAuthToken != "" {
@@ -246,11 +249,16 @@ func (a *App) Preview(ctx context.Context, in Input) (Preview, error) {
 	if e != nil || !p.Valid {
 		return p, e
 	}
-	s, e := a.settings()
+	s, e := a.store.View()
 	if e != nil {
 		return p, e
 	}
-	o, _, e := a.clients(s)
+	if in.RetryOf != nil {
+		if e = checkRetry(s, *in.RetryOf, p.Rows[0].Identifier); e != nil {
+			return p, e
+		}
+	}
+	o, _, e := a.clients(s.Settings)
 	if e != nil {
 		return p, e
 	}
@@ -321,7 +329,7 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 	} else {
 		for _, j := range state.Jobs {
 			if j.ID == in.RequestID && j.Fingerprint == fp {
-				return jobView(j), true, nil
+				return jobViewWithRetries(j, retryReferences(state)), true, nil
 			}
 		}
 		for _, j := range state.Archived {
@@ -344,7 +352,7 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 				if j.Fingerprint != fp {
 					return fault(409, "idempotency_conflict", "此请求 ID 已绑定其他材料，请查找原任务。")
 				}
-				view = jobView(j)
+				view = jobViewWithRetries(j, retryReferences(*s))
 				existing = true
 				return nil
 			}
@@ -357,6 +365,11 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 				view = archiveView(archived)
 				existing = true
 				return nil
+			}
+		}
+		if in.RetryOf != nil {
+			if err := checkRetry(*s, *in.RetryOf, p.Rows[0].Identifier); err != nil {
+				return err
 			}
 		}
 		if !settingsView(s.Settings).Configured {
@@ -379,6 +392,10 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 			v := jobView(j)
 			if v.CanRefresh || v.CanRetryImport {
 				active++
+				// The checked source row is resolved, even if a sibling needs retry-import.
+				if in.RetryOf != nil && j.ID == in.RetryOf.JobID {
+					continue
+				}
 				for _, g := range j.Groups {
 					for _, account := range g.Request.Accounts {
 						if incoming[account.Identifier] {
@@ -401,6 +418,12 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 		now := time.Now().UTC()
 		job := Job{ID: in.RequestID, Fingerprint: fp, Settings: s.Settings, Groups: groups, GroupIDs: sortedGroups(in.GroupIDs), RuntimeProxy: in.RuntimeProxy, CreatedAt: now, UpdatedAt: now}
 		job.SaveCredentials, job.Recovery = in.SaveCredentials, recovery
+		if in.RetryOf != nil {
+			retry := *in.RetryOf
+			job.RetryOf = &retry
+			// Older workers would drop the reference, losing durable deduplication.
+			s.Version = 5
+		}
 		if recovery != nil {
 			for _, r := range s.Recoveries {
 				if r.Snapshot.AccountID == recovery.AccountID && r.Enabled {
@@ -409,7 +432,7 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 			}
 		}
 		for _, group := range groups {
-			if len(group.RuntimeProxies) > 0 {
+			if s.Version < 4 && len(group.RuntimeProxies) > 0 {
 				// Older workers must refuse this state rather than ignore account pins.
 				s.Version = 4
 				break
@@ -430,8 +453,9 @@ func (a *App) Jobs() ([]JobView, error) {
 		return nil, e
 	}
 	out := make([]JobView, 0, len(s.Jobs))
+	refs := retryReferences(s)
 	for i := len(s.Jobs) - 1; i >= 0; i-- {
-		out = append(out, jobView(s.Jobs[i]))
+		out = append(out, jobViewWithRetries(s.Jobs[i], refs))
 	}
 	return out, nil
 }
@@ -442,7 +466,7 @@ func (a *App) Job(id string) (JobView, error) {
 	}
 	for _, j := range s.Jobs {
 		if j.ID == id {
-			return jobView(j), nil
+			return jobViewWithRetries(j, retryReferences(s)), nil
 		}
 	}
 	for _, archived := range s.Archived {

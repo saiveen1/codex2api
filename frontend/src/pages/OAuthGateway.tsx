@@ -18,7 +18,7 @@ type Quota = { remaining?: number; total?: number; reserved?: number; used?: num
 type Group = { id: number; name: string }
 type Identifier = { identifier?: string; identifier_masked?: string }
 type Preview = { valid: boolean; count: number; groups: number; rows?: (Identifier & { line: number; proxy_mode: string })[]; errors?: { line: number; code: string }[] }
-type Job = { id: string; state: string; total: number; imported: number; failed: number; pending: number; can_refresh: boolean; can_cancel: boolean; can_retry_import: boolean; can_archive: boolean; retained_material: boolean; archived: boolean; recovery_account_id?: number; auto_recovery?: boolean; groups?: { index: number; state: string; batch_id: string; request_id: string; imported: number; total: number; error?: Problem; read_operation?: string; read_failures?: number; next_check_at?: string; items?: (Identifier & { line: number; state: string; import_state: string; error?: Problem })[] }[] }
+type Job = { id: string; state: string; total: number; imported: number; failed: number; pending: number; can_refresh: boolean; can_cancel: boolean; can_retry_import: boolean; can_archive: boolean; retained_material: boolean; archived: boolean; recovery_account_id?: number; retry_of?: { job_id: string; line: number }; auto_recovery?: boolean; groups?: { index: number; state: string; batch_id: string; request_id: string; imported: number; total: number; error?: Problem; read_operation?: string; read_failures?: number; next_check_at?: string; items?: (Identifier & { line: number; state: string; import_state: string; can_reauthorize?: boolean; diagnostic?: { upstream_code?: string; http_status?: number; endpoint?: string; stage?: string }; error?: Problem })[] }[] }
 type Recovery = { account_id: number; identifier: string; state: string; attempts: number; next_attempt_at?: string; job_id?: string; error?: Problem; can_disable: boolean }
 type Connection = { oauth: { ok: boolean; error?: Problem; capabilities?: Capabilities; quota?: Quota }; codex: { ok: boolean; error?: Problem; groups?: Group[] } }
 type ProxyCheck = { usable: boolean; requested_country?: string; observed_country?: string; openai_reachable?: boolean; openai_http_status?: number; trace_http_status?: number; error?: Problem }
@@ -47,6 +47,7 @@ export default function OAuthGateway() {
   const [accountRuntimeProxies, setAccountRuntimeProxies] = useState<Record<string, string>>({})
   const [saveCredentials, setSaveCredentials] = useState(false)
   const [recoveryAccountID, setRecoveryAccountID] = useState('')
+  const [retry, setRetry] = useState<{ job_id: string; line: number; identifier: string } | null>(null)
   const [preview, setPreview] = useState<{ revision: number; input: GatewayInput; result: Preview } | null>(null)
   const [previewChanged, setPreviewChanged] = useState(false)
   const hadPreview = useRef(false)
@@ -99,6 +100,7 @@ export default function OAuthGateway() {
   }
   const clearMaterial = () => {
     setSource(''); setRuntimeProxy(''); setAccountRuntimeProxies({}); setOpts(current => ({ ...current, proxy: '' }))
+    setRetry(null)
     if (fileRef.current) fileRef.current.value = ''
     invalidate(); hadPreview.current = false; setPreviewChanged(false)
   }
@@ -202,6 +204,7 @@ export default function OAuthGateway() {
     const count = material.accounts.length
     if (repairing && (!/^[1-9]\d*$/.test(recoveryAccountID) || !Number.isSafeInteger(Number(recoveryAccountID)))) return tr('Use a positive integer account ID.', '原账号 ID 必须是正整数。')
     if (repairing && count !== 1) return tr('Repairing an existing account requires exactly one account.', '修复已有账号时只能提供一个账号的材料。')
+    if (retry && (count !== 1 || material.accounts[0].identifier.trim().toLowerCase() !== retry.identifier.trim().toLowerCase())) return tr('Re-enter exactly one account matching the original identifier.', '请重新填写且仅填写与原标识匹配的一个账号。')
     if ((saveCredentials || repairing) && !settings.auto_recovery_supported) return tr('This server does not support controlled account recovery.', '当前服务不支持受控账号恢复，请先升级服务端。')
     if ((repairing || saveCredentials) && !caps.features?.expected_identity_guard) return tr('The gateway cannot verify the original identity; repair and automatic recovery are unavailable.', '网关未提供原身份校验能力，不能修复原账号或启用自动恢复。')
     if (opts.proxy_mode === 'custom' && !opts.proxy) return tr('Enter the OAuth proxy URI.', '请输入自带 OAuth 代理 URI，或改用系统代理。')
@@ -224,7 +227,7 @@ export default function OAuthGateway() {
     if (problem) throw new Error(problem)
     const accounts = withAccountRuntimeProxies(material.accounts, accountRuntimeProxies, repairing)
     const options = Object.fromEntries(Object.entries(opts).filter(([key, value]) => value && (key !== 'proxy' || opts.proxy_mode === 'custom')))
-    return { ...(format === 'json' || accounts.some(a => a.runtime_proxy) ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}) }
+    return { ...(format === 'json' || accounts.some(a => a.runtime_proxy) ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}), ...(retry ? { retry_of: { job_id: retry.job_id, line: retry.line } } : {}) }
   }
   const saveSettings = () => run('save', async signal => {
     invalidate(); setConnection('')
@@ -258,6 +261,7 @@ export default function OAuthGateway() {
   })
   const submit = () => run('submit', async signal => {
     if (!preview || !previewMatches(preview, revisionRef.current) || !preview.result.valid || uncertain || blocker) return
+    if (retry && !window.confirm(tr(`Create a new authorization for ${retry.identifier} from job ${retry.job_id}, line ${retry.line}?`, `确认重新授权 ${retry.identifier}（原任务 ${retry.job_id}，第 ${retry.line} 行）？`))) return
     if (!globalThis.crypto?.randomUUID) throw new Error(tr('Use HTTPS to generate a safe request ID.', '请使用 HTTPS 打开后台，以生成安全的请求 ID。'))
     const payload = createSubmission(preview.input, crypto.randomUUID())
     // If browser storage is unavailable, stop before sending the non-idempotent request.
@@ -293,6 +297,12 @@ export default function OAuthGateway() {
     await gatewayRequest(`/recovery/${entry.account_id}/disable`, 'POST', {}, signal)
     if (!signal.aborted) setReload(n => n + 1)
   })
+  const startRetry = (job: Job, item: Identifier & { line: number }) => {
+    if (formLocked || busy.current.has('submit') || pending.preview || !item.identifier || !Number.isSafeInteger(item.line) || item.line < 1) return
+    if ((source || preview || retry) && !window.confirm(tr('Discard the current unsubmitted material and preview?', '放弃当前未提交的材料和预检结果？'))) return
+    clearMaterial(); setFormat('txt'); setOpts({ proxy_mode: 'system' }); setSelectedGroups([]); setRecoveryAccountID(''); setSaveCredentials(false); setProxyResult('')
+    setRetry({ job_id: job.id, line: item.line, identifier: item.identifier })
+  }
   const select = (name: string, key: string, values?: string[], fallback = '') => {
     const options = [{ value: fallback, label: fallback === 'system' ? tr('System proxy', '系统代理') : key === 'workspace_policy' ? tr('Team preferred (default)', '团队优先（默认）') : tr('Automatic (default)', '自动（默认）') }, ...(values || []).filter(v => v !== fallback).map(value => ({ value, label: value }))]
     if (opts[key] && !options.some(v => v.value === opts[key])) options.push({ value: opts[key], label: `${opts[key]} (${tr('unavailable', '已失效')})` })
@@ -334,6 +344,7 @@ export default function OAuthGateway() {
       </div>
     </CardContent></Card>
     <Card><CardHeader><CardTitle>{tr('Prepare authorization', '准备授权')}</CardTitle></CardHeader><CardContent className="space-y-4">
+      {retry && <div role="status" className="space-y-2 rounded-md border border-amber-500/40 p-3 text-sm"><p>{tr('Reauthorize one account; re-enter its material:', '重新授权单个账号，请重新填写该账号材料：')} {retry.identifier} · {retry.job_id} · {tr('Line', '第')} {retry.line} {tr('', '行')}</p><Button variant="outline" disabled={formLocked || !!pending.preview} onClick={() => { setRetry(null); invalidate() }}>{tr('Cancel reauthorization', '取消重新授权')}</Button></div>}
       <fieldset disabled={formLocked} className="space-y-4">
         <p className="max-w-4xl text-sm text-muted-foreground">{tr('TXT: identifier----password----TOTP_SECRET, one per line. Use a JSON array for per-account proxies or passwords containing ----. Maximum 1 MiB / 100 accounts. Material is shown in full; the browser does not persist it and clears it after acceptance. Server tasks are encrypted.', 'TXT 每行：账号----密码----TOTP_SECRET。单账号代理或密码包含 ---- 时请用 JSON 数组。最多 1 MiB、100 个账号。材料完整显示，浏览器不持久保存，接受任务后清空；服务端任务加密存储。')}</p>
         <div className="grid gap-4 md:grid-cols-2">
@@ -385,7 +396,7 @@ export default function OAuthGateway() {
           <Link className="inline-block text-xs text-primary underline underline-offset-4" to="/accounts">{tr('Manage groups in Accounts', '前往账号管理查看或创建分组')}</Link>
         </fieldset>
         <div className="space-y-3 border-t border-border pt-4">
-          {label(tr('Existing account ID to repair (optional)', '修复已有账号 ID（可选）'), <Input inputMode="numeric" value={recoveryAccountID} disabled={!settings?.auto_recovery_supported && !recoveryAccountID} placeholder={tr('Blank creates a new account', '留空表示新增账号')} onChange={e => { setRecoveryAccountID(e.target.value.trim()); invalidate() }} />, tr('Specify the original account ID and one account’s material. Identity, workspace and credential version must match. Deleted or disabled accounts are not revived.', '填写原账号 ID，并只提供一条材料。必须通过身份、工作区与凭据版本校验；不会复活已删除或禁用账号。'))}
+          {label(tr('Existing account ID to repair (optional)', '修复已有账号 ID（可选）'), <Input inputMode="numeric" value={recoveryAccountID} disabled={!!retry || (!settings?.auto_recovery_supported && !recoveryAccountID)} placeholder={tr('Blank creates a new account', '留空表示新增账号')} onChange={e => { setRecoveryAccountID(e.target.value.trim()); invalidate() }} />, tr('Specify the original account ID and one account’s material. Identity, workspace and credential version must match. Deleted or disabled accounts are not revived.', '填写原账号 ID，并只提供一条材料。必须通过身份、工作区与凭据版本校验；不会复活已删除或禁用账号。'))}
           <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={saveCredentials} disabled={!settings?.auto_recovery_supported && !saveCredentials} onChange={e => { setSaveCredentials(e.target.checked); invalidate() }} /><span>{tr('Enable 401 recovery after success (encrypt and retain password and TOTP)', '成功后启用 401 自动恢复（加密保管密码和 TOTP）')}</span></label>
           <p className="text-xs text-muted-foreground">{settings?.auto_recovery_supported ? tr('Off by default. Only explicitly enrolled accounts may recover. Turn it off below to discard saved login material; archiving a job does not disable recovery.', '默认关闭，仅对明确启用的账号生效。可在下方停止恢复并清除保管材料；归档任务不会关闭已启用的恢复。') : settings?.auto_recovery_reason || tr('Waiting for server recovery capabilities.', '正在读取服务端恢复能力。')}</p>
         </div>
@@ -402,7 +413,7 @@ export default function OAuthGateway() {
       <p className="text-xs text-muted-foreground">{tr('The list refreshes automatically. Refresh original continues an existing authorization; retry import only retries a confirmed local write failure, never OAuth.', '列表自动更新。“查询原任务”继续核查已有授权；“重试导入”只重试确定失败的入库，不重新授权。')}</p>
       {jobsError && <p role="alert" className="break-words text-sm text-destructive">{tr('Could not load jobs; use Refresh list:', '读取任务失败，请刷新列表：')} {jobsError}</p>}
       {jobs === null ? <p className="text-sm text-muted-foreground">{jobsError ? tr('Waiting for a successful retry.', '等待重试成功。') : tr('Loading jobs…', '正在读取任务…')}</p> : jobs.length === 0 ? <p className="text-sm text-muted-foreground">{tr('No jobs in this view.', '此处暂无任务。')}</p> : jobs.map(job => <article key={job.id} id={`oauth-job-${job.id}`} className="space-y-3 rounded-md border border-border p-4">
-        <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p className="break-all text-sm font-medium">{job.id}</p><p className="text-sm text-muted-foreground">{stateText(job.state)}{job.archived ? ` · ${tr('archived', '已归档')}` : ''}{job.recovery_account_id ? ` · ${tr('Original account', '原账号')} #${job.recovery_account_id}` : ''}</p></div><p className="text-sm">{tr('Imported', '已导入')} {job.imported}/{job.total} · {tr('Failed', '失败')} {job.failed} · {tr('Pending', '待处理')} {job.pending ?? '—'}</p></div>
+        <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p className="break-all text-sm font-medium">{job.id}</p><p className="text-sm text-muted-foreground">{stateText(job.state)}{job.archived ? ` · ${tr('archived', '已归档')}` : ''}{job.recovery_account_id ? ` · ${tr('Original account', '原账号')} #${job.recovery_account_id}` : ''}</p>{job.retry_of && <p className="break-all text-sm">{tr('Retry of', '重新授权来源')}: {job.retry_of.job_id} · {tr('Line', '第')} {job.retry_of.line} {tr('', '行')}</p>}</div><p className="text-sm">{tr('Imported', '已导入')} {job.imported}/{job.total} · {tr('Failed', '失败')} {job.failed} · {tr('Pending', '待处理')} {job.pending ?? '—'}</p></div>
         {!job.archived && <>
           <div className="flex flex-wrap gap-x-4 gap-y-3">{([
             ['refresh', job.can_refresh, tr('Refresh original', '查询原任务'), tr('The task has ended; no query is needed.', '任务已结束，无需继续查询。')],
@@ -411,7 +422,7 @@ export default function OAuthGateway() {
             ['archive', job.can_archive, tr('Archive', '归档'), tr('Resolve pending results or retryable imports first.', '先处理待核查结果或可重试入库项。')],
           ] as const).map(([path, allowed, text, reason]) => <div key={path} className="max-w-52 space-y-1"><Button variant="outline" size="sm" disabled={!allowed || !!pending[`job:${job.id}`]} aria-describedby={`reason-${job.id}-${path}`} onClick={() => action(job, path)}>{text}</Button><p id={`reason-${job.id}-${path}`} className="text-xs text-muted-foreground">{pending[`job:${job.id}`] ? tr('Processing this task…', '正在处理此任务…') : !allowed ? reason : path === 'archive' ? tr('Resolved; can archive.', '结果已明确，可以归档。') : ''}</p></div>)}</div>
           {showError(`job:${job.id}`)}
-          <details><summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">{tr('Batch and account details', '批次与账号详情')}</summary><div className="mt-3 space-y-3">{job.groups?.length ? job.groups.map(g => <div key={g.index} className="space-y-1 border-t border-border pt-3 text-sm"><p>{tr('Batch', '批次')} {g.index + 1}: {stateText(g.state)} · {g.imported}/{g.total}</p><p className="break-all text-muted-foreground">{tr('Batch ID', '批次 ID')}: {g.batch_id || '—'} · {tr('Request', '请求')}: {g.request_id || '—'}</p>{g.error && <p className="break-words text-destructive">{problemText(g.error)}</p>}{(g.read_failures || g.next_check_at) && <p>{tr('Read / failures / next check', '读取 / 失败次数 / 下次检查')}: {g.read_operation || '—'} / {g.read_failures || 0} / {g.next_check_at || '—'}</p>}{g.items?.map((item, i) => <div key={i} className="break-words pl-3">{item.line}. <span className="break-all">{identifier(item)}</span> · OAuth: {stateText(item.state)} · {tr('Import', '导入')}: {stateText(item.import_state)}{item.error && <p className="text-destructive">{problemText(item.error)}</p>}</div>)}</div>) : <p className="text-sm text-muted-foreground">{tr('No batch details yet.', '暂无批次详情。')}</p>}</div></details>
+          <details><summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">{tr('Batch and account details', '批次与账号详情')}</summary><div className="mt-3 space-y-3">{job.groups?.length ? job.groups.map(g => <div key={g.index} className="space-y-1 border-t border-border pt-3 text-sm"><p>{tr('Batch', '批次')} {g.index + 1}: {stateText(g.state)} · {g.imported}/{g.total}</p><p className="break-all text-muted-foreground">{tr('Batch ID', '批次 ID')}: {g.batch_id || '—'} · {tr('Request', '请求')}: {g.request_id || '—'}</p>{g.error && <p className="break-words text-destructive">{problemText(g.error)}</p>}{(g.read_failures || g.next_check_at) && <p>{tr('Read / failures / next check', '读取 / 失败次数 / 下次检查')}: {g.read_operation || '—'} / {g.read_failures || 0} / {g.next_check_at || '—'}</p>}{g.items?.map((item, i) => <div key={i} className="break-words pl-3">{item.line}. <span className="break-all">{identifier(item)}</span> · OAuth: {stateText(item.state)} · {tr('Import', '导入')}: {item.state === 'failed' && item.import_state === 'not_ready' ? tr('Not imported (authorization failed)', '未导入（授权失败）') : stateText(item.import_state)}{item.error && <p className="text-destructive">{problemText(item.error)}</p>}{item.diagnostic && <p>{item.diagnostic.upstream_code === 'invalid_state' && <span>{tr('Login session has expired.', '登录会话已失效。')} </span>}{[item.diagnostic.upstream_code && `${tr('Cause', '失败原因')}: ${item.diagnostic.upstream_code}`, item.diagnostic.http_status && `HTTP ${item.diagnostic.http_status}`, item.diagnostic.stage && `${tr('Stage', '阶段')}: ${item.diagnostic.stage === 'totp_verify' ? tr('TOTP verification', 'TOTP 验证') : item.diagnostic.stage}`, item.diagnostic.endpoint && `${tr('Endpoint', '接口')}: ${item.diagnostic.endpoint}`].filter(Boolean).join(' · ')}</p>}{item.can_reauthorize && <Button variant="outline" size="sm" disabled={formLocked || !!pending.preview || !item.identifier || !Number.isSafeInteger(item.line) || item.line < 1} onClick={() => startRetry(job, item)}>{tr('Reauthorize account', '重新授权此账号')}</Button>}</div>)}</div>) : <p className="text-sm text-muted-foreground">{tr('No batch details yet.', '暂无批次详情。')}</p>}</div></details>
         </>}
       </article>)}
     </CardContent></Card>

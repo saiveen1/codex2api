@@ -82,12 +82,13 @@ type ProxyCheck struct {
 	Error            *Error  `json:"error"`
 }
 type BatchItem struct {
-	ItemID           string  `json:"item_id"`
-	Line             int     `json:"line"`
-	IdentifierMasked string  `json:"identifier_masked"`
-	State            string  `json:"state"`
-	Error            *Error  `json:"error"`
-	ReceiptID        *string `json:"receipt_id"`
+	ItemID           string        `json:"item_id"`
+	Line             int           `json:"line"`
+	IdentifierMasked string        `json:"identifier_masked"`
+	State            string        `json:"state"`
+	Error            *Error        `json:"error"`
+	ReceiptID        *string       `json:"receipt_id"`
+	Progress         *ItemProgress `json:"progress,omitempty"`
 }
 type Batch struct {
 	BatchID   string      `json:"batch_id"`

@@ -300,7 +300,14 @@ func TestRestartAfterImportOutcomeCommitFailure(t *testing.T) {
 }
 func TestConstructorStateVersionsAndLegacyRetention(t *testing.T) {
 	f := newPair(t)
-	for _, state := range []State{{Version: 0}, {Version: 5}, {Version: 3, Jobs: []Job{{Groups: []Group{{RuntimeProxies: []string{"http://runtime.example.invalid:8080"}}}}}}, {Version: 1, Archived: []ArchivedJob{{ID: "bad"}}}, {Version: 1, Settings: Settings{OAuthToken: "orphaned-cdk"}}} {
+	for _, state := range []State{
+		{Version: 0}, {Version: 6},
+		{Version: 3, Jobs: []Job{{Groups: []Group{{RuntimeProxies: []string{"http://runtime.example.invalid:8080"}}}}}},
+		{Version: 4, Jobs: []Job{{RetryOf: &RetryReference{JobID: "source", Line: 1}}}},
+		{Version: 4, Archived: []ArchivedJob{{RetryOf: &RetryReference{JobID: "source", Line: 1}}}},
+		{Version: 1, Archived: []ArchivedJob{{ID: "bad"}}},
+		{Version: 1, Settings: Settings{OAuthToken: "orphaned-cdk"}},
+	} {
 		store := &memoryStore{state: state}
 		if _, err := New(store, f, false); err == nil || !store.closed {
 			t.Fatal("invalid state accepted or failed store left open")

@@ -1,7 +1,7 @@
 package service
 
 func jobView(j Job) JobView {
-	v := JobView{ID: j.ID, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Groups: []GroupView{}}
+	v := JobView{ID: j.ID, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Groups: []GroupView{}, RetryOf: j.RetryOf}
 	if j.Recovery != nil {
 		v.RecoveryAccountID = j.Recovery.AccountID
 		v.AutoRecovery = j.AutoRecovery
@@ -36,6 +36,11 @@ func jobView(j Job) JobView {
 		if !j.CancelRequested && (g.Stage == "queued" || g.Stage == "checking" || g.Stage == "submit_unknown" || (g.Batch.Pending > 0 && !g.CancelSent)) {
 			v.CanCancel = true
 		}
+		groupCanReauthorize := j.Recovery == nil && !j.AutoRecovery && g.Stage == "complete" && g.Batch.BatchID != "" && g.Batch.Pending == 0
+		switch g.Batch.State {
+		case "queued", "pending", "running", "submit_unknown", "needs_review", "manual_review":
+			groupCanReauthorize = false
+		}
 		for i, line := range g.Lines {
 			item := ItemView{Line: line, IdentifierMasked: g.Masks[i], State: g.Stage, ImportState: "not_ready"}
 			if i < len(g.Request.Accounts) {
@@ -44,14 +49,17 @@ func jobView(j Job) JobView {
 			for _, remote := range g.Batch.Items {
 				if remote.Line == i+1 {
 					item.State = remote.State
+					item.CanReauthorize = groupCanReauthorize && item.Identifier != "" && confirmedOAuthFailure(remote)
 					if remote.Error != nil {
 						item.Error = publicError(remote.Error)
+						item.Diagnostic = failureDiagnostic(remote)
 					}
 					break
 				}
 			}
 			for _, d := range g.Deliveries {
 				if d.Line == i+1 {
+					item.CanReauthorize = false
 					item.ImportState = d.State
 					if d.Error != nil {
 						item.Error = d.Error
@@ -101,6 +109,13 @@ func jobView(j Job) JobView {
 		v.State = "queued"
 	default:
 		v.State = "running"
+	}
+	if v.CanRefresh || v.Pending != 0 || review {
+		for gi := range v.Groups {
+			for ii := range v.Groups[gi].Items {
+				v.Groups[gi].Items[ii].CanReauthorize = false
+			}
+		}
 	}
 	v.CanArchive = archivable(j, v)
 	v.RetainedMaterial = hasRetainedMaterial(j)

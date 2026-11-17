@@ -8,7 +8,7 @@ func archiveView(j ArchivedJob) JobView {
 	return JobView{
 		ID: j.ID, State: j.State, Total: j.Total, Imported: j.Imported,
 		Failed: j.Failed, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
-		Archived: true, ArchivedAt: &j.ArchivedAt, Groups: []GroupView{},
+		Archived: true, ArchivedAt: &j.ArchivedAt, Groups: []GroupView{}, RetryOf: j.RetryOf,
 	}
 }
 
@@ -83,6 +83,7 @@ func (a *App) Archive(id string, discardCredentials bool) (JobView, error) {
 				ID: job.ID, Fingerprint: job.Fingerprint, State: current.State,
 				Total: current.Total, Imported: current.Imported, Failed: current.Failed,
 				CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, ArchivedAt: time.Now().UTC(),
+				RetryOf: job.RetryOf,
 			}
 			if state.Version < 3 {
 				state.Version = 3

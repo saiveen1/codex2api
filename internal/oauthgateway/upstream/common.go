@@ -14,14 +14,15 @@ import (
 
 // Error is a deliberately sanitized upstream failure.
 type Error struct {
-	Code       string   `json:"code"`
-	Message    string   `json:"message"`
-	Source     string   `json:"source"`
-	Action     string   `json:"action"`
-	Retryable  bool     `json:"retryable"`
-	RetryAfter *float64 `json:"retry_after"`
-	Status     int      `json:"-"`
-	Uncertain  bool     `json:"-"`
+	Code       string           `json:"code"`
+	Message    string           `json:"message"`
+	Source     string           `json:"source"`
+	Action     string           `json:"action"`
+	Retryable  bool             `json:"retryable"`
+	RetryAfter *float64         `json:"retry_after"`
+	Status     int              `json:"-"`
+	Uncertain  bool             `json:"-"`
+	Evidence   *FailureEvidence `json:"evidence,omitempty"`
 }
 
 func (e *Error) Error() string { return "upstream request failed" }
@@ -59,6 +60,7 @@ func (e *Error) UnmarshalJSON(b []byte) error {
 	if _, ok := fields["retry_after"]; !ok {
 		return errors.New("invalid upstream error")
 	}
+	e.Evidence = failureEvidence(fields["evidence"])
 	e.Code = safeCode(r.Code)
 	e.Message = "Upstream request failed."
 	e.Source = "execution"

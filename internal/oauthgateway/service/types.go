@@ -52,6 +52,10 @@ type InputAccount struct {
 	Proxy        json.RawMessage `json:"proxy,omitempty"`
 	RuntimeProxy string          `json:"runtime_proxy,omitempty"`
 }
+type RetryReference struct {
+	JobID string `json:"job_id"`
+	Line  int    `json:"line"`
+}
 type Input struct {
 	RequestID         string           `json:"request_id,omitempty"`
 	SourceText        string           `json:"source_text,omitempty"`
@@ -61,6 +65,7 @@ type Input struct {
 	SaveCredentials   bool             `json:"save_credentials"`
 	RuntimeProxy      string           `json:"runtime_proxy,omitempty"`
 	RecoveryAccountID int64            `json:"recovery_account_id,omitempty"`
+	RetryOf           *RetryReference  `json:"retry_of,omitempty"`
 }
 type PreviewRow struct {
 	Line             int    `json:"line"`
@@ -111,6 +116,7 @@ type Job struct {
 	Recovery        *RecoverySnapshot `json:"recovery,omitempty"`
 	RecoveryEpoch   int64             `json:"recovery_epoch,omitempty"`
 	AutoRecovery    bool              `json:"auto_recovery,omitempty"`
+	RetryOf         *RetryReference   `json:"retry_of,omitempty"`
 }
 type State struct {
 	Version    int           `json:"version"`
@@ -120,12 +126,14 @@ type State struct {
 	Recoveries []Recovery    `json:"recoveries,omitempty"`
 }
 type ItemView struct {
-	Line             int      `json:"line"`
-	Identifier       string   `json:"identifier"`
-	IdentifierMasked string   `json:"identifier_masked"`
-	State            string   `json:"state"`
-	ImportState      string   `json:"import_state"`
-	Error            *Problem `json:"error,omitempty"`
+	Line             int             `json:"line"`
+	Identifier       string          `json:"identifier"`
+	IdentifierMasked string          `json:"identifier_masked"`
+	State            string          `json:"state"`
+	ImportState      string          `json:"import_state"`
+	Error            *Problem        `json:"error,omitempty"`
+	CanReauthorize   bool            `json:"can_reauthorize"`
+	Diagnostic       *ItemDiagnostic `json:"diagnostic,omitempty"`
 }
 type GroupView struct {
 	Index         int        `json:"index"`
@@ -141,24 +149,25 @@ type GroupView struct {
 	NextCheckAt   *time.Time `json:"next_check_at,omitempty"`
 }
 type JobView struct {
-	ID                string      `json:"id"`
-	State             string      `json:"state"`
-	Total             int         `json:"total"`
-	Imported          int         `json:"imported"`
-	Failed            int         `json:"failed"`
-	Pending           int         `json:"pending"`
-	CreatedAt         time.Time   `json:"created_at"`
-	UpdatedAt         time.Time   `json:"updated_at"`
-	CanRefresh        bool        `json:"can_refresh"`
-	CanCancel         bool        `json:"can_cancel"`
-	CanRetryImport    bool        `json:"can_retry_import"`
-	Groups            []GroupView `json:"groups"`
-	CanArchive        bool        `json:"can_archive"`
-	RetainedMaterial  bool        `json:"retained_material"`
-	Archived          bool        `json:"archived"`
-	ArchivedAt        *time.Time  `json:"archived_at,omitempty"`
-	RecoveryAccountID int64       `json:"recovery_account_id,omitempty"`
-	AutoRecovery      bool        `json:"auto_recovery,omitempty"`
+	ID                string          `json:"id"`
+	State             string          `json:"state"`
+	Total             int             `json:"total"`
+	Imported          int             `json:"imported"`
+	Failed            int             `json:"failed"`
+	Pending           int             `json:"pending"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	CanRefresh        bool            `json:"can_refresh"`
+	CanCancel         bool            `json:"can_cancel"`
+	CanRetryImport    bool            `json:"can_retry_import"`
+	Groups            []GroupView     `json:"groups"`
+	CanArchive        bool            `json:"can_archive"`
+	RetainedMaterial  bool            `json:"retained_material"`
+	Archived          bool            `json:"archived"`
+	ArchivedAt        *time.Time      `json:"archived_at,omitempty"`
+	RecoveryAccountID int64           `json:"recovery_account_id,omitempty"`
+	AutoRecovery      bool            `json:"auto_recovery,omitempty"`
+	RetryOf           *RetryReference `json:"retry_of,omitempty"`
 }
 
 // Problem is already sanitized; restoring it must not run a remote decoder.
@@ -166,13 +175,14 @@ type Problem upstream.Error
 
 // ArchivedJob keeps idempotency and outcome facts, never account material.
 type ArchivedJob struct {
-	ID          string    `json:"id"`
-	Fingerprint string    `json:"fingerprint"`
-	State       string    `json:"state"`
-	Total       int       `json:"total"`
-	Imported    int       `json:"imported"`
-	Failed      int       `json:"failed"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	ArchivedAt  time.Time `json:"archived_at"`
+	ID          string          `json:"id"`
+	Fingerprint string          `json:"fingerprint"`
+	State       string          `json:"state"`
+	Total       int             `json:"total"`
+	Imported    int             `json:"imported"`
+	Failed      int             `json:"failed"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	ArchivedAt  time.Time       `json:"archived_at"`
+	RetryOf     *RetryReference `json:"retry_of,omitempty"`
 }

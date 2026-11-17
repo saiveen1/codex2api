@@ -22,6 +22,11 @@ func normalize(in Input) ([]Group, Preview, error) {
 	if in.RecoveryAccountID < 0 {
 		return nil, p, fault(400, "invalid_recovery_account", "恢复账号 ID 必须为正整数。")
 	}
+	if r := in.RetryOf; r != nil {
+		if in.RecoveryAccountID != 0 || !requestIDPattern.MatchString(r.JobID) || r.JobID == "." || r.JobID == ".." || r.Line < 1 {
+			return nil, p, fault(400, "invalid_retry_of", "重授权必须引用普通新增任务的有效原任务 ID 和行号，不能与账号恢复同时使用。")
+		}
+	}
 	if in.RecoveryAccountID > 0 && (len(in.GroupIDs) > 0 || in.RuntimeProxy != "") {
 		return nil, p, fault(400, "invalid_recovery_destination", "修复原账号不能更改分组或运行代理。")
 	}
@@ -55,6 +60,9 @@ func normalize(in Input) ([]Group, Preview, error) {
 	}
 	if in.RecoveryAccountID > 0 && len(accounts) != 1 {
 		return nil, p, fault(400, "invalid_recovery_material", "修复原账号必须只提供一份账号材料。")
+	}
+	if in.RetryOf != nil && len(accounts) != 1 {
+		return nil, p, fault(400, "invalid_retry_material", "重授权必须重新提供一份账号材料。")
 	}
 	hasRuntimeOverrides := false
 	for _, account := range accounts {
