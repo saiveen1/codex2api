@@ -163,6 +163,8 @@ type chatGPTWebEvent struct {
 	Image          *chatGPTWebImage `json:"image"`
 	Code           string           `json:"code"`
 	HTTPStatus     int              `json:"http_status"`
+	OriginStatus   int              `json:"origin_status"`
+	Reason         string           `json:"reason"`
 	ResultUnknown  bool             `json:"result_unknown"`
 	UsageKnown     bool             `json:"usage_known"`
 }

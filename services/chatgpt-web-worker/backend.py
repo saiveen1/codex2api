@@ -99,27 +99,27 @@ class Backend:
             self.upstream_status = response.status_code
             html = (await read_bounded(response, 4 * 1024 * 1024)).decode("utf-8", errors="replace")
         if "cf-chl-" in html or "Just a moment..." in html:
-            raise SafeError("environment_challenge", 403)
+            raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason="homepage_interstitial")
         return Resources(html)
 
-    @staticmethod
-    def supported_challenge(data):
+    def supported_challenge(self, data, phase):
         # This worker cannot satisfy a required interactive verification.
-        if any((data.get(name) or {}).get("required") for name in ("arkose", "turnstile")):
-            raise SafeError("environment_challenge", 403)
+        for name in ("arkose", "turnstile"):
+            if (data.get(name) or {}).get("required"):
+                raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason=f"{phase}_{name}")
 
     async def prepare_requirements(self, resources):
         path = "/backend-api/sentinel/chat-requirements"
         prepare = await self.api("POST", path + "/prepare", json={"p": requirements_token(UA, resources)})
-        self.supported_challenge(prepare)
+        self.supported_challenge(prepare, "prepare")
         proof = await asyncio.to_thread(proof_token, prepare.get("proofofwork") or {}, UA, resources, self.deadline)
         if not isinstance(prepare.get("prepare_token"), str) or not prepare["prepare_token"]:
-            raise SafeError("environment_challenge", 403)
+            raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason="prepare_incomplete")
         final = await self.api("POST", path + "/finalize", json={"prepare_token": prepare["prepare_token"],
                                "proof_token": proof, "turnstile_token": ""})
-        self.supported_challenge(final)
+        self.supported_challenge(final, "finalize")
         if not isinstance(final.get("token"), str) or not final["token"]:
-            raise SafeError("environment_challenge", 403)
+            raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason="finalize_incomplete")
         self.requirements = {"OpenAI-Sentinel-Chat-Requirements-Token": final["token"]}
         if proof:
             self.requirements["OpenAI-Sentinel-Proof-Token"] = proof

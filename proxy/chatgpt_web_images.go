@@ -658,6 +658,15 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 			}
 			return result, nil
 		case "error":
+			if event.Code == "environment_challenge" {
+				reason := event.Reason
+				switch reason {
+				case "homepage_interstitial", "prepare_arkose", "prepare_turnstile", "finalize_arkose", "finalize_turnstile", "prepare_incomplete", "finalize_incomplete", "origin_http", "local_verification":
+				default:
+					reason = "unspecified"
+				}
+				log.Printf("[ChatGPTWeb] account_id=%d verification_reason=%s origin_http=%d", req.AccountID, reason, event.OriginStatus)
+			}
 			return result, chatGPTWebFailureFromEvent(event)
 		default:
 			return result, &chatGPTWebFailure{"worker_protocol_error", 502, true}

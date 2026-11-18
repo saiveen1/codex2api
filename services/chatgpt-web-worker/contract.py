@@ -52,14 +52,19 @@ MESSAGES = {
 }
 
 class SafeError(Exception):
-    def __init__(self, code, status=502, unknown=False, upstream_status=0):
+    def __init__(self, code, status=502, unknown=False, upstream_status=0, reason=""):
+        self.reason = reason
         self.code, self.status, self.unknown = code, status, unknown
         self.upstream_status = upstream_status
         super().__init__(MESSAGES[code])
 
     def event(self, stage):
-        return {"type": "error", "code": self.code, "message": str(self), "stage": stage,
-                "http_status": self.status, "retryable": False, "result_unknown": self.unknown}
+        event = {"type": "error", "code": self.code, "message": str(self), "stage": stage,
+                 "http_status": self.status, "retryable": False, "result_unknown": self.unknown}
+        if self.code == "environment_challenge":
+            event.update(origin_status=self.upstream_status,
+                         reason=self.reason or ("origin_http" if self.upstream_status else "local_verification"))
+        return event
 
 
 def digest(value):
