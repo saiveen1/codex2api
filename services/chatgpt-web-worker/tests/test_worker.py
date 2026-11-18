@@ -528,12 +528,7 @@ async def test_unsupported_challenge_fails_before_generation(tmp_path, challenge
     script = Script()
     script.challenge = {challenge: {"required": True, "dx": "not-executed"}}
     events, _ = await execute(tmp_path, script)
-    if challenge == "arkose":
-        assert events[-1]["code"] == "environment_challenge" and not script.submits()
-    else:
-        # Turnstile is advisory: the run must reach upstream submission, and
-        # only an upstream refusal may fail it (never a local pre-submit abort).
-        assert script.submits(), events[-1]
+    assert events[-1]["code"] == "environment_challenge" and not script.submits()
 
 
 def test_json_patches_and_trust_boundary():
@@ -687,18 +682,20 @@ async def test_asset_url_ssrf_rejected(url):
 
 
 
-async def test_regional_attachment_upload_guard(monkeypatch):
+@pytest.mark.parametrize("region", ["westus3", "eastus3", "centralus"])
+async def test_regional_attachment_upload_guard(monkeypatch, region):
     address = "8.8.8.8"
     async def lookup(*args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
     monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", lookup)
-    host = "sdmntprwestus3.oaiusercontent.com"
+    host = f"sdmntpr{region}.oaiusercontent.com"
     url = "https://" + host + "/input"
     assert await public_destination(url, "PUT") == (host, [address])
     with pytest.raises(SafeError) as e:
         await public_destination(url, "GET")
     assert e.value.code == "image_download_failed"
-    for invalid in (url.replace(host, host + ".example"), url.replace("https:", "http:")):
+    for invalid in (url.replace(host, host + ".example"), url.replace("https:", "http:"),
+                    url.replace(host, "unrelated.oaiusercontent.com"), url.replace(host, "sdmntprx.east.oaiusercontent.com")):
         with pytest.raises(SafeError) as e:
             await public_destination(invalid, "PUT")
         assert e.value.code == "image_upload_failed"

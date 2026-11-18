@@ -3,6 +3,8 @@
 import asyncio
 import ipaddress
 import json
+import logging
+import re
 import socket
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -15,7 +17,7 @@ from contract import SafeError
 ASSET_HOSTS = frozenset({"chatgpt.com", "files.oaiusercontent.com", "oaiusercontent.com",
                          "oaidalleapiprodscus.blob.core.windows.net",
                          "prod-files-secure.s3.us-west-2.amazonaws.com"})
-UPLOAD_HOSTS = ASSET_HOSTS | {"sdmntprwestus3.oaiusercontent.com"}
+REGIONAL_UPLOAD_HOST = re.compile(r"sdmntpr[a-z][a-z0-9]{0,35}\.oaiusercontent\.com", re.ASCII)
 
 
 def authenticated_asset_url(url):
@@ -32,8 +34,8 @@ def authenticated_asset_url(url):
 async def public_destination(url, method="GET"):
     try:
         part = urlsplit(url)
-        hosts = UPLOAD_HOSTS if method == "PUT" else ASSET_HOSTS
-        if (part.scheme != "https" or part.hostname not in hosts or part.port not in {None, 443}
+        regional_put = method == "PUT" and REGIONAL_UPLOAD_HOST.fullmatch(part.hostname or "")
+        if (part.scheme != "https" or (part.hostname not in ASSET_HOSTS and not regional_put) or part.port not in {None, 443}
                 or part.username or part.password or part.fragment or "\\" in url
                 or any(ord(c) < 33 for c in url) or len(url) > 16384):
             raise ValueError()
@@ -46,6 +48,8 @@ async def public_destination(url, method="GET"):
             raise ValueError()
         return part.hostname, addresses
     except Exception:
+        if method == "PUT":
+            logging.warning("Reference upload rejected at destination validation (before PUT)")
         raise SafeError("image_upload_failed" if method == "PUT" else "image_download_failed") from None
 
 
@@ -63,6 +67,8 @@ def check_status(response, asset=False, method="GET"):
     if 200 <= status < 300:
         return
     if asset:
+        if method == "PUT":
+            logging.warning("Reference upload rejected by storage: HTTP %d", status)
         raise SafeError("image_upload_failed" if method == "PUT" else "image_download_failed", upstream_status=status)
     if status == 401:
         raise SafeError("auth_required", 401, upstream_status=status)
