@@ -42,6 +42,7 @@ class Conversation:
         self.inputs = set(inputs or [])
         self.document, self.last_path = {}, None
         self.error, self.text_terminal, self.terminal = None, False, False
+        self.output_moderated = False
 
     def feed(self, event):
         if not isinstance(event, dict):
@@ -121,7 +122,13 @@ class Conversation:
         if role in {"assistant", "tool"} and terminal:
             self.terminal = True
         if role == "assistant" and terminal and message.get("recipient", "all") == "all" and content.get("content_type") == "text":
-            self.text_terminal = any(isinstance(p, str) and p.strip() for p in content.get("parts", []))
+            parts = [p.strip() for p in content.get("parts", []) if isinstance(p, str) and p.strip()]
+            self.text_terminal = bool(parts)
+            self.output_moderated = (message.get("channel") in (None, "final", "commentary")
+                                     and not metadata.get("is_visually_hidden_from_conversation")
+                                     and " ".join(parts).replace("’", "'").startswith(
+                                         "We're so sorry, but the image we created may violate our guardrails "
+                                         "around nudity, sexuality, or erotic content."))
         if metadata.get("async_task_id"):
             self.task_id = safe_id(metadata["async_task_id"])
         if role != "tool":

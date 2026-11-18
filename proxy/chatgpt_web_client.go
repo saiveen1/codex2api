@@ -201,6 +201,8 @@ func chatGPTWebErrorMessage(code string) string {
 		return "The image may have been generated but download failed; do not regenerate automatically"
 	case "content_policy_violation":
 		return "The upstream refused this image request"
+	case "image_output_moderated":
+		return "上游内容审核未交付图片：上游提示生成结果可能涉及裸露、性或色情内容。"
 	case "upstream_text_reply":
 		return "The upstream returned text instead of an image"
 	case "image_stream_interrupted":
@@ -219,7 +221,7 @@ func chatGPTWebSafeCode(code string) string {
 	switch code {
 	case "web_account_unavailable", "worker_protocol_error", "workspace_unavailable", "identity_mismatch", "image_upload_failed":
 		return code
-	case "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "upstream_text_reply", "execution_conflict", "invalid_request":
+	case "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "image_output_moderated", "upstream_text_reply", "execution_conflict", "invalid_request":
 		return code
 	}
 	return "upstream_error"

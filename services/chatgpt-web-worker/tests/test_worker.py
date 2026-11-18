@@ -660,6 +660,19 @@ async def test_cancel_after_fence_preserves_unknown(tmp_path):
     assert replay[-1]["code"] == "submission_unknown" and not script.submits()
 
 
+@pytest.mark.parametrize('moderated,hidden', [(True, False), (False, False), (True, True)])
+async def test_terminal_image_moderation_notice(tmp_path, moderated, hidden):
+    notice = ('We’re so sorry, but the image we created may violate our guardrails around nudity, sexuality, or erotic content.'
+              if moderated else 'Which reference would you like to edit?')
+    msg = {'author': {'role': 'assistant'}, 'recipient': 'all', 'channel': 'commentary', 'end_turn': True,
+           'metadata': {'is_visually_hidden_from_conversation': hidden}, 'content': {'content_type': 'text', 'parts': [notice]}}
+    script = Script(sse({'conversation_id': 'conv-1', 'message': msg}))
+    script.conversation = {'mapping': {'m': {'message': msg}}}
+    events, ledger = await execute(tmp_path, script)
+    assert events[-1]['code'] == ('image_output_moderated' if moderated and not hidden else 'upstream_text_reply')
+    assert events[-1]['http_status'] == 400 and ledger.get('exec-1')['stage'] == 'failed'
+
+
 async def test_partial_image_then_error_is_not_completed(tmp_path):
     script = Script(sse({"conversation_id": "conv-1", "message": message()}, {"error": {"code": "content_policy_violation"}}))
     events, ledger = await execute(tmp_path, script)

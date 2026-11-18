@@ -45,6 +45,7 @@ MESSAGES = {
     "image_upload_failed": "Reference image upload failed before generation was submitted.",
     "image_download_failed": "Image download failed; original assets may be downloaded again.",
     "content_policy_violation": "Upstream rejected the image request.",
+    "image_output_moderated": "The upstream withheld the image under its nudity, sexuality, or erotic content policy.",
     "upstream_text_reply": "Upstream returned text instead of an image.",
     "upstream_error": "Upstream protocol request failed.",
     "execution_conflict": "Execution is active or its immutable binding does not match.",

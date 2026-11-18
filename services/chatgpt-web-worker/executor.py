@@ -81,7 +81,7 @@ class Executor:
                         if state.error:
                             raise SafeError(state.error, 400 if state.error == "content_policy_violation" else 502)
                         if state.text_terminal:
-                            raise SafeError("upstream_text_reply", 400)
+                            raise SafeError("image_output_moderated" if state.output_moderated else "upstream_text_reply", 400)
                         if not (state.conversation_id or state.task_id):
                             raise SafeError("submission_unknown", unknown=True)
                         raise SafeError("image_poll_timeout")
@@ -123,7 +123,7 @@ class Executor:
                 error = SafeError(code, unknown=unknown)
             if claimed:
                 terminal = error.code in {"auth_required", "quota_exhausted", "environment_challenge",
-                                          "content_policy_violation", "upstream_text_reply"} and not state.assets
+                                          "content_policy_violation", "image_output_moderated", "upstream_text_reply"} and not state.assets
                 saved_stage = "result_unknown" if error.unknown else ("failed" if not fenced or terminal else stage)
                 self.ledger.update(execution_id, stage=saved_stage, error=error.code, unknown=int(error.unknown))
             yield error.event(stage)
