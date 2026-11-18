@@ -80,9 +80,28 @@ func (h *Handler) chatGPTWebModelRecords(_ context.Context, row *database.APIKey
 	return records
 }
 
+// Called before the request count is installed, so this checks the original scope.
+func (h *Handler) allScopedWebAccountsBelowCount(c *gin.Context, key *database.APIKeyRow, count int) bool {
+	filter := h.chatGPTWebRequestFilter(c)
+	found := false
+	for _, a := range h.store.Accounts() {
+		if !a.ChatGPTWebCheckEligible() || !auth.APIKeyRowAllowsChatGPTWebAccount(key, a) || !filter(a) {
+			continue
+		}
+		found = true
+		if a.WebReferenceCountAllowed(count) {
+			return false
+		}
+	}
+	return found
+}
+
 func (h *Handler) chatGPTWebRequestFilter(c *gin.Context) auth.AccountFilter {
 	identity := resolveRequestSessionIdentity(c.Request.Header, nil)
-	return h.applyScopeBudgetFilter(c, applyAffinityGroupRouting(c, identity, func(a *auth.Account) bool { return a != nil && !a.IsRelayStyle() }))
+	count := c.GetInt("chatGPTWebReferenceCount")
+	return h.applyScopeBudgetFilter(c, applyAffinityGroupRouting(c, identity, func(a *auth.Account) bool {
+		return a != nil && !a.IsRelayStyle() && (count == 0 || a.WebReferenceCountAllowed(count))
+	}))
 }
 
 func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string, until time.Time, pinnedID int64) (*auth.Account, *database.ChatGPTWebAccountState, string, error) {
@@ -241,6 +260,15 @@ func (h *Handler) forwardChatGPTWebImages(c *gin.Context, raw []byte, model, pro
 	if len(prompt) > 32000 || len(sourceImages) > MaxImageEditInputCount {
 		writeChatGPTWebError(c, &chatGPTWebFailure{"invalid_request", 400, false}, "")
 		return
+	}
+	if count := len(sourceImages); count > 0 {
+		// Count only key-authorized candidates. Unknown limits must keep the normal
+		// admission path (including bounded checks and its original errors).
+		if h.allScopedWebAccountsBelowCount(c, row, count) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "chatgpt_web_error", "code": "web_reference_count_unavailable", "message": fmt.Sprintf("当前无可用账号支持 %d 张参考图", count), "retryable": false}})
+			return
+		}
+		c.Set("chatGPTWebReferenceCount", count)
 	}
 	base, err := chatGPTWebExecutionBase(c)
 	if err != nil {

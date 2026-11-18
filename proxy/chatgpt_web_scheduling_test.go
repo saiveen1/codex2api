@@ -53,6 +53,27 @@ func readyWebSchedulingAccount(t *testing.T, f *webFixture, group int64, allowed
 	return account
 }
 
+func TestChatGPTWebReferenceCapacityRouting(t *testing.T) {
+	f := newWebFixture(t, nil)
+	group := webAdmissionGroup(t, f, "reference capacity pool")
+	webAdmissionKey(t, f, []int64{group}, f.key.Limits)
+	first := readyWebSchedulingAccount(t, f, group, []int64{f.key.ID})
+	f.handler.store.ApplyAccountTags(first.ID(), []string{"web-max-refs:2"})
+	c := webAdmissionContext(f, t.Context())
+	if !f.handler.allScopedWebAccountsBelowCount(c, f.key, 3) || f.handler.allScopedWebAccountsBelowCount(c, f.key, 2) {
+		t.Fatal("known capacity must reject three but accept two")
+	}
+	second := readyWebSchedulingAccount(t, f, group, []int64{f.key.ID})
+	if f.handler.allScopedWebAccountsBelowCount(c, f.key, 3) {
+		t.Fatal("unknown capacity is not a denial")
+	}
+	c.Set("chatGPTWebReferenceCount", 3)
+	filter := f.handler.chatGPTWebRequestFilter(c)
+	if filter(first) || !filter(second) {
+		t.Fatal("three references should select only the second candidate")
+	}
+}
+
 func TestChatGPTWebSchedulingSparsePerKeyRotation(t *testing.T) {
 	f := newWebFixture(t, nil)
 	group := webAdmissionGroup(t, f, "sparse pool")

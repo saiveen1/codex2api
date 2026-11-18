@@ -1529,6 +1529,7 @@ export default function ImageStudio() {
         {imageToImageMode && (
           <ReferenceImageDropzone
             images={inputImageDataURLs}
+            maxImages={imageReferenceLimit(isWebKey, MAX_INPUT_IMAGES)}
             onFiles={appendInputImages}
             onFileInput={handleImageFileChange}
             onRemove={index => setInputImageDataURLs(prev => prev.filter((_, i) => i !== index))}
@@ -2152,12 +2153,14 @@ function StudioCanvas({
 
 function ReferenceImageDropzone({
   images,
+  maxImages,
   onFiles,
   onFileInput,
   onRemove,
   compact = false,
 }: {
   images: string[]
+  maxImages: number
   onFiles: (files: FileList | File[]) => void
   onFileInput: (e: React.ChangeEvent<HTMLInputElement>) => void
   onRemove: (index: number) => void
@@ -2198,7 +2201,7 @@ function ReferenceImageDropzone({
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-muted-foreground">{t('images.inputImage')}</span>
-        {images.length > 0 ? (
+        {images.length > 0 && images.length < maxImages ? (
           <label className="inline-flex cursor-pointer items-center rounded-md px-2 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/10">
             <Upload className="mr-1 size-3" />
             {t('images.upload')}
@@ -2235,7 +2238,7 @@ function ReferenceImageDropzone({
                 </button>
               </div>
             ))}
-            {images.length < MAX_INPUT_IMAGES && (
+            {images.length < maxImages && (
               <label
                 className={cn(
                   thumbClass,

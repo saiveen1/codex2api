@@ -164,7 +164,7 @@ class Account:
             if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 32_768:
                 raise SafeError("invalid_request", 400)
             images = raw.get("images", [])
-            if not isinstance(images, list) or len(images) > 2 or bool(images) != (raw["operation"] == "edit"):
+            if not isinstance(images, list) or len(images) > 16 or bool(images) != (raw["operation"] == "edit"):
                 raise SafeError("invalid_request", 400)
             for item in images:
                 try:

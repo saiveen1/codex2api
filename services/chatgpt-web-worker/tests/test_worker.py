@@ -143,7 +143,8 @@ class Script:
         elif url.endswith("/f/conversation/prepare"):
             body = {"conduit_token": "conduit-mock"}
         elif url.endswith("/backend-api/files"):
-            file_id = "file_input" if kwargs["json"]["file_name"] == "input-0.png" else "file_input_2"
+            file_index = int(kwargs["json"]["file_name"].removeprefix("input-").split(".")[0])
+            file_id = "file_input" if not file_index else f"file_input_{file_index + 1}"
             body = {"file_id": file_id, "upload_url": "https://files.oaiusercontent.com/input?sig=private"}
         elif url.endswith("/uploaded"):
             body = {}
@@ -237,9 +238,15 @@ def assert_fenced(ledger):
     assert ledger.get("exec-1")["stage"] == "submitting"
 
 
-@pytest.mark.parametrize("count", [1, 2])
+def test_edit_over_reference_limit_is_rejected():
+    with pytest.raises(SafeError) as e:
+        account(operation="edit", images=[{"b64_json": base64.b64encode(png()).decode(), "mime_type": "image/png"}] * 17)
+    assert e.value.code == "invalid_request"
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 16])
 async def test_edit_upload_and_no_input_output_confusion(tmp_path, count):
-    ids = ["file_input", "file_input_2"][:count]
+    ids = ["file_input"] + [f"file_input_{i}" for i in range(2, count + 1)]
     script = Script(sse({"conversation_id": "conv-1", "message": message("user", "file-service://file_input")},
                         *({"message": message(pointer="file-service://" + fid)} for fid in ids), {"message": message()}))
     acc = account(operation="edit", images=[{"b64_json": base64.b64encode(png()).decode(), "mime_type": "image/png"} for _ in ids])

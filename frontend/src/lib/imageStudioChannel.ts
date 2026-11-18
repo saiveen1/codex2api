@@ -18,5 +18,5 @@ export function webImageParams<T extends { model?: string; size?: string; qualit
   return { ...params, size: WEB_IMAGE_SIZES.includes(params.size || 'auto') ? (params.size || 'auto') : 'auto', quality: 'auto', background: 'auto', output_format: ['png', 'jpeg', 'webp'].includes(params.output_format || 'png') ? (params.output_format || 'png') : 'png' }
 }
 
-export function imageReferenceLimit(isWeb: boolean, nativeLimit = 4): number { return isWeb ? 2 : nativeLimit }
+export function imageReferenceLimit(isWeb: boolean, nativeLimit = 4): number { return isWeb ? 16 : nativeLimit }
 export function portalChannelReady(activeKey: string, snapshotKey?: string): boolean { return Boolean(activeKey && activeKey === snapshotKey) }

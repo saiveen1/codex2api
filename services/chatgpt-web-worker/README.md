@@ -53,7 +53,7 @@ publish the port. Mount a durable writable private state volume owned by UID
   to direct. A proxy is a trusted egress boundary and must honor pinned CONNECT
   targets. The same proxy/account/environment is used throughout each execution.
 - `execution_id`: 1..160 ASCII letters, digits, `_` or `-`; immutable and unique.
-- `operation`: `generate` (zero inputs) or `edit` (one or two inputs).
+- `operation`: `generate` (zero inputs) or `edit` (one to 16 inputs, subject to byte limits and upstream acceptance). This is the gateway ceiling, not an entitlement by plan. Operators may tag a scoped account `web-max-refs:N` with a verified per-message ceiling; unknown accounts are not presumed to be limited to two. Upload rate or quota errors are not attachment-count evidence.
 - `model`: exactly `gpt-image-2`, mapped to pinned webpage `gpt-5-3` plus
   `picture_v2`; one image is requested (`n` absent or integer `1`).
 - `prompt`: nonblank, at most 32768 UTF-8 bytes.

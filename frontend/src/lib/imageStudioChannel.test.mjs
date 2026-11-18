@@ -15,7 +15,7 @@ test('Web requires an explicitly matching key; default retains automatic and oth
 test('Web parameters normalize templates and reruns without changing unrelated fields', () => {
   assert.deepEqual(webImageParams({ model: 'other', size: '1024x1024', quality: 'high', background: 'transparent', output_format: 'bad', prompt: 'test' }), { model: 'other', size: 'auto', quality: 'auto', background: 'auto', output_format: 'png', prompt: 'test' })
   assert.equal(webImageParams({ size: '16:9' }).size, '16:9')
-  assert.equal(imageReferenceLimit(true), 2)
+  assert.equal(imageReferenceLimit(true), 16)
   assert.equal(imageReferenceLimit(false), 4)
   assert.equal(imageReferenceLimit(false, 10), 10)
 })
