@@ -173,11 +173,24 @@ class Backend:
                 result["error_code"] = "worker_protocol_error"
             result["upstream_status"] = error.upstream_status or self.upstream_status
         except TimeoutError:
-            result["error_code"] = "worker_timeout"
+            result.update(error_code="worker_timeout", exception_kind="TimeoutError")
         except CurlError as error:
-            result["error_code"] = "worker_timeout" if error.code == CurlECode.OPERATION_TIMEDOUT else "worker_unavailable"
-        except Exception:
+            result.update(error_code="worker_timeout" if error.code == CurlECode.OPERATION_TIMEDOUT else "worker_unavailable",
+                          exception_kind="CurlError", curl_code=int(error.code))
+            # Extract only fixed phrases; raw curl messages may include signed URLs or proxy credentials.
+            text = str(error).casefold()
+            for phrase, hint in (("connection reset by peer", "peer_reset"), ("connection refused", "connection_refused"),
+                                 ("certificate has expired", "cert_expired"), ("unable to get local issuer certificate", "issuer_unknown"),
+                                 ("connection to proxy closed", "proxy_closed"), ("no route to host", "no_route")):
+                if phrase in text:
+                    result["transport_hint"] = hint
+                    break
+        except Exception as error:
             result["error_code"] = "worker_unavailable"
+            kind = type(error).__name__
+            result["exception_kind"] = kind if kind in {"ConnectionResetError", "ConnectionRefusedError", "OSError", "ValueError", "TypeError", "RuntimeError", "KeyError", "UnicodeDecodeError", "AttributeError", "gaierror"} else "OtherException"
+            if isinstance(error, OSError) and isinstance(error.errno, int):
+                result["os_errno"] = error.errno
         finally:
             if not result["upstream_status"]:
                 result["upstream_status"] = self.upstream_status

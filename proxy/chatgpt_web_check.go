@@ -23,6 +23,7 @@ type ChatGPTWebCheckError struct {
 	Stage          string
 	HTTPStatus     int
 	UpstreamStatus int
+	Cause          string // formatted exclusively from allowed transport diagnostics
 	Recorded       bool
 }
 
@@ -125,6 +126,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	started := time.Now().UTC()
 	var state *database.ChatGPTWebAccountState
 	var token, binding string
+	var transportCause string
 	// Failure diagnostics and lease release must survive cancellation, but share
 	// one bounded cleanup budget. This context is never used for upstream work.
 	var cleanupCtx context.Context
@@ -145,7 +147,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 		if upstream < 100 || upstream > 599 {
 			upstream = 0
 		}
-		failure := &ChatGPTWebCheckError{Code: code, Stage: stage, HTTPStatus: webCheckHTTPStatus(code), UpstreamStatus: upstream}
+		failure := &ChatGPTWebCheckError{Code: code, Stage: stage, HTTPStatus: webCheckHTTPStatus(code), UpstreamStatus: upstream, Cause: transportCause}
 		if state != nil && h.db != nil && code != "account_busy" && code != "observation_stale" {
 			cleanup := cleanupContext()
 			applied, err := h.db.RecordChatGPTWebCheckFailure(cleanup, state, token, binding, started, code, stage, upstream)
@@ -156,7 +158,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 				}
 			}
 		}
-		log.Printf("[ChatGPTWebCheck] account_id=%d code=%s stage=%s upstream_status=%d recorded=%t", accountID, code, stage, upstream, failure.Recorded)
+		log.Printf("[ChatGPTWebCheck] account_id=%d code=%s stage=%s upstream_status=%d recorded=%t cause=%q", accountID, code, stage, upstream, failure.Recorded, failure.Cause)
 		return state, failure
 	}
 	if h.db == nil || h.store == nil {
@@ -285,6 +287,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 		return state, &ChatGPTWebCheckError{Code: "worker_unavailable", Stage: "admission", HTTPStatus: webCheckHTTPStatus("worker_unavailable")}
 	}
 	var observation struct {
+		webCheckTransportDiagnostic
 		Status              string     `json:"status"`
 		Capabilities        []string   `json:"capabilities"`
 		ImageQuotaRemaining *int       `json:"image_quota_remaining"`
@@ -298,6 +301,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	if json.Unmarshal(data, &observation) != nil {
 		return fail("worker_protocol_error", "admission", resp.StatusCode)
 	}
+	transportCause = observation.safeCause()
 	if resp.StatusCode != http.StatusOK {
 		code := observation.ErrorCode
 		if code == "" {

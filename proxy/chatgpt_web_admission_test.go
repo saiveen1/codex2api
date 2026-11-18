@@ -557,6 +557,10 @@ func TestChatGPTWebPrepareSystemFailureStopsEarly(t *testing.T) {
 			var checks atomic.Int32
 			setWebCheckFixture(t, f, func(w http.ResponseWriter, r *http.Request) {
 				checks.Add(1)
+				if code == "worker_unavailable" {
+					fmt.Fprint(w, `{"status":"unverified","error_code":"worker_unavailable","stage":"bootstrap","exception_kind":"CurlError","curl_code":56,"transport_hint":"peer_reset"}`)
+					return
+				}
 				w.WriteHeader(http.StatusServiceUnavailable)
 				fmt.Fprintf(w, `{"code":%q,"stage":"admission"}`, code)
 			})
@@ -564,6 +568,12 @@ func TestChatGPTWebPrepareSystemFailureStopsEarly(t *testing.T) {
 			var failure *chatGPTWebFailure
 			if !errors.As(err, &failure) || failure.code != code || failure.unknown || checks.Load() != 1 {
 				t.Fatalf("system failure not bounded/classified: %v checks=%d", err, checks.Load())
+			}
+			if code == "worker_unavailable" {
+				body, _ := chatGPTWebErrorFields(err, "fixture")
+				if body["transport_cause"] != "curl(56) 接收数据失败：对端重置连接" || !strings.Contains(fmt.Sprint(body["message"]), "对端重置连接") {
+					t.Fatalf("transport evidence lost: %v", body)
+				}
 			}
 			if _, err := f.db.GetChatGPTWebAccountState(t.Context(), second.ID()); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatal("system failure initialized another account", err)

@@ -410,12 +410,18 @@ async def test_check_classified_http_failure_stages(url, stage, status, code):
 @pytest.mark.parametrize("url,stage", CHECK_STAGES)
 @pytest.mark.parametrize("error,code", [(TimeoutError("mock-access-token"), "worker_timeout"),
                                       (CurlError("mock-access-token", code=CurlECode.OPERATION_TIMEDOUT), "worker_timeout"),
-                                      (CurlError("proxy-password", code=CurlECode.COULDNT_CONNECT), "worker_unavailable"),
+                                      (CurlError("connection refused; proxy-password", code=CurlECode.COULDNT_CONNECT), "worker_unavailable"),
                                       (RuntimeError("mock-access-token proxy-password"), "worker_unavailable")])
 async def test_check_transport_failure_stages(url, stage, error, code):
     script = Script()
     script.failures[url] = error
     result = await script.backend(check_account()).check()
+    assert result["exception_kind"] == type(error).__name__
+    if isinstance(error, CurlError):
+        assert result["curl_code"] == int(error.code)
+        if error.code == CurlECode.COULDNT_CONNECT:
+            assert result['transport_hint'] == 'connection_refused'
+    assert 'proxy-password' not in json.dumps(result)
     assert result["error_code"] == code and result["stage"] == stage and result["upstream_status"] == 0
     assert result["workspace_id"] == ("mock-account" if stage == "quota" else "")
     assert script.closed and not script.submits() and "mock-access-token" not in json.dumps(result)

@@ -199,6 +199,10 @@ func chatGPTWebErrorFields(err error, executionID string) (gin.H, int) {
 			body["origin_http_status"] = check.UpstreamStatus
 		}
 		body["precheck_stage"] = stage
+		if check.Cause != "" {
+			body["transport_cause"] = check.Cause
+			origin += "；" + check.Cause
+		}
 		label := stage
 		if stage == "bootstrap" {
 			label = "访问 ChatGPT 首页"
