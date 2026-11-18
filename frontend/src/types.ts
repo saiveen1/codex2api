@@ -1124,6 +1124,7 @@ export interface AddAccountRequest {
   refresh_token?: string
   session_token?: string
   proxy_url: string
+  timezone?: string
   allow_duplicate?: boolean
   custom_headers?: Record<string, string> | null
   /** 添加/导入时直接绑定的账号分组；命中已存在账号时不改其分组。 */
@@ -1134,6 +1135,7 @@ export interface AddATAccountRequest {
   name?: string
   access_token: string
   proxy_url: string
+  timezone?: string
   allow_duplicate?: boolean
   custom_headers?: Record<string, string> | null
   /** 添加/导入时直接绑定的账号分组；命中已存在账号时不改其分组。 */
@@ -1145,6 +1147,7 @@ export interface ImportAgentIdentityRequest {
   name?: string
   auth_json: string
   proxy_url?: string
+  timezone?: string
 }
 
 export interface ImportAgentIdentityResponse {
@@ -1157,6 +1160,7 @@ export interface ImportAgentIdentityResponse {
 export interface AgentIdentityBatchImportRequest {
   files: string[]
   proxy_url?: string
+  timezone?: string
 }
 
 export interface AgentIdentityImportItem {

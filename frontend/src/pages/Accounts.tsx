@@ -692,6 +692,7 @@ function TimezoneSelect({
   return (
     <div className="mt-3 space-y-1.5">
       <Select
+        aria-label={t("accounts.codexTimezoneTitle")}
         value={choice}
         disabled={disabled}
         onValueChange={(next) => {
@@ -716,6 +717,7 @@ function TimezoneSelect({
       ) : null}
       {custom ? (
         <Input
+          aria-label={t("accounts.codexTimezoneCustom")}
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
@@ -723,6 +725,29 @@ function TimezoneSelect({
         />
       ) : null}
     </div>
+  );
+}
+
+function NewAccountTimezoneField({
+  value,
+  onChange,
+  disabled,
+}: Pick<TimezoneSelectProps, "value" | "onChange" | "disabled">) {
+  const { t } = useTranslation();
+  const [custom, setCustom] = useState(() => Boolean(value && !findClaudeTimezoneOption(value)));
+  return (
+    <fieldset className="mt-4 min-w-0">
+      <legend className="text-sm font-semibold text-muted-foreground">
+        {t("accounts.codexTimezoneTitle")}
+      </legend>
+      <TimezoneSelect
+        value={value}
+        custom={custom}
+        disabled={disabled}
+        onChange={onChange}
+        onCustomChange={setCustom}
+      />
+    </fieldset>
   );
 }
 
@@ -1981,6 +2006,11 @@ export default function Accounts() {
     session_token: "",
     proxy_url: "",
   });
+  const [addTimezone, setAddTimezone] = useState("");
+  const openAddAccount = () => {
+    setAddTimezone("");
+    setShowAdd(true);
+  };
   const [addCustomHeadersText, setAddCustomHeadersText] = useState("");
   const [workspaceRouteID, setWorkspaceRouteID] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -2094,6 +2124,7 @@ export default function Accounts() {
   const [editOpenAIModelsLoading, setEditOpenAIModelsLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [showImportPicker, setShowImportPicker] = useState(false);
+  const [importTimezone, setImportTimezone] = useState("");
   const [importProxyUrl, setImportProxyUrl] = useState("");
   const [importCustomHeadersText, setImportCustomHeadersText] = useState("");
   const [importWorkspaceRouteID, setImportWorkspaceRouteID] = useState("");
@@ -3633,34 +3664,28 @@ export default function Accounts() {
     }
   }, [allPageSelected, pagedAccountIds]);
 
+  const addTimezoneField = (
+    <NewAccountTimezoneField
+      value={addTimezone}
+      onChange={setAddTimezone}
+      disabled={oauthGenerating || submitting || agentIdentityFilesImporting}
+    />
+  );
+
   const handleAdd = async (credential: "rt" | "st" = "rt") => {
     const parsedCustomHeaders = parseCustomHeadersText(addCustomHeadersText);
     if (!parsedCustomHeaders.ok) {
       showToast("自定义请求头必须是 JSON 对象，且所有值必须是字符串", "error");
       return;
     }
-    const payload: AddAccountRequest =
-      credential === "st"
-        ? {
-            ...addForm,
-            refresh_token: "",
-            allow_duplicate: allowDuplicate,
-            custom_headers: applyWorkspaceRouteHeader(
-              parsedCustomHeaders.value,
-              workspaceRouteID,
-            ),
-            group_ids: importGroupIds,
-          }
-        : {
-            ...addForm,
-            session_token: "",
-            allow_duplicate: allowDuplicate,
-            custom_headers: applyWorkspaceRouteHeader(
-              parsedCustomHeaders.value,
-              workspaceRouteID,
-            ),
-            group_ids: importGroupIds,
-          };
+    const payload: AddAccountRequest = {
+      ...addForm,
+      ...(credential === "st" ? { refresh_token: "" } : { session_token: "" }),
+      timezone: addTimezone.trim() || undefined,
+      allow_duplicate: allowDuplicate,
+      custom_headers: applyWorkspaceRouteHeader(parsedCustomHeaders.value, workspaceRouteID),
+      group_ids: importGroupIds,
+    };
     if (
       !payload.refresh_token?.trim() &&
       !payload.session_token?.trim()
@@ -3717,6 +3742,7 @@ export default function Accounts() {
       // 身份去重/合并结果（已有账号更新、重复跳过）。
       const res = await postAdminSSE("/accounts/at?stream=true", {
         ...atForm,
+        timezone: addTimezone.trim() || undefined,
         allow_duplicate: allowDuplicate,
         custom_headers: applyWorkspaceRouteHeader(
           parsedCustomHeaders.value,
@@ -3823,13 +3849,13 @@ export default function Accounts() {
       const items = Array.isArray(parsed) ? parsed : [parsed];
       const blob = new Blob([JSON.stringify(items)], { type: "application/json" });
       const file = new File([blob], "session.json", { type: "application/json" });
-      await importFiles(
-        [file],
-        "json",
-        sessionProxyUrl,
-        addCustomHeadersText,
+      const imported = await importFiles([file], "json", {
+        proxyUrl: sessionProxyUrl,
+        customHeadersText: addCustomHeadersText,
         workspaceRouteID,
-      );
+        timezone: addTimezone,
+      });
+      if (!imported) return;
       setShowAdd(false);
       setSessionJson("");
       setAddCustomHeadersText("");
@@ -3854,6 +3880,7 @@ export default function Accounts() {
       const res = await api.importCodexAgentIdentity({
         auth_json: agentIdentityJson,
         proxy_url: agentIdentityProxyUrl.trim() || undefined,
+        timezone: addTimezone.trim() || undefined,
       });
       showToast(
         res.email
@@ -3885,6 +3912,7 @@ export default function Accounts() {
       const res = await api.batchImportCodexAgentIdentity({
         files,
         proxy_url: agentIdentityProxyUrl.trim() || undefined,
+        timezone: addTimezone.trim() || undefined,
       });
       setAgentIdentityFilesResult(res);
       if (res.imported > 0) {
@@ -4037,7 +4065,10 @@ export default function Accounts() {
   };
 
   const startOAuthSession = async () => {
-    const result = await api.generateOAuthURL({ proxy_url: oauthProxyUrl });
+    const result = await api.generateOAuthURL({
+      proxy_url: oauthProxyUrl,
+      timezone: addTimezone.trim() || undefined,
+    });
     setOauthSession(result);
     setOauthCallbackUrl("");
     setOauthStep("exchange");
@@ -4353,14 +4384,17 @@ export default function Accounts() {
   const importFiles = async (
     files: File[],
     format: "txt" | "json" | "json_at" | "at_txt",
-    proxyOverride?: string,
-    customHeadersText?: string,
-    workspaceOverride?: string,
+    options: {
+      proxyUrl?: string;
+      customHeadersText?: string;
+      workspaceRouteID?: string;
+      timezone?: string;
+    } = {},
   ) => {
-    const parsedCustomHeaders = parseCustomHeadersText(customHeadersText ?? "");
+    const parsedCustomHeaders = parseCustomHeadersText(options.customHeadersText ?? "");
     if (!parsedCustomHeaders.ok) {
       showToast("自定义请求头必须是 JSON 对象，且所有值必须是字符串", "error");
-      return;
+      return false;
     }
 
     // 单个文件超过后端导入上限(200MB)无法再切分,直接拒绝并提示。
@@ -4373,7 +4407,7 @@ export default function Accounts() {
         }),
         "error",
       );
-      return;
+      return false;
     }
 
     // 按累计大小把文件切成多批,每批控制在 IMPORT_BATCH_MAX_BYTES 内,避免单个
@@ -4414,12 +4448,14 @@ export default function Accounts() {
         const batch = batches[i];
         const formData = new FormData();
         if (format !== "txt") formData.append("format", format);
-        const trimmedImportProxy = (proxyOverride ?? importProxyUrl).trim();
+        const trimmedImportProxy = (options.proxyUrl ?? importProxyUrl).trim();
         if (trimmedImportProxy) formData.append("proxy_url", trimmedImportProxy);
+        const timezone = options.timezone?.trim();
+        if (timezone) formData.append("timezone", timezone);
         if (carriesFileProxies) formData.append("import_proxy", "true");
         const routedHeaders = applyOptionalWorkspaceRouteHeader(
           parsedCustomHeaders.value,
-          workspaceOverride,
+          options.workspaceRouteID,
         );
         if (routedHeaders) {
           formData.append("custom_headers", JSON.stringify(routedHeaders));
@@ -4456,7 +4492,7 @@ export default function Accounts() {
                 : t("accounts.importFailed"),
               "error",
             );
-            return;
+            return false;
           }
           totals.current += data.total ?? 0;
           totals.total += data.total ?? 0;
@@ -4496,6 +4532,7 @@ export default function Accounts() {
       if (importedAccountIDs.length > 0) {
         void maybeOpenInviteGuide(importedAccountIDs);
       }
+      return true;
     } catch (error) {
       setImportProgress({
         show: true,
@@ -4511,6 +4548,7 @@ export default function Accounts() {
         t("accounts.importFailedWithReason", { error: getErrorMessage(error) }),
         "error",
       );
+      return false;
     } finally {
       setImporting(false);
     }
@@ -4647,6 +4685,12 @@ export default function Accounts() {
     }
   };
 
+  const fileImportOptions = {
+    customHeadersText: importCustomHeadersText,
+    workspaceRouteID: importWorkspaceRouteID.trim() || undefined,
+    timezone: importTimezone,
+  };
+
   const handleFileImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
@@ -4655,13 +4699,7 @@ export default function Accounts() {
       return;
     }
     setShowImportPicker(false);
-    await importFiles(
-      files,
-      "txt",
-      undefined,
-      importCustomHeadersText,
-      importWorkspaceRouteID.trim() || undefined,
-    );
+    await importFiles(files, "txt", fileImportOptions);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -4669,13 +4707,7 @@ export default function Accounts() {
     const files = event.target.files;
     if (!files || files.length === 0) return;
     setShowImportPicker(false);
-    await importFiles(
-      Array.from(files),
-      "json",
-      undefined,
-      importCustomHeadersText,
-      importWorkspaceRouteID.trim() || undefined,
-    );
+    await importFiles(Array.from(files), "json", fileImportOptions);
     if (jsonInputRef.current) jsonInputRef.current.value = "";
   };
 
@@ -4683,13 +4715,7 @@ export default function Accounts() {
     const files = event.target.files;
     if (!files || files.length === 0) return;
     setShowImportPicker(false);
-    await importFiles(
-      Array.from(files),
-      "json_at",
-      undefined,
-      importCustomHeadersText,
-      importWorkspaceRouteID.trim() || undefined,
-    );
+    await importFiles(Array.from(files), "json_at", fileImportOptions);
     if (jsonAtInputRef.current) jsonAtInputRef.current.value = "";
   };
 
@@ -4701,13 +4727,7 @@ export default function Accounts() {
       return;
     }
     setShowImportPicker(false);
-    await importFiles(
-      files,
-      "at_txt",
-      undefined,
-      importCustomHeadersText,
-      importWorkspaceRouteID.trim() || undefined,
-    );
+    await importFiles(files, "at_txt", fileImportOptions);
     if (atFileInputRef.current) atFileInputRef.current.value = "";
   };
 
@@ -4735,22 +4755,10 @@ export default function Accounts() {
     );
 
     if (jsonFiles.length > 0) {
-      await importFiles(
-        jsonFiles,
-        "json",
-        undefined,
-        importCustomHeadersText,
-        importWorkspaceRouteID.trim() || undefined,
-      );
+      await importFiles(jsonFiles, "json", fileImportOptions);
     }
     if (txtFiles.length > 0) {
-      await importFiles(
-        txtFiles,
-        "txt",
-        undefined,
-        importCustomHeadersText,
-        importWorkspaceRouteID.trim() || undefined,
-      );
+      await importFiles(txtFiles, "txt", fileImportOptions);
     }
 
     if (folderInputRef.current) folderInputRef.current.value = "";
@@ -4769,13 +4777,8 @@ export default function Accounts() {
     }
     const blob = new Blob([JSON.stringify(items)], { type: "application/json" });
     const file = new File([blob], "paste.json", { type: "application/json" });
-    await importFiles(
-      [file],
-      "json",
-      undefined,
-      importCustomHeadersText,
-      importWorkspaceRouteID.trim() || undefined,
-    );
+    const imported = await importFiles([file], "json", fileImportOptions);
+    if (!imported) return;
     setShowPasteImport(false);
     setPasteImportText("");
   };
@@ -6683,7 +6686,7 @@ export default function Accounts() {
                       <Button
                         size="sm"
                         className="min-w-0 sm:flex-none"
-                        onClick={() => setShowAdd(true)}
+                        onClick={openAddAccount}
                       >
                         <Plus className="size-3.5" />
                         {t("accounts.addAccount")}
@@ -6728,7 +6731,10 @@ export default function Accounts() {
                         size="sm"
                         className="shrink-0"
                         disabled={importing}
-                        onClick={() => setShowImportPicker(true)}
+                        onClick={() => {
+                          setImportTimezone("");
+                          setShowImportPicker(true);
+                        }}
                       >
                         <Upload className="size-3.5" />
                         <span className="hidden md:inline">
@@ -7691,7 +7697,7 @@ export default function Accounts() {
                 emptyTitle={t("accounts.noData")}
                 emptyDescription={t("accounts.noDataDesc")}
                 action={
-                  <Button onClick={() => setShowAdd(true)}>
+                  <Button onClick={openAddAccount}>
                     {t("accounts.addAccount")}
                   </Button>
                 }
@@ -8287,6 +8293,7 @@ export default function Accounts() {
                       proxy_url: value,
                     })),
                 })}
+                {addTimezoneField}
                 {renderWorkspaceRouteInput()}
                 {renderCustomHeadersTextarea({
                   value: addCustomHeadersText,
@@ -8320,6 +8327,7 @@ export default function Accounts() {
                       proxy_url: value,
                     })),
                 })}
+                {addTimezoneField}
                 {renderWorkspaceRouteInput()}
                 {renderCustomHeadersTextarea({
                   value: addCustomHeadersText,
@@ -8356,6 +8364,7 @@ export default function Accounts() {
                       proxy_url: value,
                     })),
                 })}
+                {addTimezoneField}
                 {renderWorkspaceRouteInput()}
                 {renderCustomHeadersTextarea({
                   value: addCustomHeadersText,
@@ -8386,6 +8395,7 @@ export default function Accounts() {
                   label: t("accounts.importProxyLabel"),
                   onChange: setSessionProxyUrl,
                 })}
+                {addTimezoneField}
                 {renderWorkspaceRouteInput()}
                 {renderCustomHeadersTextarea({
                   value: addCustomHeadersText,
@@ -8657,6 +8667,11 @@ export default function Accounts() {
                 <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-300">
                   {t("accounts.agentIdentityHint")}
                 </div>
+                {renderProxyInput({
+                  value: agentIdentityProxyUrl,
+                  onChange: setAgentIdentityProxyUrl,
+                })}
+                {addTimezoneField}
                 <div>
                   <label className="block mb-2 text-sm font-semibold text-muted-foreground">
                     {t("accounts.agentIdentityJsonLabel")} *
@@ -8749,11 +8764,6 @@ export default function Accounts() {
                     </div>
                   ) : null}
                 </div>
-
-                {renderProxyInput({
-                  value: agentIdentityProxyUrl,
-                  onChange: setAgentIdentityProxyUrl,
-                })}
               </div>
             ) : (
               <div className="space-y-5">
@@ -8783,6 +8793,7 @@ export default function Accounts() {
                       placeholder: t("accounts.oauthProxyUrlPlaceholder"),
                       onChange: setOauthProxyUrl,
                     })}
+                    {addTimezoneField}
                   </>
                 ) : (
                   <>
@@ -8901,6 +8912,7 @@ export default function Accounts() {
               <p className="text-[11px] text-muted-foreground">
                 {t("accounts.importProxyHint")}
               </p>
+              <NewAccountTimezoneField value={importTimezone} onChange={setImportTimezone} />
               {renderCustomHeadersTextarea({
                 value: importCustomHeadersText,
                 onChange: setImportCustomHeadersText,

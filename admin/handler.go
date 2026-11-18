@@ -3639,6 +3639,7 @@ type addAccountReq struct {
 	RefreshToken   string            `json:"refresh_token"`
 	SessionToken   string            `json:"session_token"`
 	ProxyURL       string            `json:"proxy_url"`
+	Timezone       string            `json:"timezone"`
 	CustomHeaders  map[string]string `json:"custom_headers"`
 	AllowDuplicate bool              `json:"allow_duplicate"`
 	// SkipRefresh 只入库、不换 AT、不打用量探测。大批量脚本导入时应打开，
@@ -3748,6 +3749,10 @@ func (h *Handler) AddAccount(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "代理URL无效")
 		return
 	}
+	if err := validateAccountTimezone(req.Timezone); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	customHeaders, err := normalizeCustomHeaders(req.CustomHeaders)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -3770,7 +3775,7 @@ func (h *Handler) AddAccount(c *gin.Context) {
 
 	var seeds []tokenCredentialSeed
 	for i := 0; i < total; i++ {
-		seed := tokenCredentialSeed{allowDuplicate: req.AllowDuplicate, customHeaders: customHeaders}
+		seed := tokenCredentialSeed{allowDuplicate: req.AllowDuplicate, customHeaders: customHeaders, newAccountTimezone: req.Timezone}
 		if len(refreshTokens) > 0 {
 			seed.refreshToken = refreshTokens[i]
 		}
@@ -3988,6 +3993,7 @@ type addATAccountReq struct {
 	Name           string            `json:"name"`
 	AccessToken    string            `json:"access_token"`
 	ProxyURL       string            `json:"proxy_url"`
+	Timezone       string            `json:"timezone"`
 	CustomHeaders  map[string]string `json:"custom_headers"`
 	AllowDuplicate bool              `json:"allow_duplicate"`
 	// GroupIDs 让添加时就把新账号绑进指定分组；重复跳过与命中已有身份被更新的账号不受影响。
@@ -4022,6 +4028,10 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 
 	if err := security.ValidateProxyURL(req.ProxyURL); err != nil {
 		writeError(c, http.StatusBadRequest, "代理URL无效")
+		return
+	}
+	if err := validateAccountTimezone(req.Timezone); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	customHeaders, err := normalizeCustomHeaders(req.CustomHeaders)
@@ -4101,9 +4111,10 @@ func (h *Handler) AddATAccount(c *gin.Context) {
 		}
 
 		seed := normalizeTokenCredentialSeed(tokenCredentialSeed{
-			accessToken:    at,
-			allowDuplicate: req.AllowDuplicate,
-			customHeaders:  customHeaders,
+			accessToken:        at,
+			newAccountTimezone: req.Timezone,
+			allowDuplicate:     req.AllowDuplicate,
+			customHeaders:      customHeaders,
 		})
 		seed, identityErr := h.prepareTokenCredentialSeed(ctx, seed, req.ProxyURL, 0)
 		if identityErr != nil {
@@ -4251,7 +4262,7 @@ func (h *Handler) streamAddATAccounts(c *gin.Context, req addATAccountReq, token
 			name = fmt.Sprintf("%s-%d", req.Name, i+1)
 		}
 
-		seed := normalizeTokenCredentialSeed(tokenCredentialSeed{accessToken: at, allowDuplicate: req.AllowDuplicate, customHeaders: req.CustomHeaders})
+		seed := normalizeTokenCredentialSeed(tokenCredentialSeed{accessToken: at, allowDuplicate: req.AllowDuplicate, customHeaders: req.CustomHeaders, newAccountTimezone: req.Timezone})
 		seed, identityErr := h.prepareTokenCredentialSeed(ctx, seed, req.ProxyURL, 0)
 		if identityErr != nil {
 			identityWarning = identityErr.Error()
@@ -4982,6 +4993,7 @@ type importToken struct {
 // importSettings 汇总一次导入请求的表单开关。这些开关要穿过"入口 → 4 个格式
 // 解析函数 → importAccountsCommon"三层，继续用位置参数堆叠会越加越长。
 type importSettings struct {
+	timezone string
 	// defaultProxyURL 是表单里填的代理：文件没带代理、或没开 importProxies 时的兜底。
 	defaultProxyURL string
 	// importProxies 打开后采用文件内携带的代理，并把它们注册进代理池。
@@ -5619,8 +5631,14 @@ func (h *Handler) ImportAccounts(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	timezone := strings.TrimSpace(c.PostForm("timezone"))
+	if err := validateAccountTimezone(timezone); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	settings := importSettings{
 		defaultProxyURL: c.PostForm("proxy_url"),
+		timezone:        timezone,
 		// TXT 系格式一行一个 token，物理上不可能携带代理。这里忽略开关而不是
 		// 报错，免得前端还要跟着格式切换清理该状态。
 		importProxies:  parseBoolForm(c.PostForm("import_proxy")) && (format == "json" || format == "json_at"),
@@ -6288,6 +6306,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, set
 			proxyURL := settings.proxyForToken(tok)
 
 			seed := importTokenSeed(tok, conflictingChatGPTIDs)
+			seed.newAccountTimezone = settings.timezone
 			seed.allowDuplicate = allowDuplicate
 			seed.customHeaders = mergeImportCustomHeaders(seed.customHeaders, importCustomHeaders)
 			importSource := "import"
