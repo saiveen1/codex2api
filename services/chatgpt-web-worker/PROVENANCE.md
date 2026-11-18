@@ -13,7 +13,7 @@ License: upstream `AGPL-3.0-only`; full upstream license text is `LICENSE`.
 | `services/protocol/conversation.py` | `fbdc05ea03ba14296bebed6bbdc95f4bd535202fd4a5e53114f0b4503e2681d1` | `conversation.py`: SSE/patch semantics, trusted tool-only file/sediment output boundary; new bounded state reconstruction instead of broad raw payload extraction |
 | `utils/pow.py` | `bbe2a20de3c05860b0dc0d22fcd8ce01429196fdb491d5bca6c1d3f455a801f4` | `proof.py`: adapted resource parser, token prefix/config layout and SHA3 nonce construction; standard library, reduced fingerprint choices, bounded CPU/deadline, fixed safe errors |
 | `utils/helper.py` | `65938c3371f2f92d73e8bd1b3cf82978d67474c773401a32b5929b2b29d8a9b8` | Inspected input/SSE behavior; no filesystem input or URL helper copied |
-| `utils/turnstile.py` | `ee8bcaf44ae87928222071bed466831e9738bb39fbeff5fa2836f0ccf6b2aa51` | Inspected only; VM not copied or executed; required Turnstile fails closed |
+| `utils/turnstile.py` | `ee8bcaf44ae87928222071bed466831e9738bb39fbeff5fa2836f0ccf6b2aa51` | Inspected only; VM not copied or executed; Turnstile stays advisory (empty token, upstream decides), required Arkose fails closed |
 | `utils/image_tokens.py` | `0c53a426195db4300ad650f0dd7529466efa0466a23d7d5acd3afbf7a1012d89` | Inspected only; token estimators not copied, usage remains unknown |
 | `docs/upstream-sse-conversation.md` | `e781fa99951823a6412c7f4cb0454bf2faa6f98e9cb3c5e06d85a55ac29637ec` | Output pointer trust and failure/recovery semantics reference |
 | `pyproject.toml` | `0d3df31b7b10a25437aaed1a936e4dcdacba46d5b3a0c2d25ee32460f01de2ab` | Python3.13 / curl-cffi / FastAPI / Pillow baseline; minimal worker deps pinned separately |

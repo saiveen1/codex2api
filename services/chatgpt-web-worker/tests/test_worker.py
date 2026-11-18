@@ -523,13 +523,19 @@ async def test_check_http_discovery_and_admission_diagnostics(tmp_path):
         assert "mock-access-token" not in response.text
 
 
-@pytest.mark.parametrize("challenge", ["arkose", "turnstile"])
-async def test_unsupported_challenge_fails_before_generation(tmp_path, challenge):
+async def test_unsupported_challenge_fails_before_generation(tmp_path):
     script = Script()
-    script.challenge = {challenge: {"required": True, "dx": "not-executed"}}
+    script.challenge = {"arkose": {"required": True, "dx": "not-executed"}}
     events, _ = await execute(tmp_path, script)
     assert events[-1]["code"] == "environment_challenge" and not script.submits()
-    assert (events[-1]["reason"], events[-1]["origin_status"], events[-1]["http_status"]) == (f"prepare_{challenge}", 200, 403)
+    assert (events[-1]["reason"], events[-1]["origin_status"], events[-1]["http_status"]) == ("prepare_arkose", 200, 403)
+
+
+async def test_advisory_turnstile_still_submits(tmp_path):
+    script = Script()
+    script.challenge = {"turnstile": {"required": True, "dx": "not-executed"}}
+    events, _ = await execute(tmp_path, script)
+    assert events[-1]["type"] == "completed" and script.submits()
 
 
 def test_json_patches_and_trust_boundary():

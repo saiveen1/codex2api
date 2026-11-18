@@ -103,10 +103,10 @@ class Backend:
         return Resources(html)
 
     def supported_challenge(self, data, phase):
-        # This worker cannot satisfy a required interactive verification.
-        for name in ("arkose", "turnstile"):
-            if (data.get(name) or {}).get("required"):
-                raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason=f"{phase}_{name}")
+        # Arkose needs an interactive VM we never run. Turnstile stays advisory:
+        # finalize submits an empty token and the upstream judges the request.
+        if (data.get("arkose") or {}).get("required"):
+            raise SafeError("environment_challenge", 403, upstream_status=self.upstream_status, reason=f"{phase}_arkose")
 
     async def prepare_requirements(self, resources):
         path = "/backend-api/sentinel/chat-requirements"

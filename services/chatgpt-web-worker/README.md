@@ -138,8 +138,9 @@ Client version is `prod-a194cd50d4416d3c0b47c740f206b12ce60f5887`, build `670890
 
 Homepage script URLs are parsed as PoW metadata only; downloaded scripts are
 never executed. Requirements prepare/finalize and bounded SHA3 PoW are supported
-(maximum 500000 candidates / 3 seconds); Arkose and Turnstile, including the
-reference's executable Turnstile VM, fail closed with `environment_challenge`.
+(maximum 500000 candidates / 3 seconds); required Arkose fails closed with
+`environment_challenge`. Required Turnstile stays advisory: finalize sends an
+empty token and the upstream judges the request.
 There is no browser launch or third-party solver.
 
 Signed upload/download URLs are accepted only after trusted API asset resolution,
