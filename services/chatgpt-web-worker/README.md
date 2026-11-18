@@ -78,10 +78,10 @@ Account check makes only homepage/bootstrap, authenticated `/me` GET and
 `conversation/init` metadata POST requests; it never prepares/submits generation
 or changes settings. `ready` requires a positive authenticated ID and an explicit
 integer positive `limits_progress[feature_name=image_gen].remaining` fact.
-Missing/unknown evidence is `unverified`, zero is `quota_exhausted`. Only explicit
-`image_edit` quota evidence adds the `edit` capability; generic plans do not.
-This deliberately conservative edit readiness may remain unverified against the
-actual pinned service. RFC3339 reset strings are returned only when parseable
+Missing/unknown generation quota is `unverified`, zero is `quota_exhausted`.
+A ready account may attempt attachment-based edits when no separate `image_edit`
+entry is reported. If present, that entry must have a positive integer balance.
+Eligibility is not proof of a successful upload or edit. RFC3339 reset strings are returned only when parseable
 with timezone; relative/ambiguous values are left null.
 
 ## Execution and recovery

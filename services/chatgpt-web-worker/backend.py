@@ -162,7 +162,9 @@ class Backend:
                     result.update(status="quota_exhausted", error_code="quota_exhausted")
                 else:
                     result.update(status="ready", capabilities=["generate"])
-                    if type(facts.get("image_edit", {}).get("remaining")) is int and facts["image_edit"]["remaining"] > 0:
+                    # An omitted per-edit counter is not a denial of attachment-based generation.
+                    edit = facts.get("image_edit")
+                    if edit is None or (type(edit.get("remaining")) is int and edit["remaining"] > 0):
                         result["capabilities"].append("edit")
                 result["stage"] = "complete"
         except SafeError as error:

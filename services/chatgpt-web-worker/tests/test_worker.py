@@ -143,7 +143,8 @@ class Script:
         elif url.endswith("/f/conversation/prepare"):
             body = {"conduit_token": "conduit-mock"}
         elif url.endswith("/backend-api/files"):
-            body = {"file_id": "file_input", "upload_url": "https://files.oaiusercontent.com/input?sig=private"}
+            file_id = "file_input" if kwargs["json"]["file_name"] == "input-0.png" else "file_input_2"
+            body = {"file_id": file_id, "upload_url": "https://files.oaiusercontent.com/input?sig=private"}
         elif url.endswith("/uploaded"):
             body = {}
         elif url.endswith("/download"):
@@ -236,17 +237,21 @@ def assert_fenced(ledger):
     assert ledger.get("exec-1")["stage"] == "submitting"
 
 
-async def test_edit_upload_and_no_input_output_confusion(tmp_path):
+@pytest.mark.parametrize("count", [1, 2])
+async def test_edit_upload_and_no_input_output_confusion(tmp_path, count):
+    ids = ["file_input", "file_input_2"][:count]
     script = Script(sse({"conversation_id": "conv-1", "message": message("user", "file-service://file_input")},
-                        {"message": message(pointer="file-service://file_input")}, {"message": message()}))
-    acc = account(operation="edit", images=[{"b64_json": base64.b64encode(png()).decode(), "mime_type": "image/png"}])
+                        *({"message": message(pointer="file-service://" + fid)} for fid in ids), {"message": message()}))
+    acc = account(operation="edit", images=[{"b64_json": base64.b64encode(png()).decode(), "mime_type": "image/png"} for _ in ids])
     events, ledger = await execute(tmp_path, script, acc)
     assert events[-1]["type"] == "completed"
     assert ledger.get("exec-1")["assets"] == ["file_out"]
-    assert any(c[0] == "PUT" and c[2]["data"] == png() for c in script.calls)
+    assert [c[2]["data"] for c in script.calls if c[0] == "PUT"] == [png()] * count
     submitted = script.submits()[0][2]["json"]
     assert submitted["model"] == "gpt-5-3"
-    assert submitted["messages"][0]["metadata"]["attachments"][0]["id"] == "file_input"
+    msg = submitted["messages"][0]
+    assert [a["id"] for a in msg["metadata"]["attachments"]] == ids
+    assert [p["asset_pointer"] for p in msg["content"]["parts"][:-1]] == ["file-service://" + fid for fid in ids]
 
 
 @pytest.mark.parametrize("fmt,mime", [("png", "image/png"), ("jpeg", "image/jpeg"), ("webp", "image/webp")])
@@ -265,7 +270,7 @@ async def test_account_check_positive_evidence_only(quota, status):
     script.quota = quota
     result = await script.backend(check_account()).check()
     assert result["status"] == status
-    assert result["capabilities"] == (["generate"] if status == "ready" else [])
+    assert result["capabilities"] == (["generate", "edit"] if status == "ready" else [])
     assert result["workspace_id"] == "mock-account" and result["upstream_status"] == 200
     assert result["stage"] == ("quota" if status == "unverified" else "complete")
     assert result["error_code"] == (None if status == "ready" else "quota_unknown" if status == "unverified" else "quota_exhausted")
