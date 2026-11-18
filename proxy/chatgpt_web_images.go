@@ -190,6 +190,21 @@ func chatGPTWebErrorFields(err error, executionID string) (gin.H, int) {
 		failure = &chatGPTWebFailure{code: "upstream_error", status: 503}
 	}
 	body := gin.H{"type": "chatgpt_web_error", "code": failure.code, "message": failure.Error(), "execution_id": executionID, "result_unknown": failure.unknown, "retryable": false}
+	var check *ChatGPTWebCheckError
+	if errors.As(err, &check) {
+		stage, code := webCheckStage(check.Stage), webCheckCode(check.Code)
+		origin := "未记录上游 HTTP 响应"
+		if check.UpstreamStatus >= 100 && check.UpstreamStatus <= 599 {
+			origin = fmt.Sprintf("上游 HTTP %d", check.UpstreamStatus)
+			body["origin_http_status"] = check.UpstreamStatus
+		}
+		body["precheck_stage"] = stage
+		label := stage
+		if stage == "bootstrap" {
+			label = "访问 ChatGPT 首页"
+		}
+		body["message"] = fmt.Sprintf("生图未提交：Web 账号预检失败（%s，%s；%s）", label, code, origin)
+	}
 	var detail *webExecutionFailure
 	if errors.As(err, &detail) {
 		body["last_confirmed_stage"] = detail.stage

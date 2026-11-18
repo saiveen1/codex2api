@@ -532,6 +532,20 @@ func TestChatGPTWebPrepareCanceledBeforeAdmission(t *testing.T) {
 	}
 }
 
+func TestChatGPTWebPrecheckOriginStatusMessage(t *testing.T) {
+	for _, tc := range []struct {
+		origin int
+		want   string
+	}{{0, "未记录上游 HTTP 响应"}, {403, "上游 HTTP 403"}} {
+		check := &ChatGPTWebCheckError{Code: "worker_unavailable", Stage: "bootstrap", HTTPStatus: 503, UpstreamStatus: tc.origin}
+		body, status := chatGPTWebErrorFields(errors.Join(&chatGPTWebFailure{check.Code, check.HTTPStatus, false}, check), "fixture")
+		msg := fmt.Sprint(body["message"])
+		if status != 503 || body["precheck_stage"] != "bootstrap" || !strings.Contains(msg, tc.want) || !strings.Contains(msg, "生图未提交") || !strings.Contains(msg, check.Code) {
+			t.Fatalf("unexpected precheck response: %v %v", status, body)
+		}
+	}
+}
+
 func TestChatGPTWebPrepareSystemFailureStopsEarly(t *testing.T) {
 	for _, code := range []string{"worker_unavailable", "internal_error"} {
 		t.Run(code, func(t *testing.T) {

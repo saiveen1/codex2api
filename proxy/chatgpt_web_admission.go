@@ -335,7 +335,7 @@ func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model str
 		return err
 	}
 	if lastCheckError != nil {
-		return &chatGPTWebFailure{webCheckCode(lastCheckError.Code), lastCheckError.HTTPStatus, false}
+		return errors.Join(&chatGPTWebFailure{webCheckCode(lastCheckError.Code), lastCheckError.HTTPStatus, false}, lastCheckError)
 	}
 	return chatGPTWebAdmissionUnavailable()
 }
