@@ -193,6 +193,8 @@ func chatGPTWebErrorMessage(code string) string {
 		return "This image execution already exists; inspect its status instead of generating again"
 	case "image_delivery_failed":
 		return "Image generation completed, but the gateway could not prepare the client response. Inspect the existing execution; do not regenerate"
+	case "image_upload_failed":
+		return "Reference image upload failed; generation was not submitted"
 	case "image_download_failed":
 		return "The image may have been generated but download failed; do not regenerate automatically"
 	case "content_policy_violation":
@@ -213,7 +215,7 @@ func chatGPTWebErrorMessage(code string) string {
 }
 func chatGPTWebSafeCode(code string) string {
 	switch code {
-	case "web_account_unavailable", "worker_protocol_error", "workspace_unavailable", "identity_mismatch":
+	case "web_account_unavailable", "worker_protocol_error", "workspace_unavailable", "identity_mismatch", "image_upload_failed":
 		return code
 	case "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "upstream_text_reply", "execution_conflict", "invalid_request":
 		return code

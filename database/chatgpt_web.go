@@ -289,7 +289,7 @@ func chatGPTWebSafeError(code string) bool {
 	switch code {
 	case "workspace_unavailable", "identity_mismatch", "quota_unknown", "token_expired", "account_disabled", "account_busy", "account_ineligible", "egress_unavailable", "observation_stale":
 		return true
-	case "", "invalid_request", "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_download_failed", "content_policy_violation", "upstream_text_reply", "upstream_error", "execution_conflict", "worker_unavailable", "worker_timeout", "worker_protocol_error", "cancelled", "internal_error":
+	case "", "invalid_request", "auth_required", "environment_challenge", "quota_exhausted", "unsupported_model", "unsupported_parameter", "submission_unknown", "image_stream_interrupted", "image_poll_timeout", "image_upload_failed", "image_download_failed", "content_policy_violation", "upstream_text_reply", "upstream_error", "execution_conflict", "worker_unavailable", "worker_timeout", "worker_protocol_error", "cancelled", "internal_error":
 		return true
 	}
 	return false

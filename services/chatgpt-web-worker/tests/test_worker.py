@@ -687,6 +687,30 @@ async def test_asset_url_ssrf_rejected(url):
 
 
 
+async def test_regional_attachment_upload_guard(monkeypatch):
+    address = "8.8.8.8"
+    async def lookup(*args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", lookup)
+    host = "sdmntprwestus3.oaiusercontent.com"
+    url = "https://" + host + "/input"
+    assert await public_destination(url, "PUT") == (host, [address])
+    with pytest.raises(SafeError) as e:
+        await public_destination(url, "GET")
+    assert e.value.code == "image_download_failed"
+    for invalid in (url.replace(host, host + ".example"), url.replace("https:", "http:")):
+        with pytest.raises(SafeError) as e:
+            await public_destination(invalid, "PUT")
+        assert e.value.code == "image_upload_failed"
+    address = "127.0.0.1"
+    with pytest.raises(SafeError) as e:
+        await public_destination(url, "PUT")
+    assert e.value.code == "image_upload_failed"
+    with pytest.raises(SafeError) as e:
+        check_status(Response(b"", status=403), asset=True, method="PUT")
+    assert (e.value.code, e.value.upstream_status) == ("image_upload_failed", 403)
+
+
 async def test_upstream_chatgpt_download_host_is_allowed(monkeypatch):
     # Upstream serves generated images from chatgpt.com itself; rejecting that
     # host left every successful generation undownloadable.
@@ -718,7 +742,7 @@ async def test_asset_dns_pinning_tls_proxy_no_auth_and_redirect_rejection(monkey
             return Response(b"", status=302)
         async def close(self):
             self.closed = True
-    async def lookup(url):
+    async def lookup(url, method):
         return "files.oaiusercontent.com", ["8.8.8.8"]
     monkeypatch.setattr(transport, "AsyncSession", Session)
     monkeypatch.setattr(transport, "public_destination", lookup)

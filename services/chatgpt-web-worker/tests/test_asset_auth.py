@@ -97,7 +97,7 @@ async def test_transport_defense_and_native_pin_lifetime(monkeypatch, method, ur
             assert self.kw['verify'] is True and self.kw['trust_env'] is False
             return Response()
         async def close(self): self.closed = True
-    async def resolve(u): return urlsplit(u).hostname, ['8.8.8.8']
+    async def resolve(u, m): return urlsplit(u).hostname, ['8.8.8.8']
     monkeypatch.setattr(transport, 'AsyncSession', Session)
     monkeypatch.setattr(transport, 'public_destination', resolve)
     client = CurlTransport(account())
@@ -117,7 +117,7 @@ async def test_failed_asset_session_construction_frees_pin(monkeypatch):
         def __init__(self,**kw):
             if CurlOpt.CONNECT_TO in kw['curl_options']: raise RuntimeError('synthetic construction failure')
         async def close(self): pass
-    async def resolve(u):return 'chatgpt.com',['8.8.8.8']
+    async def resolve(u, m):return 'chatgpt.com',['8.8.8.8']
     monkeypatch.setattr(transport,'AsyncSession',Session)
     monkeypatch.setattr(transport,'public_destination',resolve)
     client=CurlTransport(account())

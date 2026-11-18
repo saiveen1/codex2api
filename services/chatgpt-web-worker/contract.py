@@ -42,6 +42,7 @@ MESSAGES = {
     "submission_unknown": "Submission outcome is unknown; generation will not be repeated.",
     "image_stream_interrupted": "Image stream interrupted; original execution may be resumed.",
     "image_poll_timeout": "Original image task is not ready; generation will not be repeated.",
+    "image_upload_failed": "Reference image upload failed before generation was submitted.",
     "image_download_failed": "Image download failed; original assets may be downloaded again.",
     "content_policy_violation": "Upstream rejected the image request.",
     "upstream_text_reply": "Upstream returned text instead of an image.",

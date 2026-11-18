@@ -15,6 +15,7 @@ from contract import SafeError
 ASSET_HOSTS = frozenset({"chatgpt.com", "files.oaiusercontent.com", "oaiusercontent.com",
                          "oaidalleapiprodscus.blob.core.windows.net",
                          "prod-files-secure.s3.us-west-2.amazonaws.com"})
+UPLOAD_HOSTS = ASSET_HOSTS | {"sdmntprwestus3.oaiusercontent.com"}
 
 
 def authenticated_asset_url(url):
@@ -28,10 +29,11 @@ def authenticated_asset_url(url):
         return False
 
 
-async def public_destination(url):
+async def public_destination(url, method="GET"):
     try:
         part = urlsplit(url)
-        if (part.scheme != "https" or part.hostname not in ASSET_HOSTS or part.port not in {None, 443}
+        hosts = UPLOAD_HOSTS if method == "PUT" else ASSET_HOSTS
+        if (part.scheme != "https" or part.hostname not in hosts or part.port not in {None, 443}
                 or part.username or part.password or part.fragment or "\\" in url
                 or any(ord(c) < 33 for c in url) or len(url) > 16384):
             raise ValueError()
@@ -44,7 +46,7 @@ async def public_destination(url):
             raise ValueError()
         return part.hostname, addresses
     except Exception:
-        raise SafeError("image_download_failed") from None
+        raise SafeError("image_upload_failed" if method == "PUT" else "image_download_failed") from None
 
 
 async def read_bounded(response, limit):
@@ -56,12 +58,12 @@ async def read_bounded(response, limit):
     return bytes(data)
 
 
-def check_status(response, asset=False):
+def check_status(response, asset=False, method="GET"):
     status = response.status_code
     if 200 <= status < 300:
         return
     if asset:
-        raise SafeError("image_download_failed", upstream_status=status)
+        raise SafeError("image_upload_failed" if method == "PUT" else "image_download_failed", upstream_status=status)
     if status == 401:
         raise SafeError("auth_required", 401, upstream_status=status)
     if status == 403:
@@ -85,7 +87,7 @@ class CurlTransport:
         session, response, connect_to = self.session, None, ffi.NULL
         try:
             if asset:
-                host, addresses = await public_destination(url)
+                host, addresses = await public_destination(url, method)
                 # Never propagate account credentials to storage origins or PUTs.
                 allowed_auth = method == "GET" and authenticated_asset_url(url)
                 headers = {k: v for k, v in headers.items()
@@ -97,14 +99,14 @@ class CurlTransport:
                 # native slist. Keep it alive until the isolated session closes.
                 connect_to = lib.curl_slist_append(ffi.NULL, f"{host}:443:{target}:443".encode())
                 if connect_to == ffi.NULL:
-                    raise SafeError("image_download_failed")
+                    raise SafeError("image_upload_failed" if method == "PUT" else "image_download_failed")
                 session = AsyncSession(impersonate="chrome110", verify=True, trust_env=False,
                                        proxy=self.proxy,
                                        curl_options=self.options | {CurlOpt.CONNECT_TO: connect_to,
                                                                    CurlOpt.RESOLVE: [f"{host}:443:{target}"]})
             response = await session.request(method, url, headers=headers, timeout=timeout,
                                              allow_redirects=False, stream=True, **kwargs)
-            check_status(response, asset)
+            check_status(response, asset, method)
             yield response
         finally:
             try:
