@@ -55,6 +55,7 @@ type Handler struct {
 	intelligenceOnce         sync.Once
 	intelligenceWG           sync.WaitGroup
 	imageQueue               *imageJobQueue
+	imageJobCancels          sync.Map // job ID -> context.CancelFunc
 	qualityTestContext       context.Context
 	qualityTestWG            sync.WaitGroup
 	store                    *auth.Store
@@ -1142,6 +1143,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	imageStudioPortal.POST("/edit-jobs", h.CreatePortalImageEditJob)
 	imageStudioPortal.GET("/jobs", h.ListPortalImageJobs)
 	imageStudioPortal.GET("/jobs/:id", h.GetPortalImageJob)
+	imageStudioPortal.POST("/jobs/:id/cancel", h.CancelPortalImageJob)
 	imageStudioPortal.DELETE("/jobs/:id", h.DeletePortalImageJob)
 	imageStudioPortal.GET("/assets", h.ListPortalImageAssets)
 	imageStudioPortal.GET("/assets/:id/file", h.GetPortalImageAssetFile)
@@ -1425,6 +1427,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/images/edit-jobs", h.CreateImageEditJob)
 	api.GET("/images/jobs", h.ListImageGenerationJobs)
 	api.GET("/images/jobs/:id", h.GetImageGenerationJob)
+	api.POST("/images/jobs/:id/cancel", h.CancelImageGenerationJob)
 	api.DELETE("/images/jobs/:id", h.DeleteImageGenerationJob)
 	api.GET("/images/assets", h.ListImageAssets)
 	api.GET("/images/assets/:id/file", h.GetImageAssetFile)

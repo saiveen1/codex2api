@@ -64,7 +64,7 @@ func TestExternalImageJobResultOmitsLargeInputsAndPreservesLegacyQuery(t *testin
 		t.Fatal(err)
 	}
 	path := "/v1/images/jobs/" + strconv.FormatInt(jobID, 10)
-	check := func(status string) []byte {
+	check := func(path, status string) []byte {
 		t.Helper()
 		response := getImageJobResult(t, router, path+"/result?include_cache=1", "sk-result-owner")
 		if response.Code != http.StatusOK {
@@ -77,14 +77,14 @@ func TestExternalImageJobResultOmitsLargeInputsAndPreservesLegacyQuery(t *testin
 		}
 		return body
 	}
-	queued := check(database.ImageJobQueued)
+	queued := check(path, database.ImageJobQueued)
 	if gjson.GetBytes(queued, "job.assets").Raw != "[]" {
 		t.Fatal("queued assets must be an empty array")
 	}
 	if err := db.MarkImageJobRunning(ctx, jobID); err != nil {
 		t.Fatal(err)
 	}
-	check(database.ImageJobRunning)
+	check(path, database.ImageJobRunning)
 	assetID, err := db.InsertImageAsset(ctx, database.ImageAssetInput{
 		JobID: jobID, Filename: "result.png", StoragePath: "not-read-by-result-api.png",
 		MimeType: "image/png", Bytes: 1234, Width: 1024, Height: 1536,
@@ -96,7 +96,7 @@ func TestExternalImageJobResultOmitsLargeInputsAndPreservesLegacyQuery(t *testin
 	if err := db.MarkImageJobSucceededWithWarning(ctx, jobID, "one output warning", 45000); err != nil {
 		t.Fatal(err)
 	}
-	completed := check(database.ImageJobSucceeded)
+	completed := check(path, database.ImageJobSucceeded)
 	if gjson.GetBytes(completed, "job.warning").String() != "one output warning" ||
 		gjson.GetBytes(completed, "job.error_message").String() != "" {
 		t.Fatalf("warning mapping lost: %s", completed)
@@ -126,10 +126,14 @@ func TestExternalImageJobResultOmitsLargeInputsAndPreservesLegacyQuery(t *testin
 		gjson.GetBytes(legacy.Body.Bytes(), "job.api_key_id").Int() != ownerID {
 		t.Fatal("legacy endpoint must retain its full response")
 	}
-	if err := db.MarkImageJobFailed(ctx, jobID, "provider failed", 123); err != nil {
+	failedID, err := db.InsertImageGenerationJob(ctx, database.ImageGenerationJobInput{APIKeyID: ownerID})
+	if err != nil {
 		t.Fatal(err)
 	}
-	failed := check(database.ImageJobFailed)
+	if err := db.MarkImageJobFailed(ctx, failedID, "provider failed", 123); err != nil {
+		t.Fatal(err)
+	}
+	failed := check("/v1/images/jobs/"+strconv.FormatInt(failedID, 10), database.ImageJobFailed)
 	if gjson.GetBytes(failed, "job.error_message").String() != "provider failed" {
 		t.Fatal("failure reason lost")
 	}

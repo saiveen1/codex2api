@@ -441,6 +441,9 @@ func (h *Handler) runChatGPTWebImage(c *gin.Context, cfg chatGPTWebConfig, req c
 	if req.TimeoutSeconds < 10 {
 		return result, context.DeadlineExceeded
 	}
+	if err := checkImageJobAttempt(ctx); err != nil {
+		return result, err
+	}
 	execution := &database.ChatGPTWebExecution{ID: req.ExecutionID, APIKeyID: requestAPIKeyID(c), AccountID: account.ID(), RequestHash: requestHash, CredentialRevision: state.CredentialRevision, EnvironmentRevision: state.EnvironmentRevision, ProxyFingerprint: state.ProxyFingerprint, Operation: req.Operation, Stage: "prepared", LeaseOwner: owner, LeaseUntil: until}
 	execution.WorkspaceFingerprint = state.WorkspaceFingerprint
 	if existing != nil {

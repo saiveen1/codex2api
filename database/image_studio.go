@@ -14,6 +14,7 @@ const (
 	ImageJobRunning   = "running"
 	ImageJobSucceeded = "succeeded"
 	ImageJobFailed    = "failed"
+	ImageJobCancelled = "cancelled"
 )
 
 type ImagePromptTemplate struct {
@@ -311,19 +312,19 @@ func (db *DB) InsertImageGenerationJob(ctx context.Context, input ImageGeneratio
 }
 
 func (db *DB) MarkImageJobRunning(ctx context.Context, id int64) error {
-	_, err := db.conn.ExecContext(ctx, `
+	var claimed int64
+	return db.conn.QueryRowContext(ctx, `
 		UPDATE image_generation_jobs
 		SET status=$1, started_at=CURRENT_TIMESTAMP, error_message=''
-		WHERE id=$2
-	`, ImageJobRunning, id)
-	return err
+		WHERE id=$2 AND status='queued' RETURNING id
+	`, ImageJobRunning, id).Scan(&claimed)
 }
 
 func (db *DB) MarkImageJobSucceeded(ctx context.Context, id int64, durationMs int) error {
 	_, err := db.conn.ExecContext(ctx, `
 		UPDATE image_generation_jobs
 		SET status=$1, duration_ms=$2, completed_at=CURRENT_TIMESTAMP, error_message=''
-		WHERE id=$3
+		WHERE id=$3 AND status IN ('queued','running')
 	`, ImageJobSucceeded, durationMs, id)
 	return err
 }
@@ -335,7 +336,7 @@ func (db *DB) MarkImageJobSucceededWithWarning(ctx context.Context, id int64, me
 	_, err := db.conn.ExecContext(ctx, `
 		UPDATE image_generation_jobs
 		SET status=$1, duration_ms=$2, completed_at=CURRENT_TIMESTAMP, error_message=$3
-		WHERE id=$4
+		WHERE id=$4 AND status IN ('queued','running')
 	`, ImageJobSucceeded, durationMs, message, id)
 	return err
 }
@@ -347,7 +348,7 @@ func (db *DB) MarkImageJobFailed(ctx context.Context, id int64, message string, 
 	_, err := db.conn.ExecContext(ctx, `
 		UPDATE image_generation_jobs
 		SET status=$1, error_message=$2, duration_ms=$3, completed_at=CURRENT_TIMESTAMP
-		WHERE id=$4
+		WHERE id=$4 AND status IN ('queued','running')
 	`, ImageJobFailed, message, durationMs, id)
 	return err
 }
@@ -356,7 +357,7 @@ func (db *DB) UpdateImageGenerationJobParamsJSON(ctx context.Context, id int64, 
 	_, err := db.conn.ExecContext(ctx, `
 		UPDATE image_generation_jobs
 		SET params_json=$1
-		WHERE id=$2
+		WHERE id=$2 AND status IN ('queued','running')
 	`, paramsJSON, id)
 	return err
 }
@@ -512,18 +513,27 @@ func scanImageGenerationJob(scanner interface {
 }
 
 func (db *DB) InsertImageAsset(ctx context.Context, input ImageAssetInput) (int64, error) {
-	return db.insertRowID(ctx,
-		`INSERT INTO image_assets (
-			job_id, template_id, filename, storage_path, mime_type, bytes, width, height,
-			model, requested_size, actual_size, quality, output_format, revised_prompt, expires_at, delete_after_read
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
-		`INSERT INTO image_assets (
-			job_id, template_id, filename, storage_path, mime_type, bytes, width, height,
-			model, requested_size, actual_size, quality, output_format, revised_prompt, expires_at, delete_after_read
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-		input.JobID, input.TemplateID, input.Filename, input.StoragePath, input.MimeType, input.Bytes, input.Width, input.Height,
-		input.Model, input.RequestedSize, input.ActualSize, input.Quality, input.OutputFormat, input.RevisedPrompt, input.ExpiresAt, input.DeleteAfterRead,
-	)
+	return db.insertImageAsset(ctx, input, false)
+}
+
+// Only job workers need a fence: gallery imports can also attach historical assets.
+func (db *DB) InsertActiveImageJobAsset(ctx context.Context, input ImageAssetInput) (int64, error) {
+	return db.insertImageAsset(ctx, input, true)
+}
+
+func (db *DB) insertImageAsset(ctx context.Context, input ImageAssetInput, activeOnly bool) (int64, error) {
+	q := `INSERT INTO image_assets (job_id,template_id,filename,storage_path,mime_type,bytes,width,height,model,requested_size,actual_size,quality,output_format,revised_prompt,expires_at,delete_after_read)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16`
+	if activeOnly {
+		q += ` FROM image_generation_jobs WHERE id=$1 AND status IN ('queued','running')`
+		if !db.isSQLite() {
+			q += ` FOR SHARE` // serialize publication with the cancelling UPDATE
+		}
+	}
+	var id int64
+	err := db.conn.QueryRowContext(ctx, q+` RETURNING id`, input.JobID, input.TemplateID, input.Filename, input.StoragePath, input.MimeType, input.Bytes, input.Width, input.Height,
+		input.Model, input.RequestedSize, input.ActualSize, input.Quality, input.OutputFormat, input.RevisedPrompt, input.ExpiresAt, input.DeleteAfterRead).Scan(&id)
+	return id, err
 }
 
 func (db *DB) GetImageAsset(ctx context.Context, id int64) (*ImageAsset, error) {

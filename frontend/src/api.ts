@@ -388,7 +388,7 @@ async function requestImageStudioPortal<T>(path: string, apiKey: string, options
 
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(extractAdminErrorMessage(body, res.status))
+    throw new AdminAPIError(res.status, extractAdminErrorMessage(body, res.status))
   }
 
   if (res.status === 204) {
@@ -669,6 +669,8 @@ export const api = {
     const query = sp.toString()
     return requestImageStudioPortal<ImageJobResponse>(`/jobs/${id}${query ? `?${query}` : ''}`, apiKey)
   },
+  cancelPortalImageJob: (apiKey: string, id: number) =>
+    requestImageStudioPortal<{ status: string }>(`/jobs/${id}/cancel`, apiKey, { method: 'POST' }),
   deletePortalImageJob: (apiKey: string, id: number) =>
     requestImageStudioPortal<MessageResponse>(`/jobs/${id}`, apiKey, { method: 'DELETE' }),
   getPortalImageAssets: (apiKey: string, params: { page?: number; pageSize?: number } = {}) => {
@@ -1437,6 +1439,8 @@ export const api = {
     const query = sp.toString()
     return request<ImageJobResponse>(`/images/jobs/${id}${query ? `?${query}` : ''}`)
   },
+  cancelImageJob: (id: number) =>
+    request<{ status: string }>(`/images/jobs/${id}/cancel`, { method: 'POST' }),
   deleteImageJob: (id: number) =>
     request<MessageResponse>(`/images/jobs/${id}`, { method: 'DELETE' }),
   getImageAssets: (params: { page?: number; pageSize?: number } = {}) => {

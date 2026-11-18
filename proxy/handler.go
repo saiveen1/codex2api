@@ -3476,9 +3476,13 @@ func (h *Handler) APIKeyAuthMiddleware() gin.HandlerFunc {
 }
 
 // APIKeyReadAuthMiddleware permits exhausted keys to retrieve their own stored
-// results. All other authentication checks remain in force; writes stay blocked.
+// results or stop their own studio jobs. Other writes stay quota-gated.
 func (h *Handler) APIKeyReadAuthMiddleware() gin.HandlerFunc {
 	return h.authMiddlewareWithQuotaRead(true)
+}
+
+func IsStudioImageJobCancel(c *gin.Context) bool {
+	return c.Request.Method == http.MethodPost && c.FullPath() == "/api/image-studio/jobs/:id/cancel"
 }
 
 // authMiddleware API Key 鉴权中间件（增强版，带安全日志）
@@ -3564,8 +3568,8 @@ func (h *Handler) authMiddlewareWithQuotaRead(allowQuotaRead bool) gin.HandlerFu
 			c.Abort()
 			return
 		}
-		readOnly := allowQuotaRead && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead)
-		if apiKeyRow.IsQuotaExhausted() && !readOnly {
+		quotaExempt := allowQuotaRead && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || IsStudioImageJobCancel(c))
+		if apiKeyRow.IsQuotaExhausted() && !quotaExempt {
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED_QUOTA_EXHAUSTED", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
 			api.SendError(c, api.NewAPIError(api.ErrCodeRateLimitReached, "API key quota exhausted", api.ErrorTypeRateLimit))

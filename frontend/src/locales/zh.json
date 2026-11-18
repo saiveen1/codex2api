@@ -6412,6 +6412,11 @@
     "canvasEmptyDesc": "在上方输入提示词，选择模型与风格，点击生成后结果会出现在这里。",
     "canvasGenerating": "正在绘制…",
     "canvasQueued": "排队等待中…",
+    "cancelTask": "终止任务",
+    "cancelNotice": "已提交上游的请求可能仍会执行。",
+    "cancelFailed": "终止任务失败",
+    "cancelUnexpected": "终止响应异常，请刷新任务状态。",
+    "cancelAlreadyFinished": "任务已结束，已刷新真实状态。",
     "canvasGeneratingHint": "请稍候，结果会显示在这里",
     "elapsedSeconds": "已用时 {{seconds}} 秒",
     "canvasFailed": "生成失败",
@@ -6467,6 +6472,7 @@
     "loadFailed": "加载生图工作台失败",
     "status": {
       "queued": "排队中",
+      "cancelled": "已终止",
       "running": "生成中",
       "succeeded": "已完成",
       "failed": "失败"

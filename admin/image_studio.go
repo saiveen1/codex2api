@@ -929,12 +929,17 @@ func (h *Handler) markImageJobFailedDetached(jobID int64, message string, durati
 	}
 }
 
-func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPayload, apiKey *database.APIKeyRow, opts imageJobRunOptions) {
-	parent := opts.queueContext
-	if parent == nil {
-		parent = context.Background()
+func (h *Handler) imageWorkerContext(jobID int64, n int, opts imageJobRunOptions) (context.Context, context.CancelFunc) {
+	if opts.queueContext != nil {
+		return context.WithTimeout(opts.queueContext, imageJobTimeout(n))
 	}
-	ctx, cancel := context.WithTimeout(parent, imageJobTimeout(req.N))
+	ctx, unregister := h.trackImageJob(context.Background(), jobID, "")
+	ctx, stop := context.WithTimeout(ctx, imageJobTimeout(n))
+	return ctx, func() { stop(); unregister() }
+}
+
+func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPayload, apiKey *database.APIKeyRow, opts imageJobRunOptions) {
+	ctx, cancel := h.imageWorkerContext(jobID, req.N, opts)
 	defer cancel()
 	ctx, settleBilling := proxy.DeferImageJobBilling(ctx)
 	deliveredImages := 0
@@ -983,11 +988,11 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 	if imageProxy == nil {
 		imageProxy = proxy.NewHandler(h.store, h.db, nil, nil)
 	}
-	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
+	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(ctx, req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
 		outputCtx := imageJobOutputContext(ctx, req, jobID, index)
 		return imageProxy.GenerateImageOnceForAdmin(outputCtx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
 	})
-	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
+	if ctx.Err() == nil && req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
 		pngErr := err
 		pngStatus := upstreamStatus
 		fallbackReq := jpegFallbackImageJobRequest(req)
@@ -1009,7 +1014,7 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 			len([]rune(fallbackStyledPrompt)),
 			imageLogPromptSuffix(fallbackStyledPrompt, req.External),
 		)
-		responseJSON, upstreamStatus, partialErrors, err = runImageJobBatch(req.N, func() ([]byte, int, error) {
+		responseJSON, upstreamStatus, partialErrors, err = runImageJobBatch(ctx, req.N, func() ([]byte, int, error) {
 			return imageProxy.GenerateImageOnceForAdmin(ctx, fallbackBody, apiKey, opts.sharedAPIKeyConcurrency)
 		})
 		if err == nil {
@@ -1120,11 +1125,7 @@ func buildAdminImageEditRequest(req imageGenerationJobPayload) ([]byte, error) {
 }
 
 func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, apiKey *database.APIKeyRow, opts imageJobRunOptions) {
-	parent := opts.queueContext
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, imageJobTimeout(req.N))
+	ctx, cancel := h.imageWorkerContext(jobID, req.N, opts)
 	defer cancel()
 	ctx, settleBilling := proxy.DeferImageJobBilling(ctx)
 	deliveredImages := 0
@@ -1159,11 +1160,11 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 	if imageProxy == nil {
 		imageProxy = proxy.NewHandler(h.store, h.db, nil, nil)
 	}
-	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
+	responseJSON, upstreamStatus, partialErrors, err := runImageJobBatchIndexed(ctx, req.N, req.ChannelSnapshot == database.UpstreamChannelChatGPTWeb, func(index int) ([]byte, int, error) {
 		outputCtx := imageJobOutputContext(ctx, req, jobID, index)
 		return imageProxy.GenerateImageEditForAdmin(outputCtx, rawBody, apiKey, opts.sharedAPIKeyConcurrency)
 	})
-	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
+	if ctx.Err() == nil && req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, upstreamStatus, err) && len(responseJSON) == 0 {
 		pngErr := err
 		pngStatus := upstreamStatus
 		fallbackReq := jpegFallbackImageJobRequest(req)
@@ -1179,7 +1180,7 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 			pngStatus,
 			security.SanitizeLog(pngErr.Error()),
 		)
-		responseJSON, upstreamStatus, partialErrors, err = runImageJobBatch(req.N, func() ([]byte, int, error) {
+		responseJSON, upstreamStatus, partialErrors, err = runImageJobBatch(ctx, req.N, func() ([]byte, int, error) {
 			return imageProxy.GenerateImageEditForAdmin(ctx, fallbackBody, apiKey, opts.sharedAPIKeyConcurrency)
 		})
 		if err == nil {
@@ -1301,11 +1302,11 @@ func strictImageJobSize(req imageGenerationJobPayload) bool {
 	return req.StrictSize == nil || *req.StrictSize
 }
 
-func runImageJobBatch(count int, execute func() ([]byte, int, error)) ([]byte, int, []string, error) {
-	return runImageJobBatchIndexed(count, false, func(int) ([]byte, int, error) { return execute() })
+func runImageJobBatch(ctx context.Context, count int, execute func() ([]byte, int, error)) ([]byte, int, []string, error) {
+	return runImageJobBatchIndexed(ctx, count, false, func(int) ([]byte, int, error) { return execute() })
 }
 
-func runImageJobBatchIndexed(count int, stopOnFailure bool, execute func(int) ([]byte, int, error)) ([]byte, int, []string, error) {
+func runImageJobBatchIndexed(ctx context.Context, count int, stopOnFailure bool, execute func(int) ([]byte, int, error)) ([]byte, int, []string, error) {
 	count, err := normalizeImageJobOutputCount(count)
 	if err != nil {
 		return nil, 0, nil, err
@@ -1316,7 +1317,13 @@ func runImageJobBatchIndexed(count int, stopOnFailure bool, execute func(int) ([
 	lastStatus := 0
 	successStatus := 0
 	for index := 0; index < count; index++ {
+		if err := ctx.Err(); err != nil {
+			return nil, lastStatus, partialErrors, err
+		}
 		responseJSON, status, callErr := execute(index)
+		if err := ctx.Err(); err != nil {
+			return nil, status, partialErrors, err
+		}
 		lastStatus = status
 		if callErr != nil {
 			partialErrors = append(partialErrors, fmt.Sprintf("output %d: %s", index+1, callErr.Error()))
@@ -1445,6 +1452,9 @@ func (h *Handler) saveImageJobAssets(ctx context.Context, jobID int64, req image
 	var saved []database.ImageAsset
 	var warnings []string
 	for idx, item := range data.Array() {
+		if err := ctx.Err(); err != nil {
+			return saved, warnings, err
+		}
 		imageBytes, mimeType, format, err := decodeImageDataItem(item)
 		if err != nil {
 			return saved, warnings, err
@@ -1515,9 +1525,11 @@ func (h *Handler) saveImageJobAssets(ctx context.Context, jobID int64, req image
 			RevisedPrompt: strings.TrimSpace(item.Get("revised_prompt").String()),
 		}
 		applyImageStoragePolicy(&input, req, time.Now())
-		assetID, err := h.db.InsertImageAsset(ctx, input)
+		assetID, err := h.db.InsertActiveImageJobAsset(ctx, input)
 		if err != nil {
-			_ = backend.Delete(ctx, storagePath)
+			cleanup, stop := imageJobStatusContext()
+			_ = backend.Delete(cleanup, storagePath)
+			stop()
 			return saved, warnings, err
 		}
 		asset, err := h.db.GetImageAsset(ctx, assetID)

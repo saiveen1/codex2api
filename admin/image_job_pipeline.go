@@ -22,6 +22,10 @@ import (
 func (h *Handler) runPipelinedImageJob(parent context.Context, id int64, owner string, req imageGenerationJobPayload, key *database.APIKeyRow) {
 	ctx, cancel := context.WithTimeout(parent, imageJobTimeout(req.N))
 	defer cancel()
+	if err := h.db.CheckRunningImageJob(ctx, id, owner); err != nil {
+		h.markImageJobFailedDetached(id, err.Error(), 0, owner)
+		return
+	}
 	ctx, settle := proxy.DeferImageJobBilling(ctx)
 	delivered := 0
 	defer func() { settle(delivered) }()
@@ -78,12 +82,15 @@ func (h *Handler) runPipelineOutput(ctx context.Context, id int64, req imageGene
 	}
 	defer func() { p.Output = nil }()
 	call := func(payload imageGenerationJobPayload) ([]byte, int, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
 		return h.imageProxy.GenerateQueuedImage(ctx, func() ([]byte, error) {
 			return buildPipelineJobPayload(ctx, payload)
 		}, len(payload.InputImages) > 0, key)
 	}
 	body, status, err := call(req)
-	if req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, status, err) && len(body) == 0 {
+	if ctx.Err() == nil && req.ChannelSnapshot != database.UpstreamChannelChatGPTWeb && shouldFallbackImageJobToJPEG(req, status, err) && len(body) == 0 {
 		req = jpegFallbackImageJobRequest(req)
 		body, status, err = call(req)
 	}
@@ -107,6 +114,9 @@ func buildPipelineJobPayload(ctx context.Context, payload imageGenerationJobPayl
 // Read compressed image bytes only if a requested transformation is necessary.
 // Normal saves stream the file to local/S3 storage without pixel decoding.
 func (h *Handler) savePipelineImage(ctx context.Context, id int64, req imageGenerationJobPayload, result proxy.QueuedImageResult) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	backend, err := imagestore.Primary()
 	if err != nil {
 		return nil, err
@@ -163,9 +173,11 @@ func (h *Handler) savePipelineImage(ctx context.Context, id int64, req imageGene
 	}
 	input := database.ImageAssetInput{JobID: id, TemplateID: req.TemplateID, Filename: filename, StoragePath: ref, MimeType: mime, Bytes: int(size), Width: width, Height: height, Model: firstNonEmpty(result.Model, req.Model), RequestedSize: req.Size, ActualSize: fmt.Sprintf("%dx%d", width, height), Quality: firstNonEmpty(result.Quality, req.Quality), OutputFormat: format, RevisedPrompt: result.RevisedPrompt}
 	applyImageStoragePolicy(&input, req, time.Now())
-	_, err = h.db.InsertImageAsset(ctx, input)
+	_, err = h.db.InsertActiveImageJobAsset(ctx, input)
 	if err != nil {
-		_ = backend.Delete(ctx, ref)
+		cleanup, stop := imageJobStatusContext()
+		_ = backend.Delete(cleanup, ref)
+		stop()
 		return warnings, err
 	}
 	log.Printf("[image-pipeline] job=%d stage=saved bytes=%d resized=%t", id, size, resize)

@@ -14,6 +14,24 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+type imageJobAttemptCheckKey struct{}
+
+// WithImageJobAttemptCheck lets durable jobs fence retries at dispatch, even
+// when another process handled cancellation while this process was waiting.
+func WithImageJobAttemptCheck(ctx context.Context, check func(context.Context) error) context.Context {
+	return context.WithValue(ctx, imageJobAttemptCheckKey{}, check)
+}
+
+func checkImageJobAttempt(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if check, ok := ctx.Value(imageJobAttemptCheckKey{}).(func(context.Context) error); ok {
+		return check(ctx)
+	}
+	return nil
+}
+
 // GenerateImageOnceForAdmin executes the existing Images API handler in-process.
 // It keeps model aliasing, account dispatch, usage logging, and image parsing in one code path.
 func (h *Handler) GenerateImageOnceForAdmin(ctx context.Context, rawBody []byte, apiKey *database.APIKeyRow, sharedAPIKeyConcurrency bool) ([]byte, int, error) {

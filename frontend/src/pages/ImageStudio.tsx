@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { api, type ChatGPTWebDeployment } from '../api'
+import { api, AdminAPIError, type ChatGPTWebDeployment } from '../api'
 import { StudioArtwork } from '../components/image-studio/StudioArtwork'
 import { StudioCollectionHero, StudioCollectionSearch, StudioCollectionEmpty, StudioCollectionLoading, StudioCollectionPagination } from '../components/image-studio/StudioCollectionChrome'
 import { imageAssetOrientation, selectImageTemplates, selectImageAssets, selectImageJobs } from '../lib/imageStudioCollections'
@@ -81,7 +81,7 @@ const IMAGE_VIEWS = ['studio', 'prompts', 'gallery', 'history'] as const
 type ImageView = typeof IMAGE_VIEWS[number]
 const IMAGE_ASSET_PAGE_SIZE = 16
 const IMAGE_JOB_HISTORY_PAGE_SIZE = 20
-const IMAGE_JOB_STATUSES = ['queued', 'running', 'succeeded', 'failed'] as const
+const IMAGE_JOB_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const
 type ImageJobStatusFilter = 'all' | typeof IMAGE_JOB_STATUSES[number]
 const IMAGE_ASSET_CACHE_DB = 'codex2api-image-assets'
 const IMAGE_ASSET_CACHE_STORE = 'assets'
@@ -539,6 +539,9 @@ export default function ImageStudio() {
   const assetURLRequestsRef = useRef<Set<number>>(new Set())
   const [previewAsset, setPreviewAsset] = useState<ImageAsset | null>(null)
   const [currentJob, setCurrentJob] = useState<ImageGenerationJob | null>(null)
+  const [cancellingJobId, setCancellingJobId] = useState<number | null>(null)
+  const cancellingRef = useRef<number | null>(null)
+  const pollVersion = useRef(0)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSearch, setTemplateSearch] = useState('')
@@ -829,13 +832,14 @@ export default function ImageStudio() {
     let cancelled = false
     let polling = false
     const timer = window.setInterval(async () => {
-      if (polling || document.visibilityState !== 'visible') return
+      const version = pollVersion.current
+      if (polling || cancellingRef.current === currentJob.id || document.visibilityState !== 'visible') return
       polling = true
       try {
         const res = await api.getImageJob(currentJob.id, {
           includeCache: false,
         })
-        if (cancelled) return
+        if (cancelled || version !== pollVersion.current) return
         setCurrentJob(res.job)
         if (!['queued', 'running'].includes(res.job.status)) {
           await Promise.all([loadJobs(), loadAssets(), loadTemplates(), loadHistoryJobs()])
@@ -846,6 +850,35 @@ export default function ImageStudio() {
     }, 4000)
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [currentJob, loadAssets, loadHistoryJobs, loadJobs, loadTemplates])
+
+  const cancelJob = async (job: ImageGenerationJob) => {
+    if (cancellingRef.current !== null) return
+    cancellingRef.current = job.id
+    pollVersion.current++
+    setCancellingJobId(job.id)
+    try {
+      let updated: ImageGenerationJob
+      try {
+        const result = await api.cancelImageJob(job.id)
+        if (result?.status !== 'cancelled') throw new Error(t('images.cancelUnexpected'))
+        updated = { ...job, status: 'cancelled' }
+        showToast(t('images.cancelNotice'), 'success')
+      } catch (err) {
+        if (!(err instanceof AdminAPIError) || err.status !== 409) throw err
+        updated = (await api.getImageJob(job.id)).job
+        showToast(t('images.cancelAlreadyFinished'), 'error')
+      }
+      setCurrentJob(prev => prev?.id === job.id ? updated : prev)
+      setJobs(prev => prev.map(item => item.id === job.id ? { ...item, ...updated } : item))
+      setHistoryJobs(prev => prev.map(item => item.id === job.id ? { ...item, ...updated } : item))
+      void Promise.all([loadJobs(), loadHistoryJobs()]).catch(() => {})
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t('images.cancelFailed'), 'error')
+    } finally {
+      cancellingRef.current = null
+      setCancellingJobId(null)
+    }
+  }
 
   const promptForAsset = useCallback((asset: ImageAsset) => {
     const job = [...jobs, ...historyJobs].find(item => item.id === asset.job_id)
@@ -1603,6 +1636,8 @@ export default function ImageStudio() {
   const studioCanvas = (
     <StudioCanvas
       currentJob={currentJob}
+      cancelling={cancellingJobId === currentJob?.id}
+      onCancel={() => currentJob && void cancelJob(currentJob)}
       latestAsset={latestAsset}
       imageURL={latestAsset ? assetPreviewURL(latestAsset, assetURLs) : undefined}
       prompt={currentJob?.prompt || (latestAsset ? promptForAsset(latestAsset) : '')}
@@ -1973,6 +2008,8 @@ function ImageStudioTabs({ activeView }: { activeView: ImageView }) {
 
 function StudioCanvas({
   currentJob,
+  cancelling,
+  onCancel,
   latestAsset,
   imageURL,
   prompt,
@@ -1985,6 +2022,8 @@ function StudioCanvas({
   onDelete,
 }: {
   currentJob: ImageGenerationJob | null
+  cancelling: boolean
+  onCancel: () => void
   latestAsset?: ImageAsset
   imageURL?: string
   prompt: string
@@ -2058,6 +2097,8 @@ function StudioCanvas({
               </div>
             </div>
             <p className="line-clamp-2 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">{prompt}</p>
+            <Button type="button" variant="destructive" onClick={onCancel} disabled={cancelling}>{t('images.cancelTask')}</Button>
+            <p className="text-center text-xs text-muted-foreground">{t('images.cancelNotice')}</p>
           </div>
         )}
 
@@ -2072,7 +2113,7 @@ function StudioCanvas({
 
         {currentJob && !busy && !failed && !hasResult && (
           <div className="flex flex-col items-center gap-3 py-8 text-xs text-muted-foreground" role="status">
-            {latestAsset ? <><Loader2 className="size-5 animate-spin" />{t('images.workspace.loadingImage')}</> : <><ImageIcon className="size-6" />{t('images.noAssets')}</>}
+            {currentJob.status === 'cancelled' ? t('images.status.cancelled') : latestAsset ? <><Loader2 className="size-5 animate-spin" />{t('images.workspace.loadingImage')}</> : <><ImageIcon className="size-6" />{t('images.noAssets')}</>}
           </div>
         )}
 

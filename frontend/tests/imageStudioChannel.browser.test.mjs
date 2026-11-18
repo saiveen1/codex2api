@@ -43,7 +43,7 @@ before(async () => {
 })
 after(async () => { await browser?.close() })
 
-async function fixture(t, { webKey = true, serviceReady = true, portal = false, metadataReady = false, modelAllow = null, viewport = { width: 1440, height: 1000 } } = {}) {
+async function fixture(t, { webKey = true, serviceReady = true, portal = false, metadataReady = false, modelAllow = null, cancelMode = '', viewport = { width: 1440, height: 1000 } } = {}) {
   const page = await browser.newPage({ viewport })
   page.setDefaultTimeout(5000)
   const errors = []
@@ -52,11 +52,13 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
   t.after(() => page.close())
   await page.route('http://image.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }))
   await page.goto('http://image.test/')
-  await page.evaluate(({ webKey, serviceReady, portal, metadataReady, modelAllow }) => {
+  await page.evaluate(({ webKey, serviceReady, portal, metadataReady, modelAllow, cancelMode }) => {
     localStorage.setItem('lang', 'zh')
     if (portal) localStorage.setItem('codex2api_image_studio_api_key', JSON.stringify({ key: 'sk-synthetic-web', remember: true }))
     window.__portal = portal
     window.__submissions = []
+    window.__cancels = []
+    let job = null
     const keys = [
       { id: 10, name: 'native-fixture', key: 'sk-native***', limits: { upstream_channel: 'codex' } },
       { id: 30, name: 'grok-fixture', key: 'sk-grok***', limits: { upstream_channel: 'grok' } },
@@ -65,7 +67,14 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
     window.fetch = async (url, options = {}) => {
       const pathname = new URL(String(url), location.origin).pathname
       let body = {}, status = 200
-      if (pathname === '/api/admin/keys') body = { keys }
+      if (cancelMode && pathname.endsWith('/jobs/42/cancel')) {
+        window.__cancels.push({ pathname, authorization: new Headers(options.headers).get('Authorization'), method: options.method })
+        await new Promise(resolve => { window.__releaseCancel = resolve })
+        if (cancelMode === 'conflict') { status = 409; job = { ...job, status: 'succeeded' }; body = { error: 'already finished' } }
+        else if (cancelMode === 'error') { status = 500; body = { error: 'synthetic cancel error' } }
+        else { job = { ...job, status: 'cancelled' }; body = { status: 'cancelled' } }
+      } else if (cancelMode && pathname.endsWith('/jobs/42')) body = { job }
+      else if (pathname === '/api/admin/keys') body = { keys }
       else if (pathname === '/api/admin/chatgpt-web') body = { enabled: serviceReady, configured: serviceReady, supported_models: ['gpt-image-2', 'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.6', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst'], protocol_version: 'fixture' }
       else if (pathname === '/api/admin/image-prompts') body = { templates: [] }
       else if (pathname.endsWith('/assets')) body = { assets: [], total: 0 }
@@ -77,12 +86,13 @@ async function fixture(t, { webKey = true, serviceReady = true, portal = false, 
       else if (pathname.endsWith('/jobs') || pathname.endsWith('/edit-jobs')) {
         if (options.method === 'POST') {
           window.__submissions.push(JSON.parse(options.body))
-          body = { job: { id: 1, status: 'failed', error: 'Synthetic terminal result', outputs: [], prompt: 'synthetic', model: 'gpt-image-2', created_at: '2026-01-01T00:00:00Z' } }
-        } else body = { jobs: [], total: 0 }
+          job = cancelMode ? { id: 42, status: cancelMode === 'queued' ? 'queued' : 'running', prompt: 'synthetic', assets: [], created_at: '2026-01-01T00:00:00Z' } : { id: 1, status: 'failed', error: 'Synthetic terminal result', outputs: [], prompt: 'synthetic', model: 'gpt-image-2', created_at: '2026-01-01T00:00:00Z' }
+          body = { job }
+        } else body = { jobs: cancelMode && job ? [job] : [], total: cancelMode && job ? 1 : 0 }
       } else if (options.method && options.method !== 'GET') throw new Error('Unexpected write: ' + pathname)
       return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
     }
-  }, { webKey, serviceReady, portal, metadataReady, modelAllow })
+  }, { webKey, serviceReady, portal, metadataReady, modelAllow, cancelMode })
   await page.addStyleTag({ content: css })
   await page.addScriptTag({ content: script })
   return page
@@ -172,3 +182,27 @@ test('Web portal exposes only the current key model allowlist and preserves its 
   await page.waitForFunction(() => window.__submissions.length === 1)
   assert.equal(await page.evaluate(() => window.__submissions[0].model), 'gpt-image-2.5-sunburst')
 })
+
+for (const portal of [false, true]) {
+  for (const mode of ['queued', 'success', 'conflict', 'error']) {
+    test(`cancel ${portal ? 'portal' : 'admin'}: ${mode}`, async t => {
+      const page = await fixture(t, { portal, metadataReady: true, cancelMode: mode })
+      await page.locator(portal ? 'textarea' : '#image-studio-prompt').first().fill('synthetic')
+      await page.locator(portal ? '.portal-generate' : '.studio-submit-button').click()
+      const stop = page.getByRole('button', { name: '终止任务', exact: true })
+      await stop.waitFor()
+      await stop.click()
+      await page.waitForFunction(() => window.__cancels.length === 1)
+      assert.equal(await stop.isDisabled(), true)
+      const calls = await page.evaluate(() => window.__cancels)
+      assert.equal(calls[0].pathname, portal ? '/api/image-studio/jobs/42/cancel' : '/api/admin/images/jobs/42/cancel')
+      assert.equal(calls[0].method, 'POST')
+      if (portal) assert.equal(calls[0].authorization, 'Bearer sk-synthetic-web')
+      await page.evaluate(() => window.__releaseCancel())
+      if (mode === 'success' || mode === 'queued') await page.getByText('已终止', { exact: true }).first().waitFor()
+      if (mode === 'conflict') await page.getByText('已完成', { exact: true }).first().waitFor()
+      if (mode === 'error') { await page.getByText('synthetic cancel error').first().waitFor(); assert.equal(await stop.isEnabled(), true) }
+      assert.equal(await page.evaluate(() => window.__cancels.length), 1)
+    })
+  }
+}

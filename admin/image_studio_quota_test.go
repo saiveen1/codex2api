@@ -30,6 +30,8 @@ func TestPortalQuotaReadAndGenerationBoundaries(t *testing.T) {
 			h := NewHandler(store, db, tc, nil, "admin-secret")
 			if withProxy {
 				h.imageProxy = proxy.NewHandler(store, db, nil, nil)
+			} else {
+				h.imageProxy = nil
 			}
 			settings := &database.SystemSettings{PublicImageStudioPageEnabled: true, PublicKeyUsagePageEnabled: false}
 			if err := db.UpdateSystemSettings(ctx, settings); err != nil {
@@ -61,7 +63,7 @@ func TestPortalQuotaReadAndGenerationBoundaries(t *testing.T) {
 			limitedID := seed("sk-quota-owner", 10, 1.25, sql.NullTime{})
 			seed("sk-quota-other", 100, 50, sql.NullTime{})
 			seed("sk-quota-unlimited", 0, 42, sql.NullTime{})
-			seed("sk-quota-exhausted", 10, 12, sql.NullTime{})
+			exhaustedID := seed("sk-quota-exhausted", 10, 12, sql.NullTime{})
 			seed("sk-quota-expired", 10, 3, sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true})
 			disabledID := seed("sk-quota-disabled", 10, 0, sql.NullTime{})
 			if err := db.UpdateAPIKey(ctx, disabledID, database.APIKeyUpdate{EnabledSet: true, Enabled: false}); err != nil {
@@ -141,6 +143,23 @@ func TestPortalQuotaReadAndGenerationBoundaries(t *testing.T) {
 					t.Fatalf("exhausted key write status = %d: %s", rec.Code, rec.Body)
 				}
 			}
+			jobID, err := db.InsertImageGenerationJob(ctx, database.ImageGenerationJobInput{APIKeyID: exhaustedID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancelPath := fmt.Sprintf("/api/image-studio/jobs/%d/cancel", jobID)
+			for _, test := range []struct {
+				key  string
+				want int
+			}{
+				{"", 401}, {"sk-quota-disabled", 401}, {"sk-quota-expired", 401}, {"sk-quota-other", 404},
+				{"sk-quota-exhausted", 200}, {"sk-quota-exhausted", 200}, {"sk-quota-other", 404},
+			} {
+				rec := request(http.MethodPost, cancelPath, test.key)
+				if rec.Code != test.want || (rec.Code == 200 && rec.Body.String() != `{"status":"cancelled"}`) {
+					t.Fatalf("cancel: %d %s, want %d", rec.Code, rec.Body, test.want)
+				}
+			}
 			if withProxy {
 				if rec := request(http.MethodGet, "/standard-auth", "sk-quota-exhausted"); rec.Code != http.StatusTooManyRequests {
 					t.Fatalf("standard auth bypassed quota: %d", rec.Code)
@@ -155,6 +174,9 @@ func TestPortalQuotaReadAndGenerationBoundaries(t *testing.T) {
 			}
 			if rec := request(http.MethodGet, "/api/image-studio/quota", "sk-quota-owner"); rec.Code != http.StatusNotFound {
 				t.Fatalf("disabled image portal status = %d", rec.Code)
+			}
+			if rec := request(http.MethodPost, cancelPath, "sk-quota-exhausted"); rec.Code != http.StatusNotFound {
+				t.Fatalf("disabled portal cancel: %d", rec.Code)
 			}
 		})
 	}

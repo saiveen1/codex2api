@@ -40,7 +40,7 @@ func TestChatGPTWebJobSnapshotAndIndexedBatch(t *testing.T) {
 		t.Fatal("output IDs not stable and distinct")
 	}
 	var indexes []int
-	body, _, notes, err := runImageJobBatchIndexed(4, true, func(i int) ([]byte, int, error) {
+	body, _, notes, err := runImageJobBatchIndexed(context.Background(), 4, true, func(i int) ([]byte, int, error) {
 		indexes = append(indexes, i)
 		if i == 1 {
 			return nil, 502, errors.New("unknown")

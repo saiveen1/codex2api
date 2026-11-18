@@ -6413,6 +6413,11 @@
     "canvasEmptyDesc": "Enter a prompt above, pick model and style, then generate — results appear here.",
     "canvasGenerating": "Painting…",
     "canvasQueued": "Waiting in queue…",
+    "cancelTask": "Stop task",
+    "cancelNotice": "Requests already submitted upstream may still run.",
+    "cancelFailed": "Failed to stop task",
+    "cancelUnexpected": "Unexpected cancellation response; refresh the task status.",
+    "cancelAlreadyFinished": "The task has already finished; its actual status was refreshed.",
     "canvasGeneratingHint": "Hang tight — the result will show up here",
     "elapsedSeconds": "{{seconds}}s elapsed",
     "canvasFailed": "Generation failed",
@@ -6468,6 +6473,7 @@
     "loadFailed": "Failed to load image studio",
     "status": {
       "queued": "Queued",
+      "cancelled": "Cancelled",
       "running": "Running",
       "succeeded": "Succeeded",
       "failed": "Failed"

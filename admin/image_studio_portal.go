@@ -19,6 +19,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Cancellation needs identity, not generation quota or an execution slot.
+func portalImageIdentityOnly(c *gin.Context) bool {
+	return c.Request.Method == http.MethodGet || proxy.IsStudioImageJobCancel(c)
+}
+
 // imageStudioPortalAuthMiddleware gates the public Image Studio portal:
 // page must be enabled, and the request must present a valid API key.
 // When imageProxy is available, reuse /v1 auth so limits/concurrency context is set.
@@ -43,7 +48,7 @@ func (h *Handler) imageStudioPortalAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 		if h.imageProxy != nil {
-			if c.Request.Method == http.MethodGet {
+			if portalImageIdentityOnly(c) {
 				h.imageProxy.APIKeyReadAuthMiddleware()(c)
 				return
 			}
@@ -87,7 +92,7 @@ func (h *Handler) portalAPIKeyAuthFallback() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if row.IsQuotaExhausted() && c.Request.Method != http.MethodGet {
+		if row.IsQuotaExhausted() && !portalImageIdentityOnly(c) {
 			writeError(c, http.StatusForbidden, "API Key 配额已用尽")
 			c.Abort()
 			return

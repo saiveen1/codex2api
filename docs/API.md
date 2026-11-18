@@ -2690,6 +2690,12 @@ data: {"type":"progress","proxy_id":1,"current":1,"total":3,"success":1,"result"
 
 获取单个生图任务详情及结果。
 
+#### POST /api/admin/images/jobs/:id/cancel
+
+终止正在排队或运行的生图任务，保留任务历史。管理端使用管理员鉴权；Key 工作台使用 `POST /api/image-studio/jobs/:id/cancel`，仅可终止所属 Key 的任务。
+
+成功（含重复终止）返回 `200 {"status":"cancelled"}`。已成功或已失败返回 `409`，应重新读取实际结果；任务不存在或不属于当前 Key 返回 `404`。终止会停止本地等待和后续重试，不能保证已提交上游的请求被撤回，也不代表上游退还额度。
+
 #### DELETE /api/admin/images/jobs/:id
 
 删除一个生图任务及其关联的所有图库资产。

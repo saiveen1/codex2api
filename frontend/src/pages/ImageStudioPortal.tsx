@@ -33,7 +33,7 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { api } from '../api'
+import { api, AdminAPIError } from '../api'
 import { DEFAULT_SITE_LOGO, useBranding } from '../branding'
 import Pagination from '../components/Pagination'
 import type { CreateImageJobPayload, ImageAsset, ImageGenerationJob, ImageStudioQuota } from '../types'
@@ -301,6 +301,9 @@ export default function ImageStudioPortal() {
   const [galleryPickerConfirming, setGalleryPickerConfirming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [currentJob, setCurrentJob] = useState<ImageGenerationJob | null>(null)
+  const [cancellingJobId, setCancellingJobId] = useState<number | null>(null)
+  const cancellingRef = useRef<number | null>(null)
+  const pollVersion = useRef(0)
   const [previewAsset, setPreviewAsset] = useState<ImageAsset | null>(null)
   const [previewPrompt, setPreviewPrompt] = useState('')
   const [toast, setToast] = useState('')
@@ -464,11 +467,12 @@ export default function ImageStudioPortal() {
     let cancelled = false
     let polling = false
     const timer = window.setInterval(async () => {
-      if (polling || document.visibilityState !== 'visible') return
+      const version = pollVersion.current
+      if (polling || cancellingRef.current === currentJob.id || document.visibilityState !== 'visible') return
       polling = true
       try {
         const res = await api.getPortalImageJob(activeAPIKey, currentJob.id, { includeCache: false })
-        if (cancelled) return
+        if (cancelled || version !== pollVersion.current) return
         setCurrentJob(res.job)
         if (!['queued', 'running'].includes(res.job.status)) {
           void loadHistory(activeAPIKey, 1)
@@ -743,6 +747,35 @@ export default function ImageStudioPortal() {
       void refreshQuota()
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const cancelJob = async (job: ImageGenerationJob) => {
+    if (!activeAPIKey || cancellingRef.current !== null) return
+    const key = activeAPIKey
+    cancellingRef.current = job.id
+    pollVersion.current++
+    setCancellingJobId(job.id)
+    try {
+      let updated: ImageGenerationJob
+      try {
+        const result = await api.cancelPortalImageJob(key, job.id)
+        if (result?.status !== 'cancelled') throw new Error(t('images.cancelUnexpected'))
+        updated = { ...job, status: 'cancelled' }
+        showToast(t('images.cancelNotice'))
+      } catch (err) {
+        if (!(err instanceof AdminAPIError) || err.status !== 409) throw err
+        updated = (await api.getPortalImageJob(key, job.id)).job
+        showToast(t('images.cancelAlreadyFinished'))
+      }
+      setCurrentJob(prev => prev?.id === job.id ? updated : prev)
+      setHistoryJobs(prev => prev.map(item => item.id === job.id ? { ...item, ...updated } : item))
+      void loadHistory(key, 1, RECENT_JOB_COUNT)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t('images.cancelFailed'))
+    } finally {
+      cancellingRef.current = null
+      setCancellingJobId(null)
     }
   }
 
@@ -1273,8 +1306,12 @@ export default function ImageStudioPortal() {
                         </div>
                         <div className="text-sm font-medium">{statusLabel(currentJob.status)}</div>
                         <div className="text-xs text-muted-foreground">{t('imageStudioPortal.design.runningHint')}</div>
+                        <Button type="button" variant="destructive" onClick={() => void cancelJob(currentJob)} disabled={cancellingJobId === currentJob.id}>{t('images.cancelTask')}</Button>
+                        <div className="text-center text-xs text-muted-foreground">{t('images.cancelNotice')}</div>
                       </div>
                     </div>
+                  ) : currentJob.status === 'cancelled' ? (
+                    <div className="text-sm text-muted-foreground" role="status">{t('images.status.cancelled')} · {t('images.cancelNotice')}</div>
                   ) : currentJob.status === 'failed' ? (
                     <div className="flex max-w-md flex-col items-center gap-3 px-2 text-center animate-image-studio-fade-in">
                       <div className="rounded-2xl border border-destructive/25 bg-destructive/10 px-5 py-3.5 animate-image-studio-shake">

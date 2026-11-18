@@ -211,6 +211,9 @@ func prepareQueueInputs(req *imageGenerationJobPayload) (err error) {
 func loadQueueInputs(ctx context.Context, req *imageGenerationJobPayload) error {
 	remaining := queueInputBudget
 	for i, value := range req.InputImages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var data []byte
 		var err error
 		if strings.HasPrefix(value, queueInputPrefix) {
@@ -397,7 +400,7 @@ func (h *Handler) runClaimedImageJob(ctx context.Context, id int64, owner string
 	if release != nil {
 		defer release()
 	}
-	jobCtx, cancel := context.WithCancel(ctx)
+	jobCtx, cancel := h.trackImageJob(ctx, id, owner)
 	defer cancel()
 	done := make(chan struct{})
 	defer close(done)
@@ -436,6 +439,9 @@ func (h *Handler) runClaimedImageJob(ctx context.Context, id int64, owner string
 	job, err := h.db.GetImageGenerationJob(jobCtx, id)
 	if err != nil {
 		fail(err)
+		return
+	}
+	if job.Status != database.ImageJobRunning {
 		return
 	}
 	var req imageGenerationJobPayload

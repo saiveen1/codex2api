@@ -185,7 +185,7 @@ func TestImageJobJPEGFallbackDecision(t *testing.T) {
 
 func TestRunImageJobBatchAggregatesSuccessfulOutputs(t *testing.T) {
 	var calls int
-	response, status, partialErrors, err := runImageJobBatch(3, func() ([]byte, int, error) {
+	response, status, partialErrors, err := runImageJobBatch(context.Background(), 3, func() ([]byte, int, error) {
 		calls++
 		if calls == 2 {
 			return nil, http.StatusGatewayTimeout, fmt.Errorf("timeout")
@@ -215,7 +215,7 @@ func TestRunImageJobBatchAggregatesSuccessfulOutputs(t *testing.T) {
 	}
 
 	calls = 0
-	response, status, partialErrors, err = runImageJobBatch(3, func() ([]byte, int, error) {
+	response, status, partialErrors, err = runImageJobBatch(context.Background(), 3, func() ([]byte, int, error) {
 		calls++
 		if calls == 3 {
 			return nil, http.StatusGatewayTimeout, fmt.Errorf("final timeout")

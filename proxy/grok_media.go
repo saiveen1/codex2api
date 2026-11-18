@@ -351,6 +351,9 @@ func sendGrokMediaWithProfiles(ctx context.Context, account *auth.Account, proxy
 		return grokMediaSendResult{}, ErrNoAvailableAccount()
 	}
 	for idx, profile := range profiles {
+		if err := checkImageJobAttempt(ctx); err != nil {
+			return grokMediaSendResult{}, err
+		}
 		body, model := buildBody(profile)
 		resp, err := executeHTTPWithContinuousRetryKeepalive(ctx, func() (*http.Response, error) {
 			return doGrokMediaRequest(ctx, account, profile, proxyURL, method, suffix, body, downstreamHeaders, model, nil)
