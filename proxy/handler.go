@@ -9140,8 +9140,10 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 			return codex429Decision{}
 		}
 
-		if h.store.NotifyOAuthRecoveryUnauthorized(account, statusCode, body) {
+		if h.store.OAuthRecoveryProtected(account.ID()) {
 			h.store.MarkCooldownWithError(account, 5*time.Minute, "unauthorized", upstreamAccountErrorMessage(statusCode, body))
+			// The recovery worker requires the unauthorized state before refreshing.
+			h.store.NotifyOAuthRecoveryUnauthorized(account, statusCode, body)
 			return codex429Decision{}
 		}
 

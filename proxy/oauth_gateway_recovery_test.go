@@ -13,28 +13,35 @@ import (
 )
 
 func TestOAuthRecovery401CleanupIntegration(t *testing.T) {
-	for _, optIn := range []bool{false, true} {
-		store := auth.NewStore(nil, nil, nil)
-		store.SetAutoCleanUnauthorized(true)
-		account := &auth.Account{DBID: 42, AccessToken: "synthetic-at", RefreshToken: "synthetic-rt", Status: auth.StatusReady, CredentialGeneration: 1}
-		store.AddAccount(account)
-		signals := 0
-		if optIn {
-			store.SetOAuthRecoveryHooks(&auth.OAuthRecoveryHooks{Enabled: func(id int64) bool { return id == 42 }, Signal: func(id, generation int64, refresh bool) {
-				if !refresh || generation != 1 {
-					t.Error("401 must first refresh original token")
+	for _, code := range []string{"token_expired", "token_revoked"} {
+		t.Run(code, func(t *testing.T) {
+			for _, optIn := range []bool{false, true} {
+				store := auth.NewStore(nil, nil, nil)
+				store.SetAutoCleanUnauthorized(true)
+				account := &auth.Account{DBID: 42, AccessToken: "synthetic-at", RefreshToken: "synthetic-rt", Status: auth.StatusReady, CredentialGeneration: 1}
+				store.AddAccount(account)
+				signals := 0
+				if optIn {
+					store.SetOAuthRecoveryHooks(&auth.OAuthRecoveryHooks{Enabled: func(id int64) bool { return id == 42 }, Signal: func(id, generation int64, refresh bool) {
+						if !refresh || generation != 1 {
+							t.Error("401 must first refresh original token")
+						}
+						if account.CooldownReason != "unauthorized" {
+							t.Error("recovery signaled before unauthorized state was applied")
+						}
+						signals++
+					}})
 				}
-				signals++
-			}})
-		}
-		h := &Handler{store: store}
-		h.applyCooldown(account, http.StatusUnauthorized, []byte(`{"error":{"code":"token_expired"}}`), nil)
-		if (store.FindByID(42) != nil) != optIn {
-			t.Fatal("401 cleanup guard not respected")
-		}
-		if optIn && signals != 1 {
-			t.Fatal("true 401 not queued")
-		}
+				h := &Handler{store: store}
+				h.applyCooldown(account, http.StatusUnauthorized, []byte(`{"error":{"code":"`+code+`"}}`), nil)
+				if (store.FindByID(42) != nil) != optIn {
+					t.Fatal("401 cleanup guard not respected")
+				}
+				if optIn && signals != 1 {
+					t.Fatal("true 401 not queued")
+				}
+			}
+		})
 	}
 }
 

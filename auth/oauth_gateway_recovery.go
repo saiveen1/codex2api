@@ -50,7 +50,7 @@ func IsOAuthRecoveryUnauthorized(status int, body []byte) bool {
 		return false
 	}
 	switch response.Error.Code {
-	case "token_expired", "token_invalidated", "invalid_token", "invalid_access_token", "access_token_expired", "session_expired", "session_invalidated":
+	case "token_expired", "token_invalidated", "token_revoked", "invalid_token", "invalid_access_token", "access_token_expired", "session_expired", "session_invalidated":
 		return true
 	}
 	return false
