@@ -6943,7 +6943,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		policy := h.codexAttemptPolicy(c, nil, account)
 		upstreamCtx := policy.withContext(c.Request.Context())
 		serviceTier := clientTier
-		if policy.forceFast {
+		if policy.forcesFast() {
 			serviceTier = "priority"
 		}
 		upstreamEndpointLabel := "/v1/responses/compact"

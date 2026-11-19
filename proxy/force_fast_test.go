@@ -71,7 +71,7 @@ func TestForceFastDispatchAndAccounting(t *testing.T) {
 				}
 			}
 		}
-		if h.codexAttemptPolicy(c, nil, &auth.Account{UpstreamType: auth.UpstreamGrok, APIKey: "test"}).forceFast {
+		if h.codexAttemptPolicy(c, nil, &auth.Account{UpstreamType: auth.UpstreamGrok, APIKey: "test"}).forcesFast() {
 			t.Fatal("Codex tier policy leaked to a relay account")
 		}
 	}
@@ -85,16 +85,47 @@ func TestForceFastReevaluatesSelectedAccount(t *testing.T) {
 	store.AddAccount(other)
 	store.SetGroupForceFast(7, true)
 	base := &PayloadRuleIdentity{APIKeyID: 9, GroupIDs: []int64{7}}
-	if !h.codexAttemptPolicy(nil, nil, groupAccount).forceFast || h.codexAttemptPolicy(nil, base, other).forceFast {
+	if !h.codexAttemptPolicy(nil, nil, groupAccount).forcesFast() || h.codexAttemptPolicy(nil, base, other).forcesFast() {
 		t.Fatal("match any actual account group, not the groups a key is allowed to use")
 	}
 	store.ApplyAccountForceFast(other.DBID, true)
 	store.SetGroupForceFast(7, false)
-	if h.codexAttemptPolicy(nil, base, groupAccount).forceFast || !h.codexAttemptPolicy(nil, nil, other).forceFast {
+	if h.codexAttemptPolicy(nil, base, groupAccount).forcesFast() || !h.codexAttemptPolicy(nil, nil, other).forcesFast() {
 		t.Fatal("a retry must use the selected account's own current settings")
 	}
 	store.ApplyAccountForceFast(other.DBID, false)
-	if h.codexAttemptPolicy(nil, base, other).forceFast {
+	if h.codexAttemptPolicy(nil, base, other).forcesFast() {
 		t.Fatal("disabling the last scope must restore normal tier selection")
+	}
+}
+
+func TestForceFastPrecedence(t *testing.T) {
+	withPayloadRules(t, `{"override":[{"params":{"service_tier":"ultrafast"}}]}`)
+	store := auth.NewStore(nil, nil, nil)
+	h := &Handler{store: store}
+	account := &auth.Account{DBID: 1, GroupIDs: []int64{2, 7}}
+	store.AddAccount(account)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"gpt-test","service_tier":"default"}`)
+	for _, tc := range []struct {
+		key, group, account  bool
+		wantSource, wantTier string
+	}{
+		{false, false, false, "", "ultrafast"},
+		{false, false, true, "account", "priority"},
+		{false, true, false, "group", "priority"},
+		{false, true, true, "group", "priority"},
+		{true, false, false, "key", "priority"},
+		{true, false, true, "key", "priority"},
+		{true, true, false, "key", "priority"},
+		{true, true, true, "key", "priority"},
+	} {
+		c.Set(contextAPIKeyRow, &database.APIKeyRow{ID: 1, Limits: database.APIKeyLimits{ForceFast: tc.key}})
+		store.SetGroupForceFast(7, tc.group)
+		store.ApplyAccountForceFast(account.DBID, tc.account)
+		policy := h.codexAttemptPolicy(c, nil, account)
+		if tier := policy.requestedTier(body, "gpt-test", nil); policy.forceFastSource != tc.wantSource || tier != tc.wantTier {
+			t.Errorf("key=%t group=%t account=%t: source=%q tier=%q, want %q %q", tc.key, tc.group, tc.account, policy.forceFastSource, tier, tc.wantSource, tc.wantTier)
+		}
 	}
 }

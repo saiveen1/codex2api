@@ -69,7 +69,7 @@ Messages→Codex 的服务端 `web_search` 使用官方 Codex `/alpha/search`，
 
 **Service Tier 语义说明**：请求侧 `fast` / `priority` 会统一以 `priority` 转发上游，其余取值（`auto`/`default`/`flex`/`scale` 等）不转发。用量日志区分三个字段：`requested_service_tier`（客户端请求意图）、`actual_service_tier`（上游回传 Tier，原样取自 `response.completed.response.service_tier`）、`billing_service_tier`（计费采用值，由 Tier 计费策略 `BillingTierPolicy` 决定）。默认 `actual` 以请求 Tier 为上限：上游只可用更便宜档位降低计费，不能把未请求 Fast 的调用抬升为 Fast，也不能用未知档位改变计费；`requested` 始终按请求意图计费。注意：在 ChatGPT OAuth / Codex backend 路径上，Fast 由上游服务端路由处理，`service_tier` 不是端到端可校验字段——上游回传 `default` 并不代表 Fast 未生效（openai/codex#14204 官方说明；#494 的交错 A/B 实测在回传 `default` 时仍有约 1.5× 生成吞吐提升）。因此"上游回传 Tier"仅反映上游申报值，不能单独用于判断加速是否生效。
 
-**管理端「强制 Fast」**：在 Codex 账号、账号分组或 API Key 上开启。账号和分组使用 `force_fast`，Key 使用 `limits.force_fast`，默认均为 `false`。向官方 Codex 发送模型请求时，若 Key、实际选中的账号或该账号所属的任一分组开启，网关在普通 payload 规则之后将 `service_tier` 固定为 `priority`。重试换号会重新判断；Key 仅被允许使用某个分组并不算命中。全部关闭时不改写客户端或已有规则的选择，也不会强制降级。用量记录按最终请求档位归因，上游回传档位仍如实记录；此开关不适用于第三方中继。
+**管理端「强制 Fast」**：账号和分组使用 `force_fast`，API Key 使用 `limits.force_fast`，均为布尔值：`false` 表示「透传」（默认），`true` 表示「强制」。发往官方 Codex 的模型请求依次检查 **API Key → 分组 → 账号**，透传就继续，首个强制项生效。分组只看实际选中的账号所属的组，任一组强制即命中；重试换号时重新判断。命中后，网关在普通 payload 规则之后将 `service_tier` 固定为 `priority`；全部透传时，不额外改写档位，客户端和已有规则照常生效。用量仍按最终请求及上游实际回传的档位记录；第三方中继不受影响。
 
 **Base URL:** `http://localhost:8080` (默认端口)
 

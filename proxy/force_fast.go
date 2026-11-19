@@ -9,11 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Snapshot both settings for this attempt: retries can select a different account/group.
-// The force flag is independent of payload rule identity (which is nil for anonymous requests).
+// An attempt can select a different account/group on retry.
 type codexAttemptPolicy struct {
-	identity  *PayloadRuleIdentity
-	forceFast bool
+	identity        *PayloadRuleIdentity
+	forceFastSource string
 }
 
 func (h *Handler) codexAttemptPolicy(c *gin.Context, base *PayloadRuleIdentity, account *auth.Account) codexAttemptPolicy {
@@ -22,23 +21,34 @@ func (h *Handler) codexAttemptPolicy(c *gin.Context, base *PayloadRuleIdentity, 
 		return p
 	}
 	key := apiKeyRowFromContext(c)
-	p.forceFast = (key != nil && key.Limits.ForceFast) || account.IsForceFast() ||
-		(h.store != nil && h.store.GroupsForceFast(account.GroupIDSnapshot()))
+	// Passthrough continues to the next scope; it never vetoes Force Fast.
+	switch {
+	case key != nil && key.Limits.ForceFast:
+		p.forceFastSource = "key"
+	case h.store != nil && h.store.GroupsForceFast(account.GroupIDSnapshot()):
+		p.forceFastSource = "group"
+	case account.IsForceFast():
+		p.forceFastSource = "account"
+	}
 	return p
+}
+
+func (p codexAttemptPolicy) forcesFast() bool {
+	return p.forceFastSource != ""
 }
 
 type forcedFastKey struct{}
 
 func (p codexAttemptPolicy) withContext(ctx context.Context) context.Context {
 	ctx = WithPayloadRuleIdentity(ctx, p.identity)
-	if p.forceFast {
+	if p.forcesFast() {
 		ctx = context.WithValue(ctx, forcedFastKey{}, true)
 	}
 	return ctx
 }
 
 func (p codexAttemptPolicy) requestedTier(body []byte, model string, headers http.Header) string {
-	if p.forceFast {
+	if p.forcesFast() {
 		return "priority"
 	}
 	return EffectiveRequestedServiceTier(body, model, headers, p.identity)
