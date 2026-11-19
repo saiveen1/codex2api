@@ -25,6 +25,7 @@ import {
   type ProxyBindingContext,
 } from "../lib/accountProxyBinding";
 import Modal from "../components/Modal";
+import ForceFastHelp from "../components/ForceFastHelp";
 import ChannelLogo from "../components/ChannelLogo";
 import { useVisibleChannels } from "../visibleChannels";
 import ModelLogo from "../components/ModelLogo";
@@ -10395,7 +10396,10 @@ export default function Accounts() {
                         {isCodexOfficialAccount(editingAccount) ? (
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
                             <div className="flex items-center justify-between gap-4">
-                              <span className="text-sm font-semibold" id="account-force-fast">{t("forceFast.label")}</span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-sm font-semibold" id="account-force-fast">{t("forceFast.label")}</span>
+                                <ForceFastHelp />
+                              </div>
                               <Switch aria-labelledby="account-force-fast" checked={editForceFast} onCheckedChange={setEditForceFast} />
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>
@@ -11507,7 +11511,10 @@ export default function Accounts() {
                   {groupDraft.channel === "codex" ? (
                     <div className="rounded-xl border border-border/70 bg-card p-4">
                       <div className="flex items-center justify-between gap-4">
-                        <span className="text-sm font-semibold" id="group-force-fast">{t("forceFast.label")}</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm font-semibold" id="group-force-fast">{t("forceFast.label")}</span>
+                          <ForceFastHelp />
+                        </div>
                         <Switch aria-labelledby="group-force-fast" checked={groupDraft.forceFast} onCheckedChange={(forceFast) => setGroupDraft((draft) => ({ ...draft, forceFast }))} />
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>

@@ -19,6 +19,7 @@ import APIKeyModelRequestLimitsEditor from "../components/APIKeyModelRequestLimi
 import APIKeyModelRequestUsageCard from "../components/APIKeyModelRequestUsage";
 import ChipInput from "../components/ChipInput";
 import Modal from "../components/Modal";
+import ForceFastHelp from "../components/ForceFastHelp";
 import ChannelLogo from "../components/ChannelLogo";
 import PageHeader from "../components/PageHeader";
 import { SegmentedTabs } from "../components/SegmentedTabs";
@@ -2316,7 +2317,7 @@ export default function APIKeys() {
               />
             ) : null}
             {supportsChatGPTLive(createForm.limits.upstreamChannel) ? (
-              <LimitSwitchField label={t("forceFast.label")} hint={t("forceFast.hint")} checked={createForm.limits.forceFast} onCheckedChange={(forceFast) => updateCreateForm({ limits: { ...createForm.limits, forceFast } })} />
+              <LimitSwitchField label={t("forceFast.label")} help={<ForceFastHelp />} hint={t("forceFast.hint")} checked={createForm.limits.forceFast} onCheckedChange={(forceFast) => updateCreateForm({ limits: { ...createForm.limits, forceFast } })} />
             ) : null}
             <LimitSwitchField
               label={t("apiKeys.limits.externalScheduler")}
@@ -2529,7 +2530,7 @@ export default function APIKeys() {
                     />
                   ) : null}
                   {supportsChatGPTLive(editForm.limits.upstreamChannel) ? (
-                    <LimitSwitchField label={t("forceFast.label")} hint={t("forceFast.hint")} checked={editForm.limits.forceFast} onCheckedChange={(forceFast) => updateEditForm({ limits: { ...editForm.limits, forceFast } })} />
+                    <LimitSwitchField label={t("forceFast.label")} help={<ForceFastHelp />} hint={t("forceFast.hint")} checked={editForm.limits.forceFast} onCheckedChange={(forceFast) => updateEditForm({ limits: { ...editForm.limits, forceFast } })} />
                   ) : null}
                   <LimitSwitchField
                     label={t("apiKeys.limits.externalScheduler")}
@@ -2981,19 +2982,24 @@ function applyUpstreamChannel(
 function LimitSwitchField({
   label,
   hint,
+  help,
   checked,
   onCheckedChange,
 }: {
   label: string;
   hint: string;
+  help?: ReactNode;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
     <div className="space-y-1.5 rounded-md border border-border/60 px-3 py-2">
       <div className="flex items-center justify-between gap-3">
-        <label className="text-xs font-medium text-foreground">{label}</label>
-        <Switch checked={checked} onCheckedChange={onCheckedChange} />
+        <div className="flex items-center gap-1">
+          <span className="text-xs font-medium text-foreground">{label}</span>
+          {help}
+        </div>
+        <Switch aria-label={label} checked={checked} onCheckedChange={onCheckedChange} />
       </div>
       <p className="text-[10px] text-muted-foreground">{hint}</p>
     </div>

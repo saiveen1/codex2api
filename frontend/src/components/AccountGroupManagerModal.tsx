@@ -5,6 +5,7 @@ import { Pencil, Trash2 } from "lucide-react";
 import { api } from "../api";
 import type { AccountGroup, UpstreamChannel } from "../types";
 import Modal from "./Modal";
+import ForceFastHelp from "./ForceFastHelp";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -214,7 +215,10 @@ export function AccountGroupManagerModal({
           {channel === "codex" ? (
             <div className="rounded-md border border-border p-3">
               <div className="flex items-center justify-between gap-4">
-                <span className="text-sm font-semibold" id="shared-group-force-fast">{t("forceFast.label")}</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm font-semibold" id="shared-group-force-fast">{t("forceFast.label")}</span>
+                  <ForceFastHelp />
+                </div>
                 <Switch aria-labelledby="shared-group-force-fast" checked={draft.forceFast} onCheckedChange={(forceFast) => setDraft({ ...draft, forceFast })} />
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{t("forceFast.hint")}</p>
