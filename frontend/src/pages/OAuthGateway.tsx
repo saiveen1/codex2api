@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import PageHeader from '../components/PageHeader'
 import { Button } from '../components/ui/button'
@@ -27,7 +27,8 @@ const errorText = (e: unknown) => e instanceof Error ? e.message : 'Request fail
 const identifier = (item: Identifier) => item.identifier || item.identifier_masked || '—'
 const label = (name: string, child: ReactNode, hint?: string) => <label className="flex min-w-0 flex-col gap-2 text-sm"><span className="font-medium">{name}</span>{child}{hint && <span className="text-xs text-muted-foreground">{hint}</span>}</label>
 
-export default function OAuthGateway() {
+export default function OAuthGateway({ embedded = false, active = true }: { embedded?: boolean; active?: boolean }) {
+  const { hash } = useLocation()
   const { i18n } = useTranslation()
   const zh = i18n.resolvedLanguage?.startsWith('zh') ?? false
   const tr = (en: string, cn: string) => zh ? cn : en
@@ -336,9 +337,19 @@ export default function OAuthGateway() {
     return label(name, <Select aria-label={name} value={opts[key] || fallback} disabled={!caps || formLocked} onValueChange={value => setOption(key, value)} options={options} />)
   }
   const showError = (key: string) => errors[key] ? <p role="alert" className="break-words text-sm text-destructive">{errors[key]}</p> : null
+  const description = tr('Load connection data, check account material, then authorize. Job results and recovery stay visible below.', '读取连接信息、预检账号材料后再授权。任务结果和自动恢复状态都在下方查看。')
+
+  const anchorReady = hash !== '#oauth-recovery' || settings?.auto_recovery_supported
+  useEffect(() => {
+    if (active && hash && anchorReady) document.getElementById(hash.slice(1))?.scrollIntoView()
+  }, [active, anchorReady, hash])
 
   return <div className="space-y-6">
-    <PageHeader title={tr('OAuth gateway', 'OAuth 网关')} description={tr('Load connection data, check account material, then authorize. Job results and recovery stay visible below.', '读取连接信息、预检账号材料后再授权。任务结果和自动恢复状态都在下方查看。')} />
+    {embedded ? (
+      <p className="text-sm text-muted-foreground">{description}</p>
+    ) : (
+      <PageHeader title={tr('OAuth gateway', 'OAuth 网关')} description={description} />
+    )}
     <nav aria-label={tr('OAuth gateway sections', 'OAuth 网关页面导航')} className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-primary">
       <a className="underline underline-offset-4" href="#oauth-prepare">{tr('Prepare authorization', '准备授权')}</a>
       <a className="underline underline-offset-4" href="#oauth-jobs">{tr('Authorization jobs', '授权任务')}</a>

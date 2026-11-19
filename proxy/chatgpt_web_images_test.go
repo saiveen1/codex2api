@@ -255,7 +255,7 @@ func TestChatGPTWebEnvironmentCredentialRotation(t *testing.T) {
 	}
 }
 func TestChatGPTWebEndpointsFailClosed(t *testing.T) {
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/messages", "/v1/live", "/backend-api/codex/realtime/calls"} {
+	for _, path := range []string{"/v1/chat/execute", "/v1/accounts/check-chat", "/v1/chat/completions/other", "/v1/responses", "/v1/responses/compact", "/v1/messages", "/v1/live", "/backend-api/codex/realtime/calls"} {
 		r := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(r)
 		c.Request = httptest.NewRequest(http.MethodPost, path, nil)

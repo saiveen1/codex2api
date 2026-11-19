@@ -31,11 +31,17 @@ func rejectChatGPTWebEndpoint(c *gin.Context) bool {
 		return false
 	}
 	path := c.Request.URL.Path
-	allowed := strings.HasPrefix(path, "/v1/images/") || strings.HasPrefix(path, "/images/") || strings.HasPrefix(path, "/api/image-studio/") || path == "/v1/models" || path == "/models"
+	chat := c.Request.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/chat/completions")
+	if row := apiKeyRowFromContext(c); chat && row != nil && row.Limits.ExternalScheduler {
+		writeOpenAICodedError(c, http.StatusBadRequest, "unsupported_parameter", "ChatGPT Web does not support external scheduler account overrides")
+		c.Abort()
+		return true
+	}
+	allowed := chat || strings.HasPrefix(path, "/v1/images/") || strings.HasPrefix(path, "/images/") || strings.HasPrefix(path, "/api/image-studio/") || path == "/v1/models" || path == "/models"
 	if allowed && !strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
 		return false
 	}
-	c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "unsupported_channel", "message": "ChatGPT Web keys support only Images and image job endpoints"}})
+	c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "unsupported_channel", "message": "ChatGPT Web keys support only text Chat Completions, Images and image job endpoints"}})
 	return true
 }
 

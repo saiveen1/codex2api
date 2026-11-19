@@ -11,8 +11,8 @@ from datetime import datetime
 from curl_cffi import CurlECode, CurlError
 from PIL import Image
 
-from contract import ID, MAX_OUTPUT, WEB_IMAGE_MODELS, SafeError, image_info, safe_id, valid_workspace
-from conversation import Conversation, sse_events
+from contract import ID, MAX_CHAT_OUTPUT, MAX_OUTPUT, WEB_IMAGE_MODELS, SafeError, image_info, safe_id, valid_workspace
+from conversation import ChatConversation, Conversation, sse_events
 from proof import Resources, proof_token, requirements_token
 from transport import CurlTransport, authenticated_asset_url, json_response, read_bounded
 
@@ -126,7 +126,7 @@ class Backend:
         if final.get("so_token"):
             self.requirements["OpenAI-Sentinel-SO-Token"] = final["so_token"]
 
-    async def check(self):
+    async def check(self, *, chat=False):
         result = {"status": "unverified", "capabilities": [], "image_quota_remaining": None,
                   "quota_reset_at": None, "error_code": None, "workspace_id": "",
                   "stage": "bootstrap", "upstream_status": 0}
@@ -137,6 +137,9 @@ class Backend:
                 await self.verify_identity()
                 result["stage"] = "workspace"
                 result["workspace_id"] = await self.resolve_workspace()
+                if chat:
+                    result.update(status="chat_ready", capabilities=["chat"], stage="complete")
+                    return result
                 result["stage"] = "quota"
                 init = await self.api("POST", "/backend-api/conversation/init", json={"gizmo_id": None,
                                       "requested_default_model": None, "conversation_id": None, "timezone_offset_min": -480})
@@ -196,6 +199,76 @@ class Backend:
                 result["upstream_status"] = self.upstream_status
             await self.transport.close()
         return result
+
+    async def chat_events(self):
+        stage = "preparing"
+        try:
+            async with asyncio.timeout(self.account.timeout):
+                await self.guard_identity()
+                await self.prepare_requirements(await self.bootstrap())
+                messages = [{"id": uid(), "author": {"role": item["role"]},
+                             "content": {"content_type": "text", "parts": [item["content"]]}, "metadata": {}}
+                            for item in self.raw["messages"]]
+                common = {"action": "next", "model": self.raw["model"], "parent_message_id": uid(),
+                          "conversation_mode": {"kind": "primary_assistant"}, "system_hints": [],
+                          "timezone": "UTC", "timezone_offset_min": 0, "supported_encodings": ["v1"],
+                          "supports_buffering": True, "history_and_training_disabled": True,
+                          "client_contextual_info": {"app_name": "chatgpt.com"}}
+                effort = self.raw.get("thinking_effort") or ("standard" if self.raw["model"].endswith("-pro") else "")
+                if effort:
+                    common["thinking_effort"] = effort
+                prepared = await self.api("POST", "/backend-api/f/conversation/prepare", json=common | {
+                    "client_prepare_state": "success", "fork_from_shared_post": False, "partial_query": messages[-1],
+                })
+                conduit = prepared.get("conduit_token")
+                if not isinstance(conduit, str) or not conduit or len(conduit) > 8192 or not all(33 <= ord(c) <= 126 for c in conduit):
+                    raise SafeError("upstream_error")
+                path = "/backend-api/f/conversation"
+                headers = self.headers(path) | {"X-Conduit-Token": conduit, "Accept": "text/event-stream",
+                                                "X-Oai-Turn-Trace-Id": uid()}
+                state, sent, done = ChatConversation(), "", False
+                stage = "submitting"
+                async with self.transport.open("POST", BASE + path, headers=headers, timeout=self.remaining(),
+                                               json=common | {"client_prepare_state": "sent", "messages": messages}) as response:
+                    stage = "streaming"
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type != "text/event-stream":
+                        raise SafeError("chat_stream_interrupted", unknown=True)
+                    async for event in sse_events(response, chat=True):
+                        if event == "[DONE]":
+                            done = True
+                            break
+                        state.feed(event)
+                        if state.error:
+                            raise SafeError(state.error)
+                        text = "".join(state.messages.values())
+                        if not text.startswith(sent) or len(text.encode()) > MAX_CHAT_OUTPUT:
+                            raise SafeError("chat_stream_interrupted", unknown=True)
+                        for offset in range(len(sent), len(text), 4096):
+                            yield {"type": "delta", "text": text[offset:offset + 4096]}
+                        sent = text
+                        if state.text_terminal:
+                            done = True
+                            break
+                if not done or not sent.strip():
+                    raise SafeError("chat_stream_interrupted", unknown=True)
+                result = {"type": "completed", "usage_known": False}
+                if state.model_slug:
+                    result["model_slug"] = state.model_slug
+                yield result
+        except SafeError as error:
+            if error.code in {"quota_exhausted", "image_stream_interrupted"}:
+                error = (SafeError("chat_rate_limited", 429) if error.code == "quota_exhausted"
+                         else SafeError("chat_stream_interrupted", unknown=True))
+            yield error.event(stage)
+        except TimeoutError:
+            yield SafeError("worker_timeout", 504, unknown=stage != "preparing").event(stage)
+        except Exception:
+            error = (SafeError("worker_unavailable", 502) if stage == "preparing" else
+                     SafeError("chat_stream_interrupted", unknown=True))
+            yield error.event(stage)
+        finally:
+            await self.transport.close()
 
     def prompt(self):
         prompt = "Use the image_generation tool to create exactly one image for the user's request.\n" + self.raw["prompt"]

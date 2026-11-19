@@ -16,6 +16,7 @@ import (
 func TestChatGPTWebCatalogIsIndependentOfReadiness(t *testing.T) {
 	h := &Handler{chatGPTWebRuntime: func() (chatGPTWebConfig, error) { t.Fatal("catalog consulted runtime"); return chatGPTWebConfig{}, nil }}
 	want := []string{"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+	want = append(want, h.ChatGPTWebChatModels(context.Background())...)
 	row := &database.APIKeyRow{ID: 1, Limits: database.APIKeyLimits{UpstreamChannel: database.UpstreamChannelChatGPTWeb}}
 	got := h.scopedModelRecords(context.Background(), row)
 	if len(got) != len(want) {
@@ -33,10 +34,10 @@ func TestChatGPTWebCatalogIsIndependentOfReadiness(t *testing.T) {
 	}{
 		{"single allow", database.APIKeyLimits{ModelAllow: []string{"gpt-image-2"}}, 1},
 		{"alias allow", database.APIKeyLimits{ModelAllow: []string{"gpt-image-2.6-sunburst"}}, 1},
-		{"deny", database.APIKeyLimits{ModelDeny: []string{"gpt-image-2.6-sunburst"}}, 6},
-		{"non-image allow", database.APIKeyLimits{ModelAllow: []string{"gpt-6"}}, 0},
-		{"blocked images", database.APIKeyLimits{ImageGenerationPolicy: database.ImageGenerationPolicyBlock}, 0},
-		{"stripped images", database.APIKeyLimits{ImageGenerationPolicy: database.ImageGenerationPolicyStrip}, 0},
+		{"deny", database.APIKeyLimits{ModelDeny: []string{"gpt-image-2.6-sunburst"}}, len(want) - 1},
+		{"chat allow", database.APIKeyLimits{ModelAllow: []string{"gpt-6"}}, 1},
+		{"blocked images", database.APIKeyLimits{ImageGenerationPolicy: database.ImageGenerationPolicyBlock}, len(chatGPTWebChatSlugs)},
+		{"stripped images", database.APIKeyLimits{ImageGenerationPolicy: database.ImageGenerationPolicyStrip}, len(chatGPTWebChatSlugs)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.limits.UpstreamChannel = database.UpstreamChannelChatGPTWeb
@@ -67,7 +68,7 @@ func TestChatGPTWebCatalogReadsDoNotProbeOrMutate(t *testing.T) {
 	}
 	checks := f.checks.Load()
 	for i := 0; i < 3; i++ {
-		if got := f.handler.scopedModelRecords(ctx, f.key); len(got) != 7 {
+		if got := f.handler.scopedModelRecords(ctx, f.key); len(got) != len(chatGPTWebImageModels)+len(chatGPTWebChatSlugs) {
 			t.Fatalf("disabled account emptied catalog: %v", got)
 		}
 	}

@@ -174,7 +174,42 @@ class Conversation:
                 self.inspect({"message": message})
 
 
-async def sse_events(response):
+class ChatConversation(Conversation):
+    """Reconstruct visible text from full messages and delta-v1 patches."""
+
+    def __init__(self):
+        super().__init__()
+        self.messages = {}
+        self.model_slug = None
+
+    def inspect(self, payload):
+        self.error = failure(payload) or self.error
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            return
+        self.error = failure(message) or self.error
+        author, content = message.get("author") or {}, message.get("content") or {}
+        metadata = message.get("metadata") or {}
+        if (author.get("role") != "assistant" or message.get("recipient", "all") != "all"
+                or message.get("channel") not in {None, "final"} or metadata.get("is_visually_hidden_from_conversation")
+                or content.get("content_type") != "text"):
+            return
+        parts = content.get("parts")
+        if not isinstance(parts, list) or not all(isinstance(part, str) for part in parts):
+            return
+        text = "".join(parts)
+        message_id = message.get("id") or ""
+        if message_id not in self.messages and len(self.messages) >= 128:
+            raise SafeError("chat_stream_interrupted", unknown=True)
+        self.messages[message_id] = text
+        model = metadata.get("model_slug")
+        if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", model):
+            self.model_slug = model
+        self.text_terminal = bool(text.strip() and message.get("end_turn") is True and
+                                  message.get("status") in {"finished_successfully", "finished", "complete"})
+
+
+async def sse_events(response, *, chat=False):
     buffer, fields, total = b"", [], 0
     async for chunk in response.aiter_content():
         total += len(chunk)
@@ -191,6 +226,8 @@ async def sse_events(response):
             elif not line and fields:
                 data, fields = b"\n".join(fields), []
                 if data == b"[DONE]":
+                    if chat:
+                        yield "[DONE]"
                     return
                 try:
                     event = json.loads(data)

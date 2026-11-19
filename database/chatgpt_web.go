@@ -314,16 +314,17 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 	slices.Sort(caps)
 	caps = slices.Compact(caps)
 	for _, c := range caps {
-		if c != "generate" && c != "edit" {
+		if c != "generate" && c != "edit" && c != "chat" {
 			return false, errors.New("invalid chatgpt web capability")
 		}
 	}
+	chatChecked := slices.Contains(caps, "chat")
 	if s.ImageQuotaRemaining != nil && *s.ImageQuotaRemaining < 0 {
 		return false, errors.New("invalid chatgpt web quota")
 	}
 	switch s.Status {
 	case "ready":
-		if len(caps) == 0 || s.ImageQuotaRemaining == nil || *s.ImageQuotaRemaining <= 0 || s.ErrorCode != "" {
+		if (!slices.Contains(caps, "generate") && !slices.Contains(caps, "edit")) || s.ImageQuotaRemaining == nil || *s.ImageQuotaRemaining <= 0 || s.ErrorCode != "" {
 			return false, errors.New("ready requires positive web capability and quota evidence")
 		}
 	case "unverified", "auth_required", "challenge", "quota_exhausted":
@@ -345,6 +346,9 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 	if checked.IsZero() || checked.After(now.Add(time.Minute)) || !chatGPTWebCheckStage(s.LastCheckStage) || !chatGPTWebSafeError(s.LastCheckErrorCode) || s.LastCheckHTTPStatus < 0 || s.LastCheckHTTPStatus > 599 {
 		return false, errors.New("invalid web check diagnostic")
 	}
+	if chatChecked && (s.LastCheckAt == nil || s.LastCheckStage != "complete" || s.LastCheckErrorCode != "" || (s.Status != "unverified" && s.Status != "ready" && s.Status != "quota_exhausted")) {
+		return false, errors.New("invalid web chat observation")
+	}
 	if caps == nil {
 		caps = []string{}
 	}
@@ -364,9 +368,9 @@ func (db *DB) SaveChatGPTWebAccountObservation(ctx context.Context, state *ChatG
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE chatgpt_web_account_states SET status=$3, capabilities=$4,
 			image_quota_remaining=$5, quota_reset_at=$6, observed_at=$7, credential_revision=$8, proxy_fingerprint=$9, workspace_fingerprint=$10, error_code=$11, updated_at=$12,
-			workspace_id=$13, workspace_binding_fingerprint=$14, last_check_at=$15, last_check_stage=$16, last_check_error_code=$17, last_check_http_status=$18, rejected_credential_revision=CASE WHEN $3 IN ('ready','quota_exhausted') THEN '' ELSE rejected_credential_revision END
-			WHERE account_id=$1 AND environment_revision=$2 AND enabled=TRUE AND (observed_at IS NULL OR observed_at < $7) AND (last_check_at IS NULL OR last_check_at <= $15)`,
-			s.AccountID, s.EnvironmentRevision, s.Status, string(encoded), s.ImageQuotaRemaining, chatGPTWebTimeArg(s.QuotaResetAt), observed.UnixNano(), revision, s.ProxyFingerprint, s.WorkspaceFingerprint, s.ErrorCode, now.UnixNano(), s.WorkspaceID, s.WorkspaceBindingFingerprint, checked.UnixNano(), s.LastCheckStage, s.LastCheckErrorCode, s.LastCheckHTTPStatus)
+			workspace_id=$13, workspace_binding_fingerprint=$14, last_check_at=$15, last_check_stage=$16, last_check_error_code=$17, last_check_http_status=$18, rejected_credential_revision=CASE WHEN $3 IN ('ready','quota_exhausted') OR $19 THEN '' ELSE rejected_credential_revision END
+			WHERE account_id=$1 AND environment_revision=$2 AND enabled=TRUE AND (observed_at IS NULL OR observed_at < $7 OR ($19 AND observed_at=$7)) AND (last_check_at IS NULL OR last_check_at <= $15) AND (NOT $19 OR rejected_credential_revision <> $8)`,
+			s.AccountID, s.EnvironmentRevision, s.Status, string(encoded), s.ImageQuotaRemaining, chatGPTWebTimeArg(s.QuotaResetAt), observed.UnixNano(), revision, s.ProxyFingerprint, s.WorkspaceFingerprint, s.ErrorCode, now.UnixNano(), s.WorkspaceID, s.WorkspaceBindingFingerprint, checked.UnixNano(), s.LastCheckStage, s.LastCheckErrorCode, s.LastCheckHTTPStatus, chatChecked)
 		if err != nil {
 			return err
 		}

@@ -30,8 +30,8 @@ a test gateway using production DATABASE_URL or copied production secrets.
 
 ### Built-in service control (recommended)
 
-The project Dockerfile bundles the existing locked Python worker. In Settings →
-Codex → Image settings → ChatGPT Web → Service control, select **Built-in managed worker**, adjust the
+The project Dockerfile bundles the existing locked Python worker. In Gateways →
+Web gateway → Service control, select **Built-in managed worker**, adjust the
 10–600 second timeout and click **Save and enable**. No worker URL, shared secret,
 server environment edit or gateway restart is needed. The default remains off.
 The manager creates a stable private secret and a loopback-only listener, verifies
@@ -65,7 +65,7 @@ subsequent changes belong in the admin UI.
 
 | Gateway setting | Default | Meaning |
 |---|---|---|
-| `CHATGPT_WEB_ENABLED` | false | Allow the explicit image-only web channel |
+| `CHATGPT_WEB_ENABLED` | false | Enable the explicit ChatGPT Web channel for images and text |
 | `CHATGPT_WEB_WORKER_URL` | unset | Private worker origin, no path/query/userinfo |
 | `CHATGPT_WEB_WORKER_SECRET` | unset | Shared secret, at least 16 characters |
 | `CHATGPT_WEB_TIMEOUT_SECONDS` | 180 | Overall request budget, 10–600 seconds |
@@ -100,11 +100,26 @@ Web Key 的「账号调度」可选：**优先用满**（默认，保持原行�
 
 每个图片执行只交付一张。若 Worker 为同一次生成返回多张合法资产，网关保留资产引用、校验事件，在收到完成标志后交付第一张，不为额外资产重复计费。断流或拒绝不算交付成功。排障时从错误响应取 `execution_id`；管理员通过 `GET /api/admin/chatgpt-web/executions?execution_id=...` 只读核对网关与 Worker，不会重新生成。Worker 完成或有缓存不代表客户端收到图片。
 
-Web 生图是默认关闭的独立通道，不等同于 Codex 原生生图。在设置 → Codex → 生图设置 → ChatGPT Web 生图（实验性）→ 服务控制中保存并启用服务。创建通道为 `chatgpt_web` 的专用 API Key 并绑定分组后，即可在生图工作台选择该 Key 发起生成；没有就绪账号时会在授权范围内做有界按需检查，不必先逐个手动检查。API Key 配置及工作台保留设置直达链接，便于手动诊断认证、额度或代理问题。Web 失败不会自动回退原生通道。
+Web 网关默认关闭，不等同于 Codex 原生通道。在「网关 → Web 网关 → 服务控制」保存并启用服务，再创建通道为 `chatgpt_web` 的专用 API Key 并绑定分组。生图工作台可选择该 Key；没有就绪账号时会在授权范围内做有界按需检查。Web 失败不会自动回退原生通道。OAuth 网关和订阅（Mihomo）网关也在「网关」页，各自保留独立配置。
 
 支持七个调用名称：`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2.6`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst`。这些是受控兼容名称，按所选名称记账和绑定执行；不保证能锁定上游图片引擎版本。仅支持自动质量、比例尺寸、PNG/JPEG/WebP和最多两张参考图；不新增2k/4k后缀、GIF、蒙版等未经适配的参数。外部Worker需同步更新到支持这些名称的版本。
 
 `/v1/models` 返回该通道支持且被 Key 模型权限允许的目录，不因账号暂时未检查、额度耗尽、检查过期或服务尚未运行而清空；读取目录不初始化账号、不触发上游请求。目录可见不代表当下生成必定成功。现有Key若只允许`gpt-image-2`，仍只返回这一项，不自动扩大白名单。
+
+### Web 文本对话
+
+同一个 Web Key 可以调用 `POST /v1/chat/completions`。先用该 Key 请求 `GET /v1/models`，从目录选择文本 ID。例：
+
+```json
+{"model":"gpt-6-thinking","messages":[{"role":"user","content":"用一句话解释潮汐。"}],"stream":true}
+```
+
+Web 文本目录采用网页请求 ID：`auto`、`gpt-6`、`gpt-6-thinking`、`gpt-6-pro`、`gpt-5-6`、`gpt-5-6-thinking`、`gpt-5-6-pro`。如果与现有模型 ID 重名，目录会为 Web 侧显示 `-web` 后缀；该后缀只区分通道，不变更上游模型。以当前目录为准，不使用通用模型映射。GPT-6.2 的 Work/Codex/API 模型不在普通 Chat 目录中。
+
+目录不是账号权益承诺，尤其是 Pro 路由。官方依据：OpenAI Help Center「GPT-6 and other models in ChatGPT」；网页 ID 参考 OmniRoute `#17840` 的一方请求及响应证据，并与现有 Web worker 和独立文本桥的会话路径对照。套餐、空间权限和实际选择由上游决定。
+
+支持纯文本 `messages`、流式和非流式；不支持工具、文件、多模态内容或未经适配的采样选项。不要求图片额度，但仍验证身份、工作区、Key 授权和出口。上游未报告用量，不填造 token 数；中断不返回成功终态，也不会重发该轮。外置 worker 必须升级到支持文本的版本。
+
 
 普通新生成先使用现成就绪账号；找不到时，每个HTTP请求（含n张批量）最多检查3个账号，上游检查预算20秒且不延长原请求的上游工作期限；结束后诊断写入和租约释放共享最多3秒独立收尾预算，进程内最多7个并发自动检查，并继续使用数据库账号租约防重复检查。候选仅限当前Key的分组、套餐、账号白名单、亲和/预算范围；近期失败退避2分钟，已确认额度未重置或缺少编辑能力时不盲查。检查通过后仍再次校验身份、workspace、额度、出口和容量，才提交图片。恢复旧执行、结果未知的提交不触发自动准备或换号重发。
 

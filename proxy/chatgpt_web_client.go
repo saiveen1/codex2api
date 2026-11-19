@@ -79,7 +79,7 @@ func loadChatGPTWebConfig() (chatGPTWebConfig, error) {
 // ChatGPTWebDeploymentStatus deliberately excludes worker URLs and credentials.
 func ChatGPTWebDeploymentStatus() map[string]any {
 	cfg, err := loadChatGPTWebConfig()
-	return map[string]any{"enabled": cfg.enabled, "configured": err == nil, "protocol_version": chatGPTWebProtocolVersion, "supported_models": append([]string(nil), chatGPTWebImageModels...)}
+	return map[string]any{"enabled": cfg.enabled, "configured": err == nil, "protocol_version": chatGPTWebProtocolVersion, "supported_models": append([]string(nil), chatGPTWebImageModels...), "supported_chat_models": (&Handler{}).ChatGPTWebChatModels(context.Background())}
 }
 
 func chatGPTWebHash(s string) string {

@@ -94,7 +94,7 @@ export default function ChatGPTWebAccountBadge({ accountID, accountName, state, 
       <p className="text-xs leading-relaxed text-muted-foreground">{t('chatgptWeb.quotaSnapshotHint')}</p>
       {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
       <DialogFooter className="flex-wrap gap-2 sm:justify-between">
-        <Link to="/settings#settings-codex-images" className="self-center text-sm text-primary underline">{t('chatgptWeb.openSettings')}</Link>
+        <Link to="/gateways" onClick={() => setOpen(false)} className="self-center text-sm text-primary underline">{t('chatgptWeb.openSettings')}</Link>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" disabled={busy || snapshot?.enabled === true} onClick={() => void accountAction(false, true)}>{t('chatgptWeb.enable')}</Button>
           <Button type="button" variant="outline" disabled={busy || !snapshot?.enabled} onClick={() => void accountAction(false, false)}>{t('chatgptWeb.disable')}</Button>

@@ -2967,7 +2967,7 @@ function UpstreamChannelPicker({
             ]} />
           <p>{t("chatgptWebScheduling.hint")}</p>
           <p>{t("chatgptWebAutoHint")}</p>
-          <Link className="text-primary underline" to="/settings#settings-codex-images">{t("chatgptWebManageAccounts")}</Link>
+          <Link className="text-primary underline" to="/gateways">{t("chatgptWebManageAccounts")}</Link>
         </div>
       )}
     </div>

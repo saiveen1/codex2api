@@ -39,7 +39,7 @@ func TestChatGPTWebAutoEnableEntrypointsKeepReadinessGate(t *testing.T) {
 				t.Fatal("fixture is not unconfigured", err)
 			}
 			if entry == "models" {
-				if got := f.handler.chatGPTWebModelRecords(ctx, f.key); len(got) != 7 {
+				if got := f.handler.chatGPTWebModelRecords(ctx, f.key); len(got) != len(chatGPTWebImageModels)+len(chatGPTWebChatSlugs) {
 					t.Fatal("missing supported catalog")
 				}
 				if _, err := f.db.GetChatGPTWebAccountState(ctx, id); !errors.Is(err, sql.ErrNoRows) {

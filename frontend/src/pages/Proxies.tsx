@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import {
   Globe,
   Plus,
@@ -38,7 +39,6 @@ import {
 } from "@/components/ui/table";
 import { api, type ProxyRow } from "../api";
 import type { AccountRow, CodexEgressSummary, ProxyRiskScoreSnapshot, ProxyRiskScoringJob, ProxyRiskScoringProfile } from "../types";
-import ProxySubscriptions from "../components/ProxySubscriptions";
 import ProxyAccessModal from "../components/ProxyAccessModal";
 import ChannelLogo from "../components/ChannelLogo";
 import Modal from "../components/Modal";
@@ -1341,7 +1341,9 @@ export default function Proxies() {
         }
       />
 
-      <ProxySubscriptions onChanged={reload} />
+      <Link to="/gateways/subscriptions" className="inline-block text-sm text-primary underline underline-offset-4">
+        {t("gateways.manageSubscriptions")}
+      </Link>
       <ProxyAccessModal proxy={accessProxy} onClose={() => setAccessProxy(null)} onSaved={reload} />
       {/* 批量测试进度条 */}
       {testAllLoading && testAllTotal > 0 ? (

@@ -24,12 +24,21 @@ WEB_IMAGE_MODELS = {
     "gpt-image-2.6-flare": "auto",
     "gpt-image-2.6-sunburst": "auto",
 }
+WEB_CHAT_MODELS = frozenset({"auto", "gpt-6", "gpt-6-thinking", "gpt-6-pro", "gpt-5-6", "gpt-5-6-thinking", "gpt-5-6-pro"})
+WEB_CHAT_EFFORT = frozenset({"standard", "extended", "max"})
+MAX_CHAT_REQUEST = 4 * 1024 * 1024  # JSON escaping can expand the bounded text and token fields.
+MAX_CHAT_TEXT = 512 * 1024
+MAX_CHAT_OUTPUT = 1024 * 1024
 ID = re.compile(r"[A-Za-z0-9_-]{1,160}\Z")
 
 MESSAGES = {
     "invalid_request": "Invalid worker request.",
     "unsupported_model": "Unsupported image model.",
     "unsupported_parameter": "Unsupported image parameter.",
+    "chat_model_not_supported": "Unsupported ChatGPT Web text model.",
+    "chat_parameter_not_supported": "Unsupported ChatGPT Web text parameter.",
+    "chat_stream_interrupted": "The ChatGPT Web text stream did not complete.",
+    "chat_rate_limited": "ChatGPT Web text request was rate limited.",
     "auth_required": "Upstream authentication required.",
     "environment_challenge": "Unsupported upstream environment challenge.",
     "quota_exhausted": "Upstream image quota exhausted.",
@@ -110,11 +119,13 @@ class Account:
         return self.raw.get("timeout_seconds", 180)
 
     @classmethod
-    def parse(cls, raw, execute=False):
+    def parse(cls, raw, execute=False, *, chat=False):
         account_fields = {"account_id", "access_token", "chatgpt_account_id", "credential_revision",
                           "environment_revision", "proxy_url", "environment", "timeout_seconds", "expected_email"}
         image_fields = {"execution_id", "operation", "model", "prompt", "images", "n", "size", "quality", "output_format"}
-        if not isinstance(raw, dict) or set(raw) - (account_fields | (image_fields if execute else set())):
+        chat_fields = {"model", "messages", "thinking_effort"}
+        extra = chat_fields if chat else image_fields if execute else set()
+        if not isinstance(raw, dict) or set(raw) - (account_fields | extra):
             raise SafeError("invalid_request", 400)
         for name in ("access_token", "credential_revision"):
             value = raw.get(name)
@@ -150,6 +161,27 @@ class Account:
                 raise ValueError()
         except (ValueError, TypeError):
             raise SafeError("invalid_request", 400) from None
+        if chat:
+            if not workspace:
+                raise SafeError("invalid_request", 400)
+            model = raw.get("model")
+            if not isinstance(model, str) or model not in WEB_CHAT_MODELS:
+                raise SafeError("chat_model_not_supported", 400)
+            effort = raw.get("thinking_effort", "")
+            if not isinstance(effort, str) or (effort and effort not in WEB_CHAT_EFFORT):
+                raise SafeError("chat_parameter_not_supported", 400)
+            messages = raw.get("messages")
+            if not isinstance(messages, list) or not 1 <= len(messages) <= 128:
+                raise SafeError("invalid_request", 400)
+            size = 0
+            for item in messages:
+                if (not isinstance(item, dict) or set(item) != {"role", "content"}
+                        or not isinstance(item["role"], str) or item["role"] not in {"system", "developer", "user", "assistant"}
+                        or not isinstance(item["content"], str) or not item["content"].strip()):
+                    raise SafeError("invalid_request", 400)
+                size += len(item["content"].encode())
+            if size > MAX_CHAT_TEXT or messages[-1]["role"] != "user":
+                raise SafeError("invalid_request", 400)
         if execute:
             if not isinstance(raw.get("execution_id"), str) or not ID.fullmatch(raw["execution_id"]):
                 raise SafeError("invalid_request", 400)

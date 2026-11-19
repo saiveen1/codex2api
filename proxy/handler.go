@@ -7330,6 +7330,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	if outputGuardHTTPGateArmed() && !RequireOutputGuardReadyHTTP(c) {
 		return
 	}
+	if isChatGPTWebRequest(c) {
+		h.forwardChatGPTWebChat(c, rawBody)
+		return
+	}
 	guardSnapshot := CurrentOutputGuardConfig()
 	reqGuard := outputguard.NewRequestGuard(outputguard.Config{
 		Enabled:               guardSnapshot.Enabled,
@@ -9759,7 +9763,7 @@ func (h *Handler) handleUpstreamError(c *gin.Context, account *auth.Account, sta
 // Antigravity 渠道或没有 ChatGPT 账号时，把 Cockpit 同一份目录改写成 manifest。
 // 其余客户端返回 OpenAI 兼容列表。
 func (h *Handler) listModelsOrManifest(c *gin.Context) {
-	if strings.TrimSpace(c.Query("client_version")) != "" {
+	if !isChatGPTWebRequest(c) && strings.TrimSpace(c.Query("client_version")) != "" {
 		h.CodexModelsManifestHandler(c)
 		return
 	}

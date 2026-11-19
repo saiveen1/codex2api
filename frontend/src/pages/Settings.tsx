@@ -1,4 +1,3 @@
-import ChatGPTWebSettings from '../components/ChatGPTWebSettings'
 import type { ChangeEvent, FocusEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -3955,16 +3954,17 @@ export default function Settings() {
   )
   useEffect(() => {
     const sectionId = pendingSectionRef.current
-    if (!sectionId) return
+    if (!sectionId || showInitialSkeleton) return
     pendingSectionRef.current = null
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [activeTab])
+  }, [activeTab, showInitialSkeleton, tabParam])
 
   // 兼容旧的 #settings-xxx 锚点深链：首次进入时把锚点映射到对应 Tab。
   useEffect(() => {
     if (tabParam) return
-    const legacy = LEGACY_SECTION_TABS[location.hash.replace(/^#/, '')]
-    if (legacy) selectTab(legacy)
+    const sectionId = location.hash.slice(1)
+    const legacy = LEGACY_SECTION_TABS[sectionId]
+    if (legacy) selectTab(legacy, sectionId)
   }, [location.hash, selectTab, tabParam])
 
   // 当前 Tab 变化时，把对应 pill 滚进顶栏可视区（窄屏横向滚动导航）。
@@ -5227,7 +5227,9 @@ export default function Settings() {
               </SettingsSection>
 
               <SettingsSection id="settings-codex-images" title={t('settings.nav.codexImages')} description={t('settings.nav.codexImagesDesc')} icon={<ImageIcon className="size-4" />}>
-                <ChatGPTWebSettings />
+                <Link to="/gateways" className="inline-block text-sm text-primary underline underline-offset-4">
+                  {t('chatgptWeb.openSettings')}
+                </Link>
                 <SettingsCard title={t('chatgptWeb.nativeTitle')} description={t('settings.codexImagesDriverDesc')} icon={<ImageIcon className="size-4" />}>
                   <div className="space-y-4">
                     <div className={SETTINGS_FIELD_GRID}>

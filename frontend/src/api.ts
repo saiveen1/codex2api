@@ -608,7 +608,7 @@ export interface ChatGPTWebBatchResult { matched: number; updated: number; uncha
 export interface ChatGPTWebExecution { id: string; account_id: number; operation: string; stage: string; error_code?: string; result_unknown: boolean; updated_at: string }
 export interface ChatGPTWebConfig { enabled: boolean; mode: 'managed' | 'external'; worker_url: string; worker_secret?: string; timeout_seconds: number }
 export interface ChatGPTWebControl { config: ChatGPTWebConfig; secret_set: boolean; available: boolean; running: boolean; stage: string; last_error: string }
-export interface ChatGPTWebDeployment { enabled: boolean; configured: boolean; protocol_version: string; supported_models: string[]; control?: ChatGPTWebControl }
+export interface ChatGPTWebDeployment { enabled: boolean; configured: boolean; protocol_version: string; supported_models: string[]; supported_chat_models?: string[]; control?: ChatGPTWebControl }
 
 export const api = {
   getChatGPTWebStatus: () => request<ChatGPTWebDeployment>('/chatgpt-web'),

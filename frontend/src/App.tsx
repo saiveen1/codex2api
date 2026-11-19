@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import AuthGate from './components/AuthGate'
 import Layout from './components/Layout'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
@@ -11,7 +11,7 @@ import { ThemeProvider } from './hooks/useTheme'
 import Dashboard from './pages/Dashboard'
 
 const Accounts = lazy(() => import('./pages/Accounts'))
-const OAuthGateway = lazy(() => import('./pages/OAuthGateway'))
+const Gateways = lazy(() => import('./pages/Gateways'))
 const Operations = lazy(() => import('./pages/Operations'))
 const OperationsErrors = lazy(() => import('./pages/OperationsErrors'))
 const RuntimeStatus = lazy(() => import('./pages/RuntimeStatus'))
@@ -57,6 +57,11 @@ export default function App() {
   )
 }
 
+function LegacyOAuthGateway() {
+  const { search, hash } = useLocation()
+  return <Navigate replace to={{ pathname: '/gateways/oauth', search, hash }} />
+}
+
 function AdminApp() {
   return (
     <AuthGate>
@@ -65,7 +70,8 @@ function AdminApp() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/accounts" element={<Accounts />} />
-          <Route path="/oauth-gateway" element={<OAuthGateway />} />
+          <Route path="/gateways/:tab?" element={<Gateways />} />
+          <Route path="/oauth-gateway" element={<LegacyOAuthGateway />} />
           <Route path="/accounts/grok" element={<Accounts />} />
           <Route path="/accounts/antigravity" element={<Accounts />} />
           <Route path="/accounts/claude" element={<Accounts />} />

@@ -1452,7 +1452,7 @@ export default function ImageStudio() {
           {isWebKey && (!apiKeyID ? <p className="text-xs text-muted-foreground">{t('chatgptWeb.keyRequired')} <NavLink className="text-primary underline" to="/api-keys">{t('chatgptWeb.createKey')}</NavLink></p> : <p className="text-xs text-muted-foreground">{t('apiKeys.limits.upstreamChannelHint.chatgpt_web')}</p>)}
           {isWebKey && <div className="space-y-1 text-xs leading-relaxed">
             <p>{t('chatgptWebAutoHint')}</p>
-            <NavLink className="text-primary underline" to="/settings#settings-codex-images">{t('chatgptWebManageAccounts')}</NavLink>
+            <NavLink className="text-primary underline" to="/gateways">{t('chatgptWebManageAccounts')}</NavLink>
           </div>}
           {isWebKey && !webServiceReady && <p className="text-xs text-muted-foreground" role="status">
             {t(webDeploymentError ? 'chatgptWeb.loadError' : webDeployment ? 'chatgptWeb.serviceNotReady' : 'chatgptWeb.serviceChecking')}

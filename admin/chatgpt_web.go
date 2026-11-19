@@ -15,6 +15,9 @@ import (
 
 func (h *Handler) GetChatGPTWebStatus(c *gin.Context) {
 	status := proxy.ChatGPTWebDeploymentStatus()
+	if h.authCacheProxy != nil {
+		status["supported_chat_models"] = h.authCacheProxy.ChatGPTWebChatModels(c.Request.Context())
+	}
 	status["enabled"], status["configured"] = false, false
 	if h.chatGPTWebManager != nil {
 		view := h.chatGPTWebManager.View()

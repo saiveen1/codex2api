@@ -47,14 +47,32 @@ func chatGPTWebExecutionBase(c *gin.Context) (string, error) {
 func chatGPTWebStateMatches(state database.ChatGPTWebAccountState, token, requested, proxyURL string) bool {
 	return openaiidentity.ValidWebWorkspaceID(state.WorkspaceID) && state.WorkspaceFingerprint == chatGPTWebHash(state.WorkspaceID) &&
 		state.WorkspaceBindingFingerprint == chatGPTWebHash(requested) && (requested == "" || requested == state.WorkspaceID) &&
-		state.CredentialRevision == chatGPTWebHash(token) && state.ProxyFingerprint == chatGPTWebHash(proxyURL)
+		state.CredentialRevision == chatGPTWebHash(token) && state.ProxyFingerprint == chatGPTWebHash(proxyURL) && state.RejectedCredentialRevision != state.CredentialRevision
 }
 
 func chatGPTWebStateReady(state database.ChatGPTWebAccountState, operation string, now time.Time) bool {
-	if !state.Enabled || state.Status != "ready" || state.ObservedAt == nil || now.Sub(*state.ObservedAt) > 30*time.Minute || state.ObservedAt.After(now.Add(time.Minute)) {
+	if !state.Enabled || !openaiidentity.ValidWebWorkspaceID(state.WorkspaceID) {
 		return false
 	}
-	if state.ImageQuotaRemaining == nil || *state.ImageQuotaRemaining <= 0 || state.ErrorCode != "" || !openaiidentity.ValidWebWorkspaceID(state.WorkspaceID) {
+	fresh := func(at *time.Time) bool {
+		return at != nil && now.Sub(*at) <= 30*time.Minute && !at.After(now.Add(time.Minute))
+	}
+	if operation == "chat" {
+		switch state.Status {
+		case "ready", "quota_exhausted":
+			if fresh(state.ObservedAt) {
+				return true
+			}
+		case "unverified":
+		default:
+			return false
+		}
+		return slices.Contains(state.Capabilities, "chat") && state.LastCheckStage == "complete" && state.LastCheckErrorCode == "" && fresh(state.LastCheckAt)
+	}
+	if state.Status != "ready" || !fresh(state.ObservedAt) {
+		return false
+	}
+	if state.ImageQuotaRemaining == nil || *state.ImageQuotaRemaining <= 0 || state.ErrorCode != "" {
 		return false
 	}
 	for _, capability := range state.Capabilities {
@@ -65,14 +83,18 @@ func chatGPTWebStateReady(state database.ChatGPTWebAccountState, operation strin
 	return false
 }
 
-func (h *Handler) chatGPTWebModelRecords(_ context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
+func (h *Handler) chatGPTWebModelRecords(ctx context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
 	records := map[string]*scopedModelRecord{}
-	if row == nil || row.Limits.ResolveUpstreamChannel() != database.UpstreamChannelChatGPTWeb || row.Limits.ResolveImageGenerationPolicy() != database.ImageGenerationPolicyAllow {
+	if row == nil || row.Limits.ResolveUpstreamChannel() != database.UpstreamChannelChatGPTWeb {
 		return records
 	}
 	// Discovery describes the supported channel/key contract. It must neither
 	// probe upstream nor hide models because an account observation expired.
-	for _, model := range chatGPTWebImageModels {
+	models := h.ChatGPTWebChatModels(ctx)
+	if row.Limits.ResolveImageGenerationPolicy() == database.ImageGenerationPolicyAllow {
+		models = append(models, chatGPTWebImageModels...)
+	}
+	for _, model := range models {
 		if checkAPIKeyModel(model, row.Limits) == "" {
 			addScopedModel(records, model, modelBackingCodex, time.Time{}, false)
 		}
@@ -141,7 +163,8 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 			h.store.Release(account)
 			continue
 		}
-		if guard, ok := c.Get(chatGPTWebAdmissionSelectionGuard); ok {
+		guard, guarded := c.Get(chatGPTWebAdmissionSelectionGuard)
+		if guarded && operation != "chat" {
 			if err := guard.(func(context.Context, *auth.Account) error)(c.Request.Context(), account); err != nil {
 				h.store.Release(account)
 				return nil, nil, "", err
@@ -160,12 +183,24 @@ func (h *Handler) takeChatGPTWebAccount(c *gin.Context, operation, owner string,
 		// recorded an authentication failure against our earlier ready snapshot.
 		ctx := c.Request.Context()
 		latest, readErr := h.db.GetChatGPTWebAccountState(ctx, account.ID())
-		row, accountErr := h.db.GetAccountByID(ctx, account.ID())
-		paused, pauseErr := h.db.IsIntelligenceCheckPaused(ctx, account.ID())
+		var accountErr, pauseErr error
+		var eligible bool
+		if operation == "chat" {
+			// Chat requires the fresh scope guard even on the already-verified path.
+			if guarded {
+				eligible = guard.(func(context.Context, *auth.Account) error)(ctx, account) == nil
+			}
+		} else {
+			row, err := h.db.GetAccountByID(ctx, account.ID())
+			accountErr = err
+			paused, err := h.db.IsIntelligenceCheckPaused(ctx, account.ID())
+			pauseErr = err
+			eligible = accountErr == nil && !paused && auth.ChatGPTWebAutoAccountEligible(row, time.Now()) && row.GetCredential("access_token") == token
+		}
 		proxyURL, usable = h.store.ResolveChatGPTWebProxy(account)
-		token, requested, _, expired, identityErr = account.ChatGPTWebIdentity()
-		if !usable || expired || identityErr != nil || readErr != nil || accountErr != nil || pauseErr != nil || paused || !auth.ChatGPTWebAutoAccountEligible(row, time.Now()) ||
-			row.GetCredential("access_token") != token || !chatGPTWebStateReady(*latest, operation, time.Now()) || !chatGPTWebStateMatches(*latest, token, requested, proxyURL) {
+		currentToken, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
+		if !eligible || !usable || expired || identityErr != nil || currentToken != token || readErr != nil || pauseErr != nil ||
+			!chatGPTWebStateReady(*latest, operation, time.Now()) || !chatGPTWebStateMatches(*latest, currentToken, requested, proxyURL) {
 			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			releaseErr := h.db.ReleaseChatGPTWebAccountLease(cleanup, account.ID(), owner)
 			cancel()

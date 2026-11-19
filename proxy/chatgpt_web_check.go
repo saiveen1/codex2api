@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/codex2api/auth"
@@ -47,6 +48,8 @@ func (e *ChatGPTWebCheckError) Error() string {
 		return "Authentication succeeded but no verifiable image quota was returned"
 	case "worker_unavailable":
 		return "The Web worker is disabled, not ready, or unreachable"
+	case "worker_chat_unsupported":
+		return "The configured ChatGPT Web worker does not support text chat; upgrade the worker"
 	case "worker_timeout":
 		return "The Web environment check exceeded its time budget"
 	case "worker_protocol_error":
@@ -62,7 +65,7 @@ func (e *ChatGPTWebCheckError) Error() string {
 
 func webCheckCode(code string) string {
 	switch code {
-	case "auth_required", "environment_challenge", "quota_exhausted", "upstream_error", "invalid_request", "workspace_unavailable", "identity_mismatch", "quota_unknown", "token_expired", "worker_unavailable", "worker_timeout", "worker_protocol_error", "account_disabled", "account_busy", "account_ineligible", "egress_unavailable", "observation_stale", "internal_error":
+	case "auth_required", "environment_challenge", "quota_exhausted", "upstream_error", "invalid_request", "workspace_unavailable", "identity_mismatch", "quota_unknown", "token_expired", "worker_unavailable", "worker_timeout", "worker_protocol_error", "worker_chat_unsupported", "account_disabled", "account_busy", "account_ineligible", "egress_unavailable", "observation_stale", "internal_error":
 		return code
 	}
 	return "worker_protocol_error"
@@ -90,7 +93,7 @@ func webCheckHTTPStatus(code string) int {
 		return 400
 	case "workspace_unavailable", "quota_unknown":
 		return 422
-	case "worker_unavailable", "egress_unavailable":
+	case "worker_unavailable", "worker_chat_unsupported", "egress_unavailable":
 		return 503
 	case "worker_timeout":
 		return 504
@@ -114,6 +117,7 @@ type chatGPTWebCheckAdmission struct {
 
 func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, initializeDefaults bool) (*database.ChatGPTWebAccountState, error) {
 	admission, _ := ctx.Value(chatGPTWebCheckAdmissionKey{}).(*chatGPTWebCheckAdmission)
+	chat := admission != nil && admission.operation == "chat"
 	admit := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -148,7 +152,7 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 			upstream = 0
 		}
 		failure := &ChatGPTWebCheckError{Code: code, Stage: stage, HTTPStatus: webCheckHTTPStatus(code), UpstreamStatus: upstream, Cause: transportCause}
-		if state != nil && h.db != nil && code != "account_busy" && code != "observation_stale" {
+		if state != nil && h.db != nil && code != "account_busy" && code != "observation_stale" && (!chat || chatGPTWebAccountReadinessError(code)) {
 			cleanup := cleanupContext()
 			applied, err := h.db.RecordChatGPTWebCheckFailure(cleanup, state, token, binding, started, code, stage, upstream)
 			if err == nil && applied {
@@ -254,6 +258,9 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	if err := admit(); err != nil {
 		return state, err
 	}
+	if chat && state.RejectedCredentialRevision == chatGPTWebHash(token) {
+		return state, &ChatGPTWebCheckError{Code: "auth_required", Stage: "identity", HTTPStatus: webCheckHTTPStatus("auth_required")}
+	}
 	request := chatGPTWebAccountRequest{AccountID: accountID, AccessToken: token, ChatGPTAccountID: requested, ExpectedEmail: email, CredentialRevision: chatGPTWebHash(token), EnvironmentRevision: state.EnvironmentRevision, ProxyURL: proxyURL, Environment: chatGPTWebEnvironment{state.DeviceID, state.SessionID}, TimeoutSeconds: 30}
 	if !initializeDefaults {
 		if deadline, ok := checkCtx.Deadline(); ok {
@@ -268,7 +275,11 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	}
 	client := newChatGPTWebHTTPClient()
 	defer client.CloseIdleConnections()
-	resp, err := chatGPTWebPost(checkCtx, client, cfg, "/v1/accounts/check", request)
+	path := "/v1/accounts/check"
+	if chat {
+		path = "/v1/accounts/check-chat"
+	}
+	resp, err := chatGPTWebPost(checkCtx, client, cfg, path, request)
 	if err != nil {
 		var networkError net.Error
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(checkCtx.Err(), context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
@@ -277,6 +288,9 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 		return fail("worker_unavailable", "admission", 0)
 	}
 	defer resp.Body.Close()
+	if chat && chatGPTWebEndpointUnsupported(resp.StatusCode) {
+		return fail("worker_chat_unsupported", "admission", resp.StatusCode)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
 	if err != nil || len(data) > 65536 {
 		return fail("worker_protocol_error", "admission", resp.StatusCode)
@@ -316,7 +330,14 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 		return fail("worker_protocol_error", "admission", 0)
 	}
 	switch observation.Status {
+	case "chat_ready":
+		if !chat || observation.Stage != "complete" || observation.ImageQuotaRemaining != nil || observation.QuotaResetAt != nil || observation.ErrorCode != "" || observation.Code != "" || !slices.Equal(observation.Capabilities, []string{"chat"}) {
+			return fail("worker_protocol_error", "admission", observation.UpstreamStatus)
+		}
 	case "ready", "quota_exhausted":
+		if chat {
+			return fail("worker_protocol_error", "admission", observation.UpstreamStatus)
+		}
 	case "unverified", "auth_required", "challenge":
 		code := observation.ErrorCode
 		if code == "" {
@@ -329,20 +350,22 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 	if !openaiidentity.ValidWebWorkspaceID(observation.WorkspaceID) || (requested != "" && observation.WorkspaceID != requested) {
 		return fail("workspace_unavailable", "workspace", observation.UpstreamStatus)
 	}
-	if observation.ImageQuotaRemaining == nil || *observation.ImageQuotaRemaining < 0 {
-		return fail("quota_unknown", "quota", observation.UpstreamStatus)
-	}
 	caps := []string{}
-	for _, capability := range observation.Capabilities {
-		if capability == "generate" || capability == "edit" {
-			caps = append(caps, capability)
+	if !chat {
+		if observation.ImageQuotaRemaining == nil || *observation.ImageQuotaRemaining < 0 {
+			return fail("quota_unknown", "quota", observation.UpstreamStatus)
 		}
-	}
-	if observation.Status == "ready" && (len(caps) == 0 || *observation.ImageQuotaRemaining <= 0 || observation.ErrorCode != "") {
-		return fail("worker_protocol_error", "quota", observation.UpstreamStatus)
-	}
-	if observation.Status == "quota_exhausted" && *observation.ImageQuotaRemaining != 0 {
-		return fail("worker_protocol_error", "quota", observation.UpstreamStatus)
+		for _, capability := range observation.Capabilities {
+			if capability == "generate" || capability == "edit" {
+				caps = append(caps, capability)
+			}
+		}
+		if observation.Status == "ready" && (len(caps) == 0 || *observation.ImageQuotaRemaining <= 0 || observation.ErrorCode != "") {
+			return fail("worker_protocol_error", "quota", observation.UpstreamStatus)
+		}
+		if observation.Status == "quota_exhausted" && *observation.ImageQuotaRemaining != 0 {
+			return fail("worker_protocol_error", "quota", observation.UpstreamStatus)
+		}
 	}
 	if err := admit(); err != nil {
 		return state, err
@@ -353,15 +376,31 @@ func (h *Handler) checkChatGPTWebAccount(ctx context.Context, accountID int64, i
 		return fail("observation_stale", "persist", 0)
 	}
 	now := time.Now().UTC()
-	state.Status, state.Capabilities = observation.Status, caps
-	state.ImageQuotaRemaining, state.QuotaResetAt, state.ObservedAt = observation.ImageQuotaRemaining, observation.QuotaResetAt, &now
+	if chat {
+		// Keep same-binding image evidence and its original age; chat does not reverify quota.
+		if state.WorkspaceID != observation.WorkspaceID || !chatGPTWebStateMatches(*state, token, requested, proxyURL) || state.ImageQuotaRemaining == nil || state.ObservedAt == nil {
+			state.Status, state.Capabilities, state.ErrorCode = "unverified", nil, ""
+			state.ImageQuotaRemaining, state.QuotaResetAt, state.ObservedAt = nil, nil, &now
+		} else if state.Status != "ready" && state.Status != "quota_exhausted" {
+			state.Status, state.Capabilities = "unverified", nil
+		}
+		if !slices.Contains(state.Capabilities, "chat") {
+			state.Capabilities = append(state.Capabilities, "chat")
+		}
+	} else {
+		state.Status, state.Capabilities = observation.Status, caps
+		state.ImageQuotaRemaining, state.QuotaResetAt, state.ObservedAt = observation.ImageQuotaRemaining, observation.QuotaResetAt, &now
+		state.ErrorCode = ""
+		if observation.Status == "quota_exhausted" {
+			state.ErrorCode = "quota_exhausted"
+		}
+	}
 	state.CredentialRevision, state.ProxyFingerprint = request.CredentialRevision, chatGPTWebHash(proxyURL)
 	state.WorkspaceID, state.WorkspaceFingerprint, state.WorkspaceBindingFingerprint = observation.WorkspaceID, chatGPTWebHash(observation.WorkspaceID), binding
-	state.ErrorCode = ""
-	if observation.Status == "quota_exhausted" {
-		state.ErrorCode = "quota_exhausted"
+	state.LastCheckAt, state.LastCheckStage, state.LastCheckErrorCode, state.LastCheckHTTPStatus = &started, "complete", "", observation.UpstreamStatus
+	if !chat {
+		state.LastCheckErrorCode = state.ErrorCode
 	}
-	state.LastCheckAt, state.LastCheckStage, state.LastCheckErrorCode, state.LastCheckHTTPStatus = &started, "complete", state.ErrorCode, observation.UpstreamStatus
 	saved, err := h.db.SaveChatGPTWebAccountObservation(ctx, state, token)
 	if err != nil {
 		return fail("internal_error", "persist", 0)

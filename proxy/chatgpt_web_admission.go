@@ -26,10 +26,10 @@ func chatGPTWebAdmissionUnavailable() error {
 	return &chatGPTWebFailure{"web_account_unavailable", http.StatusServiceUnavailable, false}
 }
 
-func chatGPTWebAdmissionKeyValid(row *database.APIKeyRow, model string) bool {
+func chatGPTWebAdmissionKeyValid(row *database.APIKeyRow, operation, model string) bool {
 	return row != nil && row.ID > 0 && row.Enabled && (!row.ExpiresAt.Valid || row.ExpiresAt.Time.After(time.Now())) &&
 		row.Limits.ResolveUpstreamChannel() == database.UpstreamChannelChatGPTWeb &&
-		row.Limits.ResolveImageGenerationPolicy() == database.ImageGenerationPolicyAllow &&
+		(operation == "chat" || row.Limits.ResolveImageGenerationPolicy() == database.ImageGenerationPolicyAllow) &&
 		!row.Limits.ExternalScheduler && checkAPIKeyModel(model, row.Limits) == ""
 }
 
@@ -45,6 +45,64 @@ func chatGPTWebAdmissionGroupBound(row *database.APIKeyRow, groups []int64) bool
 	return row != nil && slices.ContainsFunc(row.AllowedGroupIDs, func(id int64) bool {
 		return id > 0 && slices.Contains(groups, id)
 	})
+}
+
+func (h *Handler) readChatGPTWebAdmissionKey(ctx context.Context, original *database.APIKeyRow, keyID int64, operation, model string) (*database.APIKeyRow, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	row, err := h.db.GetAPIKeyByID(ctx, keyID)
+	if err != nil || !chatGPTWebAdmissionKeyValid(row, operation, model) || !chatGPTWebAdmissionSameScope(original, row) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	return row, nil
+}
+
+func (h *Handler) validateChatGPTWebAdmissionAccount(ctx context.Context, key *database.APIKeyRow, account *auth.Account, filter auth.AccountFilter) (*auth.Account, error) {
+	current, err := h.db.GetAccountByID(ctx, account.ID())
+	if err != nil || !auth.ChatGPTWebAutoAccountEligible(current, time.Now()) {
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	groups, err := h.db.GetAccountGroupIDs(ctx, account.ID())
+	if err != nil {
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	paused, err := h.db.IsIntelligenceCheckPaused(ctx, account.ID())
+	if err != nil || paused {
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	fresh := &auth.Account{
+		DBID: current.ID, AccessToken: current.GetCredential("access_token"),
+		AccountID: current.GetCredential("account_id"), CustomHeaders: current.GetCredentialStringMap("custom_headers"),
+		PlanType: current.GetCredential("plan_type"), GroupIDs: groups, ProxyURL: current.ProxyURL,
+		CooldownReason: current.CooldownReason, Status: auth.StatusReady,
+	}
+	if current.Status == "cooldown" {
+		fresh.Status = auth.StatusCooldown
+	}
+	if raw := current.GetCredential("expires_at"); raw != "" {
+		fresh.ExpiresAt, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return nil, chatGPTWebAdmissionUnavailable()
+		}
+	}
+	fresh.SetAllowedAPIKeyIDs(current.GetCredentialInt64Slice("allowed_api_key_ids"))
+	if !auth.APIKeyRowAllowsChatGPTWebAccount(key, fresh) || (filter != nil && (!filter(fresh) || !filter(account))) ||
+		!h.store.ChatGPTWebAccountCanCheckContext(ctx, key.ID, fresh) || !h.store.ChatGPTWebAccountCanCheckContext(ctx, key.ID, account) {
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	token, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
+	freshToken, freshRequested, _, freshExpired, freshIdentityErr := fresh.ChatGPTWebIdentity()
+	proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
+	freshProxy, freshUsable := h.store.ResolveChatGPTWebProxy(fresh)
+	if identityErr != nil || freshIdentityErr != nil || token != freshToken || requested != freshRequested ||
+		(current.GetCredential("expires_at") != "" && expired != freshExpired) || !usable || !freshUsable || proxyURL != freshProxy {
+		return nil, chatGPTWebAdmissionUnavailable()
+	}
+	return fresh, ctx.Err()
 }
 
 func chatGPTWebAutoCheckNeeded(state *database.ChatGPTWebAccountState, operation, token, requested, proxyURL string, expired bool, now time.Time) bool {
@@ -63,10 +121,14 @@ func chatGPTWebAutoCheckNeeded(state *database.ChatGPTWebAccountState, operation
 			return true
 		}
 	}
-	if state.LastCheckErrorCode != "" && state.LastCheckAt != nil && now.Sub(*state.LastCheckAt) < 2*time.Minute {
+	imageQuotaError := state.LastCheckErrorCode == "quota_exhausted" || state.LastCheckErrorCode == "quota_unknown"
+	if state.LastCheckErrorCode != "" && !(operation == "chat" && imageQuotaError) && state.LastCheckAt != nil && now.Sub(*state.LastCheckAt) < 2*time.Minute {
 		return false
 	}
 	matches := !expired && chatGPTWebStateMatches(*state, token, requested, proxyURL)
+	if operation == "chat" {
+		return !matches || !chatGPTWebStateReady(*state, operation, now)
+	}
 	if matches && state.Status == "quota_exhausted" && state.QuotaResetAt != nil && state.QuotaResetAt.After(now) {
 		return false
 	}
@@ -86,7 +148,7 @@ func chatGPTWebAutoCheckNeeded(state *database.ChatGPTWebAccountState, operation
 }
 
 // prepareChatGPTWebAccounts only prepares local readiness; it never submits an
-// image. Its caller may retry local selection once, only for a new execution.
+// upstream request. Its caller may retry local selection once before submission.
 func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model string) (resultErr error) {
 	parent := c.Request.Context()
 	if err := parent.Err(); err != nil {
@@ -103,22 +165,12 @@ func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model str
 		}
 		cancel()
 	}()
-	if h.db == nil || h.store == nil || requestAPIKeyID(c) <= 0 || (operation != "generate" && operation != "edit") {
+	if h.db == nil || h.store == nil || requestAPIKeyID(c) <= 0 || (operation != "generate" && operation != "edit" && operation != "chat") {
 		return chatGPTWebAdmissionUnavailable()
 	}
 	original := apiKeyRowFromContext(c)
 	readKey := func(ctx context.Context) (*database.APIKeyRow, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		row, err := h.db.GetAPIKeyByID(ctx, requestAPIKeyID(c))
-		if err != nil || !chatGPTWebAdmissionKeyValid(row, model) || !chatGPTWebAdmissionSameScope(original, row) {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		return row, nil
+		return h.readChatGPTWebAdmissionKey(ctx, original, requestAPIKeyID(c), operation, model)
 	}
 	row, err := readKey(ctx)
 	if err != nil {
@@ -194,50 +246,7 @@ func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model str
 			return nil, chatGPTWebAdmissionUnavailable()
 		}
 		validated++
-		current, err := h.db.GetAccountByID(ctx, account.ID())
-		if err != nil {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		if !auth.ChatGPTWebAutoAccountEligible(current, time.Now()) {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		groups, err := h.db.GetAccountGroupIDs(ctx, account.ID())
-		if err != nil {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		paused, err := h.db.IsIntelligenceCheckPaused(ctx, account.ID())
-		if err != nil || paused {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		fresh := &auth.Account{
-			DBID: current.ID, AccessToken: current.GetCredential("access_token"),
-			AccountID: current.GetCredential("account_id"), CustomHeaders: current.GetCredentialStringMap("custom_headers"),
-			PlanType: current.GetCredential("plan_type"), GroupIDs: groups, ProxyURL: current.ProxyURL,
-			CooldownReason: current.CooldownReason, Status: auth.StatusReady,
-		}
-		if current.Status == "cooldown" {
-			fresh.Status = auth.StatusCooldown
-		}
-		if raw := current.GetCredential("expires_at"); raw != "" {
-			fresh.ExpiresAt, err = time.Parse(time.RFC3339, raw)
-			if err != nil {
-				return nil, chatGPTWebAdmissionUnavailable()
-			}
-		}
-		fresh.SetAllowedAPIKeyIDs(current.GetCredentialInt64Slice("allowed_api_key_ids"))
-		if !auth.APIKeyRowAllowsChatGPTWebAccount(key, fresh) || (filter != nil && (!filter(fresh) || !filter(account))) ||
-			!h.store.ChatGPTWebAccountCanCheckContext(ctx, key.ID, fresh) || !h.store.ChatGPTWebAccountCanCheckContext(ctx, key.ID, account) {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		token, requested, _, expired, identityErr := account.ChatGPTWebIdentity()
-		freshToken, freshRequested, _, freshExpired, freshIdentityErr := fresh.ChatGPTWebIdentity()
-		proxyURL, usable := h.store.ResolveChatGPTWebProxy(account)
-		freshProxy, freshUsable := h.store.ResolveChatGPTWebProxy(fresh)
-		if identityErr != nil || freshIdentityErr != nil || token != freshToken || requested != freshRequested ||
-			(current.GetCredential("expires_at") != "" && expired != freshExpired) || !usable || !freshUsable || proxyURL != freshProxy {
-			return nil, chatGPTWebAdmissionUnavailable()
-		}
-		return fresh, ctx.Err()
+		return h.validateChatGPTWebAdmissionAccount(ctx, key, account, filter)
 	}
 
 	h.chatGPTWebAdmissionOnce.Do(func() { h.chatGPTWebAdmissionSlots = make(chan struct{}, 7) })
@@ -304,7 +313,7 @@ func (h *Handler) prepareChatGPTWebAccounts(c *gin.Context, operation, model str
 			var detail *ChatGPTWebCheckError
 			if errors.As(checkErr, &detail) {
 				lastCheckError = detail
-				if detail.Code == "worker_unavailable" || detail.Code == "internal_error" {
+				if detail.Code == "worker_unavailable" || detail.Code == "internal_error" || detail.Code == "worker_chat_unsupported" {
 					break
 				}
 			}

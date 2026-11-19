@@ -70,6 +70,7 @@ export default function ChatGPTWebSettings() {
       setBusy(false)
     }
   }
+  const supportedModels = [...new Set([...(deployment?.supported_models ?? []), ...(deployment?.supported_chat_models ?? [])])]
   return <Card className="min-w-0 gap-0 py-0"><CardContent className="min-w-0 space-y-4 p-5">
     <h3 className="font-semibold">{t('chatgptWeb.title')}</h3>
     <p className="text-xs text-muted-foreground">{t('chatgptWeb.config')}</p>
@@ -77,7 +78,8 @@ export default function ChatGPTWebSettings() {
     <p className="text-sm leading-relaxed">{t('chatgptWeb.guide')}</p>
     <p className="text-sm leading-relaxed">{t('chatgptWebAutoHint')}</p>
     <div className="flex flex-wrap gap-3 text-sm"><Link className="text-primary underline" to="/api-keys">{t('chatgptWeb.createKey')}</Link><Link className="text-primary underline" to="/images/studio">{t('chatgptWeb.studio')}</Link></div>
-    <p className="break-words text-sm">{t('chatgptWeb.deployment')}: {deployment ? `${t(deployment.enabled ? 'chatgptWeb.enabled' : 'chatgptWeb.disabled')} · ${t(deployment.configured ? 'chatgptWeb.configured' : 'chatgptWeb.notConfigured')} · ${deployment.protocol_version || '—'} · ${(deployment.supported_models || []).join(', ') || '—'}` : '—'}</p>
+    <p className="break-words text-sm">{t('chatgptWeb.deployment')}: {deployment ? `${t(deployment.enabled ? 'chatgptWeb.enabled' : 'chatgptWeb.disabled')} · ${t(deployment.configured ? 'chatgptWeb.configured' : 'chatgptWeb.notConfigured')} · ${deployment.protocol_version || '—'}` : '—'}</p>
+    {deployment && <p className="break-words text-sm">{t('gateways.supportedModels')}: {supportedModels.join(', ') || '—'}</p>}
     {deployment && (!deployment.enabled || !deployment.configured) && <p className="text-sm text-muted-foreground" role="status">{t('chatgptWeb.serviceNotReady')}</p>}
     <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void load()}>{t('chatgptWeb.refresh')}</Button>
     {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
