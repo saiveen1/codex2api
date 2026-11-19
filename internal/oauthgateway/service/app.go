@@ -14,6 +14,8 @@ import (
 	"github.com/codex2api/internal/oauthgateway/upstream"
 )
 
+const maxJobs = 200
+
 type App struct {
 	store      Store
 	target     Target
@@ -106,7 +108,7 @@ func (a *App) settings() (Settings, error) {
 	return s.Settings, nil
 }
 func settingsView(s Settings) SettingsView {
-	return SettingsView{OAuthURL: s.OAuthURL, OAuthTokenSet: s.OAuthToken != "", Configured: s.OAuthURL != "" && s.OAuthToken != "", AutoRecoverySupported: true, AutoRecoveryReason: "支持显式保管材料账号的受控原账号恢复；先尝试正常刷新，再核验 password_totp、原主体/工作区身份锁和凭据版本。未保管的历史账号不会自动启用，封禁或身份不可证明时需人工处理。"}
+	return SettingsView{OAuthURL: s.OAuthURL, OAuthTokenSet: s.OAuthToken != "", Configured: s.OAuthURL != "" && s.OAuthToken != "", MaxJobs: maxJobs, MaxArchivedJobs: maxArchivedJobs, AutoRecoverySupported: true, AutoRecoveryReason: "支持显式保管材料账号的受控原账号恢复；先尝试正常刷新，再核验 password_totp、原主体/工作区身份锁和凭据版本。未保管的历史账号不会自动启用，封禁或身份不可证明时需人工处理。"}
 }
 func (a *App) Settings() (SettingsView, error) { s, err := a.settings(); return settingsView(s), err }
 func (a *App) SaveSettings(next Settings) (SettingsView, error) {
@@ -375,7 +377,7 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 		if !settingsView(s.Settings).Configured {
 			return fault(409, "not_configured", "请先配置 OAuth 连接。")
 		}
-		if len(s.Jobs) >= 200 {
+		if len(s.Jobs) >= maxJobs {
 			return fault(409, "state_capacity", "任务记录已达到首版上限，请管理员归档后处理。")
 		}
 		incoming := map[string]bool{}

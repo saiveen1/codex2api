@@ -15,6 +15,8 @@ const pendingKey = 'codex2api:oauth-gateway:pending-request'
 const material = 'fixture@example.invalid----  synthetic-password  ----JBSWY3DPEHPK3PXP'
 let browser, script, css, artifacts
 before(async () => {
+  // Keep the JSX transform and the in-memory React bundle in the same mode.
+  process.env.NODE_ENV = 'production'
   artifacts = process.env.OAUTH_GATEWAY_TEST_ARTIFACT_DIR || await mkdtemp(path.join(tmpdir(), 'codex2api-oauth-'))
   await mkdir(artifacts, { recursive: true })
   const result = await build({ configFile: false, root, logLevel: 'error', plugins: [react(), tailwindcss(), {
@@ -47,8 +49,9 @@ async function fixture(t, options = {}) {
   t.after(() => assert.deepEqual(errors, []))
   const state = {
     submissions: 0, lookups: [], requests: [], job: null, archived: [], lastInput: null, previewInput: null,
+    jobs: options.jobs || [], archivedIDs: [],
     failures: { capabilities: options.capabilityFailures || 0, quota: options.quotaFailures || 0, groups: options.groupFailures || 0 },
-    settings: { oauth_url: 'https://oauth.cala.lol', oauth_token_set: true, configured: true, auto_recovery_supported: true, auto_recovery_reason: '' },
+    settings: { oauth_url: 'https://oauth.cala.lol', oauth_token_set: true, configured: true, auto_recovery_supported: true, auto_recovery_reason: '', max_jobs: 200, max_archived_jobs: 10000 },
     caps: { countries: ['auto', 'US'], environments: ['auto', 'custom_ua'], proxy_modes: ['system', 'custom'], workspace_policies: ['team_preferred'], max_batch_size: 100, max_upload_bytes: 1048576, features: { proxy_check: true, expected_identity_guard: true } },
     quota: { total: 10, remaining: 9, reserved: 0, used: 1 }, groups: options.emptyGroups ? [] : [{ id: 1, name: '测试分组' }],
     recoveries: options.recoveries || [], disabledRecoveries: [], missingLookup: false,
@@ -91,8 +94,15 @@ async function fixture(t, options = {}) {
       if (options.uncertain) return fail('synthetic_response_lost', 503)
       return send(state.job, 202)
     }
-    if (p === '/jobs') return send(url.searchParams.has('archived') ? state.archived : state.job && !state.job.archived ? [state.job] : [])
-    if (p === `/jobs/${state.job?.id}/archive`) { state.job = { ...state.job, archived: true }; state.archived.push(state.job); return send(state.job) }
+    if (p === '/jobs') return send(url.searchParams.has('archived') ? state.archived : [...state.jobs, ...(state.job ? [state.job] : [])].filter(job => !job.archived))
+    if (p.endsWith('/archive') && request.method() === 'POST') {
+      const job = [...state.jobs, state.job].find(job => job && p === `/jobs/${job.id}/archive`)
+      if (!job?.can_archive) return fail('cannot_archive', 409)
+      job.archived = true; state.archivedIDs.push(job.id)
+      const summary = { ...job, groups: [] }
+      state.archived.push(summary)
+      return send(summary)
+    }
     if (p.startsWith('/jobs/') && request.method() === 'GET') {
       state.lookups.push(p.slice('/jobs/'.length))
       return state.missingLookup ? fail('not_found', 404) : send(state.job)
@@ -106,7 +116,10 @@ async function fixture(t, options = {}) {
   }, !!options.noMaskSupport)
   await page.addStyleTag({ content: css })
   await page.addScriptTag({ content: script })
-  await page.getByRole('heading', { name: 'OAuth 网关', exact: true }).waitFor()
+  await page.getByRole('heading', { name: 'OAuth 网关', exact: true }).waitFor().catch(async error => {
+    const headings = await page.getByRole('heading').allTextContents()
+    throw new Error(`${error.message}\nHeadings: ${JSON.stringify(headings)}; browser errors: ${JSON.stringify(errors)}`)
+  })
   return { page, state }
 }
 async function ready(page) {
@@ -146,11 +159,10 @@ test('initial load, full identifiers, preview invalidation, terminal reasons and
   state.job = { ...state.job, state: 'completed', imported: 1, pending: 0, can_refresh: false, can_cancel: false, can_archive: true, groups: [{ ...state.job.groups[0], state: 'complete', imported: 1, items: [{ line: 1, identifier: 'fixture@example.invalid', state: 'succeeded', import_state: 'imported' }] }] }
   await page.getByRole('button', { name: '刷新列表', exact: true }).click()
   await page.locator('details[open]').getByText(/授权成功/).waitFor()
-  await page.getByText('任务已结束，无需继续查询。', { exact: true }).waitFor()
-  assert.equal(await page.getByRole('button', { name: '查询原任务', exact: true }).isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: '核查原任务', exact: true }).count(), 0)
   await page.screenshot({ path: path.join(artifacts, 'oauth-desktop.png'), fullPage: true })
   page.once('dialog', dialog => dialog.accept())
-  await page.getByRole('button', { name: '归档', exact: true }).click()
+  await page.getByRole('button', { name: '归档（保留自动恢复）', exact: true }).click()
   await page.getByRole('button', { name: '归档任务', exact: true }).click()
   await page.getByText(/已归档/).waitFor()
   assert.equal(state.submissions, 1)
@@ -161,7 +173,7 @@ test('quota failure leaves capabilities and groups usable, and retries only quot
   const { page, state } = await fixture(t, { quotaFailures: 1 })
   await ready(page)
   await page.getByRole('alert').getByText(/quota_failed/).waitFor()
-  assert.equal(await page.getByLabel('国家', { exact: true }).isDisabled(), false)
+  assert.equal(await page.getByLabel('授权出口国家／地区', { exact: true }).isDisabled(), false)
   assert.equal(await page.getByLabel('测试分组', { exact: true }).count(), 1)
   await page.getByLabel('账号材料', { exact: true }).fill(material)
   assert.equal(await page.getByRole('button', { name: '预检', exact: true }).isDisabled(), false)
@@ -190,8 +202,8 @@ test('refresh preserves selected groups, options, material and an unchanged vali
   const { page, state } = await fixture(t)
   await ready(page)
   await page.getByLabel('测试分组', { exact: true }).check()
-  await page.getByLabel('国家', { exact: true }).click()
-  await page.getByRole('option', { name: 'US', exact: true }).click()
+  await page.getByLabel('授权出口国家／地区', { exact: true }).click()
+  await page.getByRole('option', { name: '美国 (US)', exact: true }).click()
   await page.getByLabel('时区（可选）').fill('UTC')
   await prepare(page)
   await page.getByRole('button', { name: '读取能力和配额', exact: true }).click()
@@ -236,11 +248,11 @@ test('repair is explicit, opts into retention, and cannot change existing destin
   const optIn = page.getByLabel('成功后启用 401 自动恢复（加密保管密码和 TOTP）', { exact: true })
   assert.equal(await optIn.isChecked(), false)
   await page.getByLabel('测试分组', { exact: true }).check()
-  await page.getByLabel(/运行时代理 URI/).fill('socks5://synthetic.example.invalid:1080')
+  await page.getByLabel('本次批量运行代理 URI', { exact: true }).fill('socks5://synthetic.example.invalid:1080')
   await page.getByLabel(/修复已有账号 ID/).fill('42')
   await optIn.check()
   assert.equal(await page.getByLabel('测试分组', { exact: true }).isDisabled(), true)
-  assert.equal(await page.getByLabel(/运行时代理 URI/).isDisabled(), true)
+  assert.equal(await page.getByLabel('本次批量运行代理 URI', { exact: true }).isDisabled(), true)
   await prepare(page)
   await page.getByRole('button', { name: '授权并修复原账号', exact: true }).click()
   await page.getByText(/任务已接受：/).waitFor()
@@ -257,7 +269,7 @@ test('recovery stop is explicit and the state remains visible', async t => {
   await stop.waitFor()
   page.once('dialog', dialog => dialog.accept())
   await stop.click()
-  await page.getByText('此条目未启用恢复，无需再次停止。', { exact: true }).waitFor()
+  await page.getByText('这条记录已停止恢复。', { exact: true }).waitFor()
   assert.deepEqual(state.disabledRecoveries, [42])
   assert.equal(await stop.isDisabled(), true)
 })
@@ -340,6 +352,8 @@ test('recovery opt-in is blocked without the original-identity guard', async t =
 test('one account can select a runtime proxy without changing OAuth proxy mode', async t => {
   const { page, state } = await fixture(t)
   await prepare(page)
+  assert.equal(await page.getByRole('button', { name: 'OAuth 代理模式' }).textContent(), '网关动态代理')
+  await page.getByText('单账号覆盖 (0)', { exact: true }).click()
   const row = page.getByRole('group', { name: '账号 fixture@example.invalid 的运行代理', exact: true })
   await row.getByRole('button', { name: '从代理池选择', exact: false }).click()
   await page.getByRole('option').filter({ hasText: '运行节点一' }).click()
@@ -363,7 +377,8 @@ test('multiple account runtime proxies survive reordering and inherit the batch 
   await ready(page)
   const first = material, second = material.replace('fixture@', 'second@')
   await page.getByLabel('账号材料', { exact: true }).fill(`${first}\n${second}`)
-  await page.getByLabel('运行时代理 URI（可选）', { exact: true }).fill(state.proxies[0].url)
+  await page.getByLabel('本次批量运行代理 URI', { exact: true }).fill(state.proxies[0].url)
+  await page.getByText('单账号覆盖 (0)', { exact: true }).click()
   await page.getByLabel('账号 second@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[1].url)
   await page.getByLabel('账号材料', { exact: true }).fill(`${second}\n${first}`)
   assert.equal(await page.getByLabel('账号 second@example.invalid 的运行代理 URI', { exact: true }).inputValue(), state.proxies[1].url)
@@ -386,6 +401,7 @@ test('JSON runtime pins can be reset to inherit and are omitted from account rep
   await page.getByLabel('输入格式', { exact: true }).click()
   await page.getByRole('option', { name: 'JSON', exact: true }).click()
   await page.getByLabel('账号材料', { exact: true }).fill(JSON.stringify([{ identifier: 'fixture@example.invalid', password: 'synthetic-password', totp_secret: 'JBSWY3DPEHPK3PXP', proxy: 'http://oauth-only.example.invalid:8080', runtime_proxy: state.proxies[1].url }]))
+  await page.getByText('单账号覆盖 (1)', { exact: true }).click()
   const row = page.getByRole('group', { name: '账号 fixture@example.invalid 的运行代理', exact: true })
   assert.equal(await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).inputValue(), state.proxies[1].url)
   await row.getByRole('button', { name: '沿用统一设置', exact: true }).click()
@@ -404,6 +420,7 @@ test('proxy list failures remain visible and mobile account proxy controls fit',
   await ready(page)
   await page.getByLabel('账号材料', { exact: true }).fill(material)
   await page.getByText('Synthetic proxy list failed', { exact: true }).waitFor()
+  await page.getByText('单账号覆盖 (0)', { exact: true }).click()
   await page.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[0].url)
   assert.equal(await page.getByRole('button', { name: '预检', exact: true }).isDisabled(), false)
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
@@ -421,10 +438,10 @@ test('reauthorization requires fresh matching single-account material, preview a
   await page.getByText(/HTTP 409 · 阶段: TOTP 验证 · 接口: api_accounts_mfa_verify/).waitFor()
   await page.getByLabel('账号材料', { exact: true }).fill('other----p----t')
   page.once('dialog', dialog => dialog.dismiss())
-  await page.getByRole('button', { name: '重新授权此账号', exact: true }).click()
+  await page.getByRole('button', { name: '重新授权此账号（新任务）', exact: true }).click()
   assert.equal(await page.getByLabel('账号材料', { exact: true }).inputValue(), 'other----p----t')
   page.once('dialog', dialog => dialog.accept())
-  await page.getByRole('button', { name: '重新授权此账号', exact: true }).click()
+  await page.getByRole('button', { name: '重新授权此账号（新任务）', exact: true }).click()
   assert.equal(await page.getByLabel('账号材料', { exact: true }).inputValue(), '')
   await page.getByLabel('账号材料', { exact: true }).fill('other----p----t')
   assert.equal(await page.getByRole('button', { name: '预检', exact: true }).isDisabled(), true)
@@ -443,4 +460,47 @@ test('reauthorization requires fresh matching single-account material, preview a
   await page.getByText(/任务已接受：/).waitFor()
   assert.equal(state.submissions, 1)
   assert.deepEqual(state.lastInput.retry_of, { job_id: 'original-job', line: 42 })
+})
+
+test('job filters, stable pagination, result snapshot and guarded batch archive', async t => {
+  const active = { id: 'active-review', job_type: 'auto_recovery', state: 'needs_review', total: 1, imported: 0, failed: 0, pending: 1, can_refresh: true, can_archive: false, group_ids: [1] }
+  const jobs = Array.from({ length: 12 }, (_, i) => ({
+    id: `fixture-job-${i}`, job_type: 'import', state: 'completed', total: 1, imported: 1, failed: 0, pending: 0, can_archive: true, group_ids: i === 9 ? [1] : [],
+    created_at: `2026-01-${String(20 - i).padStart(2, '0')}T00:00:00Z`, requested_country: 'US',
+    account_results: [{ line: 1, account_id: 100 + i, plan_type: 'plus', workspace_id: 'synthetic-workspace', group_ids: i === 9 ? [1] : [], runtime_proxy_id: 2, recovery_state: 'ready', identifier_masked: 'f***@example.invalid', outcome: 'imported' }],
+    groups: [{ index: 0, state: 'completed', imported: 1, total: 1, items: [{ line: 1, identifier: `fixture-${i}@example.invalid`, state: 'succeeded', import_state: 'imported' }] }],
+  }))
+  const { page, state } = await fixture(t, { jobs: [...jobs, active], recoveries: [{ account_id: 109, identifier: 'fixture@example.invalid', state: 'ready', attempts: 0, can_disable: true, account_disabled: true, last_outcome: 'refresh_succeeded' }] })
+  const panel = page.locator('#oauth-jobs')
+  await panel.locator('article').first().getByText('active-review', { exact: true }).waitFor()
+  assert.equal(await panel.locator('article').count(), 10)
+  await panel.getByRole('button', { name: '下一页' }).click()
+  const row = panel.locator('#oauth-job-fixture-job-9')
+  await row.getByText('批次与账号详情', { exact: true }).click()
+  await row.getByText('plus', { exact: true }).waitFor()
+  assert.equal(await row.getByRole('link', { name: '#109', exact: true }).getAttribute('href'), '/accounts?account_id=109')
+  assert.equal(await row.getByRole('link', { name: '#109', exact: true }).getAttribute('target'), '_blank')
+  await panel.getByRole('button', { name: '刷新列表' }).click()
+  await panel.getByText('第 2 / 2 页', { exact: true }).waitFor()
+  assert.equal(await row.locator('details[open]').count(), 1)
+  await panel.getByLabel('任务类型', { exact: true }).click()
+  await page.getByRole('option', { name: '新增导入', exact: true }).click()
+  await panel.getByLabel('任务目标分组', { exact: true }).click()
+  await page.getByRole('option', { name: '测试分组', exact: true }).click()
+  assert.equal(await panel.locator('article').count(), 1)
+  await panel.getByLabel('搜索任务或账号').fill('#109')
+  await row.getByText('plus', { exact: true }).waitFor()
+  const dialog = page.waitForEvent('dialog').then(async dialog => { assert.match(dialog.message(), /自动恢复不受影响/); await dialog.accept() })
+  await panel.getByRole('button', { name: '归档本页已结束任务（1）', exact: true }).click()
+  await dialog
+  await page.getByText('已归档 1/1 个任务。', { exact: true }).waitFor()
+  assert.deepEqual(state.archivedIDs, ['fixture-job-9'])
+  await panel.getByRole('button', { name: '归档任务', exact: true }).click()
+  await row.getByText('plus', { exact: true }).waitFor()
+  assert.equal(await row.getByText('fixture-9@example.invalid', { exact: true }).count(), 0)
+  await page.getByRole('link', { name: '账号自动恢复', exact: true }).click()
+  await page.locator('#oauth-recovery').getByText(/普通令牌刷新成功/).waitFor()
+  await page.locator('#oauth-recovery').getByText(/账号已禁用；恢复不会自动启用账号/).waitFor()
+  assert.equal(await page.evaluate(() => location.hash), '#oauth-recovery')
+  assert.equal(state.submissions, 0)
 })

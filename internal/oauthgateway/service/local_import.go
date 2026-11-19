@@ -1,6 +1,12 @@
 package service
 
-import "github.com/codex2api/internal/oauthgateway/upstream"
+import (
+	"context"
+	"strings"
+
+	"github.com/codex2api/internal/oauthgateway/upstream"
+	"github.com/codex2api/internal/openaiidentity"
+)
 
 // LocalImportError uses fixed messages. The wire decoder never accepts source
 // "codex", so an external gateway cannot forge this local adapter classification.
@@ -48,4 +54,45 @@ func localImportProblem(remote *upstream.Error) *Problem {
 	clean.Uncertain = clean.Uncertain || remote.Uncertain
 	problem := Problem(*clean)
 	return &problem
+}
+
+func committedAccountResult(ctx context.Context, target Target, job Job, g Group, line int, result upstream.ImportResult) *AccountResult {
+	if line < 1 || line > len(g.Lines) {
+		return nil
+	}
+	r := &AccountResult{Line: g.Lines[line-1], Outcome: "imported"}
+	if line <= len(g.Request.Accounts) && g.Request.Accounts[line-1].Identifier != "" {
+		r.IdentifierMasked = mask(g.Request.Accounts[line-1].Identifier)
+	}
+	switch {
+	case job.Recovery != nil && result.Updated == 1:
+		r.AccountID, r.Outcome = job.Recovery.AccountID, reauthorizationSucceeded
+	case result.Success == 1:
+		if len(result.CreatedIDs) == 1 {
+			r.AccountID = result.CreatedIDs[0]
+		}
+	default:
+		return nil // No confirmed account write with a known identity to snapshot.
+	}
+	if c, ok := target.(AccountResultTarget); ok && r.AccountID > 0 {
+		row := c.AccountResult(ctx, r.AccountID)
+		// Only known public plan labels are safe to persist from a credential row.
+		plan := strings.ToLower(strings.TrimSpace(row.PlanType))
+		switch plan {
+		case "free", "go", "plus", "pro", "prolite", "pro_lite", "pro-lite", "promax", "pro_max", "pro-max", "team", "teamplus", "business", "self_serve_business_prolite", "enterprise", "ent26", "enterprise_cbp_usage_based", "enterprise_cbp_automation", "edu", "edu_plus", "edu_pro", "education", "k12":
+			r.PlanType = plan
+		}
+		if openaiidentity.ValidWebWorkspaceID(row.WorkspaceID) {
+			r.WorkspaceID = row.WorkspaceID
+		}
+		if row.GroupIDs != nil {
+			ids := sortedGroups(*row.GroupIDs)
+			r.GroupIDs = &ids
+		}
+		if row.RuntimeProxyID != nil && *row.RuntimeProxyID >= 0 {
+			id := *row.RuntimeProxyID
+			r.RuntimeProxyID = &id
+		}
+	}
+	return r
 }

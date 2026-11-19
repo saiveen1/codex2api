@@ -71,7 +71,7 @@ func TestReauthorizationUsesGlobalLineAndKeepsImportRetry(t *testing.T) {
 		t.Fatalf("preview rejected replacement material: %#v, %v", p, err)
 	}
 	child, existing, err := a.Create(in)
-	if err != nil || existing || child.RetryOf == nil || *child.RetryOf != *in.RetryOf || child.Total != 1 {
+	if err != nil || existing || child.RetryOf == nil || *child.RetryOf != *in.RetryOf || child.Total != 1 || child.JobType != "reauthorize" {
 		t.Fatalf("unexpected create: %#v, %t, %v", child, existing, err)
 	}
 	s, err := store.View()

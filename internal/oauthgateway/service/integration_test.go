@@ -36,8 +36,11 @@ func TestSettingsDefaultMaskAndControlledRecovery(t *testing.T) {
 	raw, _ := json.Marshal(v)
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &fields)
-	if len(fields) != 5 || bytes.Contains(raw, []byte("synthetic-cdk")) || fields["oauth_token"] != nil {
+	if len(fields) != 7 || bytes.Contains(raw, []byte("synthetic-cdk")) || fields["oauth_token"] != nil {
 		t.Fatal("settings exposed credentials or old remote-target fields")
+	}
+	if string(fields["max_jobs"]) != "200" || string(fields["max_archived_jobs"]) != "10000" {
+		t.Fatal("settings did not expose existing job limits")
 	}
 	if _, err = a.SaveSettings(Settings{OAuthURL: "https://other.example.invalid"}); err == nil {
 		t.Fatal("URL changed without new token")

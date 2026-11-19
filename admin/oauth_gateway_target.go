@@ -28,6 +28,22 @@ func (t oauthGatewayTarget) Groups(ctx context.Context) ([]upstream.Group, error
 	return out, nil
 }
 
+func (t oauthGatewayTarget) AccountResult(ctx context.Context, id int64) service.AccountResult {
+	row, err := t.h.db.GetAccountByID(ctx, id)
+	if err != nil || row.Platform != "openai" || row.Type != "oauth" {
+		return service.AccountResult{}
+	}
+	result := service.AccountResult{
+		WorkspaceID:    openaiidentity.NormalizeWorkspaceID(row.GetCredential("workspace_id")),
+		PlanType:       row.GetCredential("plan_type"),
+		RuntimeProxyID: t.h.db.OAuthGatewayProxyID(ctx, row.ProxyURL),
+	}
+	if ids, err := t.h.db.GetAccountGroupIDs(ctx, id); err == nil {
+		result.GroupIDs = &ids
+	}
+	return result
+}
+
 func (h *Handler) validateOAuthGatewayDestination(ctx context.Context, groupIDs []int64, runtimeProxy string, accountProxies ...string) error {
 	if h.db == nil {
 		return database.ErrOAuthGatewayState

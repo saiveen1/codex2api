@@ -10,6 +10,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -257,6 +259,42 @@ func (db *DB) InsertOAuthGatewayAccount(ctx context.Context, name string, creden
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
 		credentials, normalizeIDSlice(groupIDs), name, credJSON, proxyURL,
 	)
+}
+
+// OAuthGatewayProxyID resolves the committed binding without exposing its URL.
+// Zero is a confirmed absence of a binding; nil means the binding could not be resolved.
+func (db *DB) OAuthGatewayProxyID(ctx context.Context, proxyURL string) *int64 {
+	var id int64
+	if proxyURL == "" {
+		return &id
+	}
+	if db.conn.QueryRowContext(ctx, `SELECT id FROM proxies WHERE url = $1`, proxyURL).Scan(&id) != nil || id <= 0 {
+		return nil
+	}
+	return &id
+}
+
+// OAuthGatewayDisabledAccounts checks persistent account state, not runtime 401 cooldowns.
+func (db *DB) OAuthGatewayDisabledAccounts(ctx context.Context, ids []int64) map[int64]bool {
+	disabled := make(map[int64]bool)
+	for group := range slices.Chunk(ids, 500) {
+		args := make([]any, len(group))
+		for i, id := range group {
+			args[i] = id
+		}
+		rows, err := db.conn.QueryContext(ctx, `SELECT id FROM accounts WHERE status <> 'deleted' AND (enabled = FALSE OR status = 'disabled') AND id IN (`+strings.Join(dbPlaceholders(db.isSQLite(), 1, len(group)), ",")+`)`, args...)
+		if err != nil {
+			return disabled
+		}
+		for rows.Next() {
+			var id int64
+			if rows.Scan(&id) == nil {
+				disabled[id] = true
+			}
+		}
+		_ = rows.Close()
+	}
+	return disabled
 }
 
 // NORMAL WAL commits can be lost on power failure. Pin a connection and use

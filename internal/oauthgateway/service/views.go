@@ -1,10 +1,39 @@
 package service
 
+import "strings"
+
+func requestedCountry(raw string) string {
+	if strings.EqualFold(raw, "auto") {
+		return "auto"
+	}
+	code := strings.ToUpper(raw)
+	if len(code) == 2 && code[0] >= 'A' && code[0] <= 'Z' && code[1] >= 'A' && code[1] <= 'Z' {
+		return code
+	}
+	return ""
+}
+
 func jobView(j Job) JobView {
 	v := JobView{ID: j.ID, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Groups: []GroupView{}, RetryOf: j.RetryOf}
+	switch {
+	case j.AutoRecovery:
+		v.JobType = "auto_recovery"
+	case j.Recovery != nil:
+		v.JobType = "manual_recovery"
+	case j.RetryOf != nil:
+		v.JobType = "reauthorize"
+	default:
+		v.JobType = "import"
+	}
 	if j.Recovery != nil {
 		v.RecoveryAccountID = j.Recovery.AccountID
 		v.AutoRecovery = j.AutoRecovery
+	} else {
+		ids := sortedGroups(j.GroupIDs)
+		v.GroupIDs = &ids
+	}
+	if len(j.Groups) > 0 {
+		v.RequestedCountry = requestedCountry(j.Groups[0].Request.Options.Country)
 	}
 	review := false
 	allCancelled := true
@@ -61,6 +90,19 @@ func jobView(j Job) JobView {
 				if d.Line == i+1 {
 					item.CanReauthorize = false
 					item.ImportState = d.State
+					if d.State == "imported" && d.Result != nil {
+						v.AccountResults = append(v.AccountResults, *d.Result)
+						if j.Recovery != nil && d.Result.GroupIDs != nil {
+							v.GroupIDs = d.Result.GroupIDs
+						}
+					} else if d.State == "imported" && len(d.CreatedIDs) == 1 && d.CreatedIDs[0] > 0 {
+						// Pre-summary jobs still have the ID returned by the original commit.
+						result := AccountResult{Line: line, AccountID: d.CreatedIDs[0], Outcome: "imported"}
+						if item.Identifier != "" {
+							result.IdentifierMasked = mask(item.Identifier)
+						}
+						v.AccountResults = append(v.AccountResults, result)
+					}
 					if d.Error != nil {
 						item.Error = d.Error
 					}

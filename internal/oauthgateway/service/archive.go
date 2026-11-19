@@ -6,6 +6,7 @@ const maxArchivedJobs = 10000
 
 func archiveView(j ArchivedJob) JobView {
 	return JobView{
+		JobSummary: j.JobSummary, RecoveryAccountID: j.RecoveryAccountID, AutoRecovery: j.AutoRecovery,
 		ID: j.ID, State: j.State, Total: j.Total, Imported: j.Imported,
 		Failed: j.Failed, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
 		Archived: true, ArchivedAt: &j.ArchivedAt, Groups: []GroupView{}, RetryOf: j.RetryOf,
@@ -80,6 +81,7 @@ func (a *App) Archive(id string, discardCredentials bool) (JobView, error) {
 				return fault(409, "archive_capacity", "归档记录达到上限，未删除任务或去重记录。")
 			}
 			archived := ArchivedJob{
+				JobSummary: current.JobSummary, RecoveryAccountID: current.RecoveryAccountID, AutoRecovery: current.AutoRecovery,
 				ID: job.ID, Fingerprint: job.Fingerprint, State: current.State,
 				Total: current.Total, Imported: current.Imported, Failed: current.Failed,
 				CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, ArchivedAt: time.Now().UTC(),
@@ -87,6 +89,10 @@ func (a *App) Archive(id string, discardCredentials bool) (JobView, error) {
 			}
 			if state.Version < 3 {
 				state.Version = 3
+			}
+			// Finish any linked recovery before removing its terminal job.
+			if job.AutoRecovery && job.Recovery != nil {
+				reconcileRecovery(state, job.ID, current.State, recoveryJobProblem(job))
 			}
 			state.Archived = append(state.Archived, archived)
 			copy(state.Jobs[i:], state.Jobs[i+1:])

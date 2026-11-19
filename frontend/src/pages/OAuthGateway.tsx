@@ -10,16 +10,16 @@ import { api, PROXY_POOL_CHANGED, type ProxyRow } from '../api'
 import { ProxyPoolSelect } from '../components/ProxyPoolSelect'
 import { formatProxyDisplayURL, formatProxyIdentity, proxyIsSelectable } from '../lib/accountProxyBinding'
 import { createSubmission, parseMaterial, withAccountRuntimeProxies, previewMatches, readPendingRequest, rememberPendingRequest, forgetPendingRequest, type Account, type GatewayInput, type Problem } from '../lib/oauthGateway'
+import { OAuthJobs, type Job } from '../components/OAuthJobs'
 import { gatewayRequest, GatewayError } from '../lib/oauthGatewayApi'
 
-type Settings = { oauth_url: string; oauth_token_set: boolean; configured: boolean; auto_recovery_supported: boolean; auto_recovery_reason: string }
+type Settings = { oauth_url: string; oauth_token_set: boolean; configured: boolean; auto_recovery_supported: boolean; auto_recovery_reason: string; max_jobs?: number; max_archived_jobs?: number }
 type Capabilities = { countries?: string[]; environments?: string[]; proxy_modes?: string[]; workspace_policies?: string[]; max_batch_size?: number; max_upload_bytes?: number; features?: Record<string, boolean> }
 type Quota = { remaining?: number; total?: number; reserved?: number; used?: number; disabled?: boolean }
 type Group = { id: number; name: string }
 type Identifier = { identifier?: string; identifier_masked?: string }
 type Preview = { valid: boolean; count: number; groups: number; rows?: (Identifier & { line: number; proxy_mode: string })[]; errors?: { line: number; code: string }[] }
-type Job = { id: string; state: string; total: number; imported: number; failed: number; pending: number; can_refresh: boolean; can_cancel: boolean; can_retry_import: boolean; can_archive: boolean; retained_material: boolean; archived: boolean; recovery_account_id?: number; retry_of?: { job_id: string; line: number }; auto_recovery?: boolean; groups?: { index: number; state: string; batch_id: string; request_id: string; imported: number; total: number; error?: Problem; read_operation?: string; read_failures?: number; next_check_at?: string; items?: (Identifier & { line: number; state: string; import_state: string; can_reauthorize?: boolean; diagnostic?: { upstream_code?: string; http_status?: number; endpoint?: string; stage?: string }; error?: Problem })[] }[] }
-type Recovery = { account_id: number; identifier: string; state: string; attempts: number; next_attempt_at?: string; job_id?: string; error?: Problem; can_disable: boolean }
+type Recovery = { account_id: number; identifier: string; state: string; attempts: number; next_attempt_at?: string; job_id?: string; error?: Problem; can_disable: boolean; last_outcome?: string; last_outcome_at?: string; account_disabled?: boolean }
 type Connection = { oauth: { ok: boolean; error?: Problem; capabilities?: Capabilities; quota?: Quota }; codex: { ok: boolean; error?: Problem; groups?: Group[] } }
 type ProxyCheck = { usable: boolean; requested_country?: string; observed_country?: string; openai_reachable?: boolean; openai_http_status?: number; trace_http_status?: number; error?: Problem }
 const fieldClass = 'w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -60,6 +60,7 @@ export default function OAuthGateway() {
   const [recoveries, setRecoveries] = useState<Recovery[] | null>(null)
   const [recoveryError, setRecoveryError] = useState('')
   const [archived, setArchived] = useState(false)
+  const [batchArchiving, setBatchArchiving] = useState(false)
   const [reload, setReload] = useState(0)
   const [message, setMessage] = useState('')
   const [connection, setConnection] = useState('')
@@ -207,7 +208,7 @@ export default function OAuthGateway() {
     if (retry && (count !== 1 || material.accounts[0].identifier.trim().toLowerCase() !== retry.identifier.trim().toLowerCase())) return tr('Re-enter exactly one account matching the original identifier.', '请重新填写且仅填写与原标识匹配的一个账号。')
     if ((saveCredentials || repairing) && !settings.auto_recovery_supported) return tr('This server does not support controlled account recovery.', '当前服务不支持受控账号恢复，请先升级服务端。')
     if ((repairing || saveCredentials) && !caps.features?.expected_identity_guard) return tr('The gateway cannot verify the original identity; repair and automatic recovery are unavailable.', '网关未提供原身份校验能力，不能修复原账号或启用自动恢复。')
-    if (opts.proxy_mode === 'custom' && !opts.proxy) return tr('Enter the OAuth proxy URI.', '请输入自带 OAuth 代理 URI，或改用系统代理。')
+    if (opts.proxy_mode === 'custom' && !opts.proxy) return tr('Enter the OAuth proxy URI or use the gateway dynamic proxy.', '请输入自带 OAuth 代理 URI，或改用网关动态代理。')
     if (opts.user_agent && opts.environment !== 'custom_ua') return tr('Clear User-Agent or choose custom_ua.', '请清空 User-Agent，或将环境改为 custom_ua。')
     for (const [key, values] of [['country', caps.countries], ['environment', caps.environments], ['workspace_policy', caps.workspace_policies], ['proxy_mode', caps.proxy_modes]] as const) {
       if (opts[key] && values && !values.includes(opts[key])) return tr(`The selected ${key} is no longer supported. Choose another value.`, `已选 ${key} 不再受网关支持，请重新选择。`)
@@ -287,10 +288,32 @@ export default function OAuthGateway() {
     forgetPendingRequest(); setUncertain(null); clearMaterial()
     setMessage(tr(`Original job found: ${job.id}`, `已找到原任务：${job.id}`)); setArchived(false); setReload(n => n + 1)
   })
+  const archiveDescription = tr('This clears task details and any remaining task material. Saved automatic recovery is not changed.', '归档会清除任务详情及剩余任务材料，保留结果摘要；已启用的自动恢复不受影响。')
+  const archiveJob = (job: Job, signal: AbortSignal) => gatewayRequest(`/jobs/${encodeURIComponent(job.id)}/archive`, 'POST', { discard_credentials: job.retained_material }, signal)
   const action = (job: Job, path: string) => run(`job:${job.id}`, async signal => {
-    if (path === 'archive' && !window.confirm(job.retained_material ? tr('Discard remaining task credentials and archive? Separately enrolled recovery is unchanged.', '清除该任务剩余凭据并归档？已单独启用的自动恢复不受影响。') : tr('Archive this task? Only statistics and deduplication records remain.', '归档此任务？仅保留统计和去重记录。'))) return
-    await gatewayRequest(`/jobs/${encodeURIComponent(job.id)}/${path}`, 'POST', path === 'archive' ? { discard_credentials: job.retained_material } : {}, signal)
+    if (path === 'archive') {
+      if (!window.confirm(archiveDescription)) return
+      await archiveJob(job, signal)
+    } else await gatewayRequest(`/jobs/${encodeURIComponent(job.id)}/${path}`, 'POST', {}, signal)
     if (!signal.aborted) setReload(n => n + 1)
+  })
+  const archivePage = (items: Job[]) => run('archive-page', async signal => {
+    if (!items.length || !window.confirm(tr(`Archive ${items.length} resolved jobs on this page?`, `归档本页 ${items.length} 个已结束任务？`) + '\n' + archiveDescription)) return
+    setBatchArchiving(true)
+    let done = 0
+    try {
+      for (const job of items) {
+        if (signal.aborted) return
+        await archiveJob(job, signal)
+        done++
+      }
+    } finally {
+      if (!signal.aborted) {
+        setBatchArchiving(false)
+        setMessage(tr(`Archived ${done}/${items.length} jobs.`, `已归档 ${done}/${items.length} 个任务。`))
+        setReload(n => n + 1)
+      }
+    }
   })
   const disableRecovery = (entry: Recovery) => run(`recovery:${entry.account_id}`, async signal => {
     if (!window.confirm(tr(`Stop automatic recovery for account #${entry.account_id} and discard its saved login material?`, `停止账号 #${entry.account_id} 的自动恢复并清除保管的登录材料？`))) return
@@ -304,7 +327,11 @@ export default function OAuthGateway() {
     setRetry({ job_id: job.id, line: item.line, identifier: item.identifier })
   }
   const select = (name: string, key: string, values?: string[], fallback = '') => {
-    const options = [{ value: fallback, label: fallback === 'system' ? tr('System proxy', '系统代理') : key === 'workspace_policy' ? tr('Team preferred (default)', '团队优先（默认）') : tr('Automatic (default)', '自动（默认）') }, ...(values || []).filter(v => v !== fallback).map(value => ({ value, label: value }))]
+    const countryName = (value: string) => {
+      if (!/^[A-Z]{2}$/.test(value)) return value
+      try { return `${new Intl.DisplayNames([zh ? 'zh-CN' : 'en'], { type: 'region' }).of(value)} (${value})` } catch { return value }
+    }
+    const options = [{ value: fallback, label: fallback === 'system' ? tr('Gateway dynamic proxy', '网关动态代理') : key === 'workspace_policy' ? tr('Team preferred (default)', '团队优先（默认）') : tr('Automatic (default)', '自动（默认）') }, ...(values || []).filter(v => v !== fallback).map(value => ({ value, label: key === 'country' ? countryName(value) : key === 'proxy_mode' && value === 'custom' ? tr('Custom OAuth proxy', '自带 OAuth 代理') : value }))]
     if (opts[key] && !options.some(v => v.value === opts[key])) options.push({ value: opts[key], label: `${opts[key]} (${tr('unavailable', '已失效')})` })
     return label(name, <Select aria-label={name} value={opts[key] || fallback} disabled={!caps || formLocked} onValueChange={value => setOption(key, value)} options={options} />)
   }
@@ -312,6 +339,11 @@ export default function OAuthGateway() {
 
   return <div className="space-y-6">
     <PageHeader title={tr('OAuth gateway', 'OAuth 网关')} description={tr('Load connection data, check account material, then authorize. Job results and recovery stay visible below.', '读取连接信息、预检账号材料后再授权。任务结果和自动恢复状态都在下方查看。')} />
+    <nav aria-label={tr('OAuth gateway sections', 'OAuth 网关页面导航')} className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-primary">
+      <a className="underline underline-offset-4" href="#oauth-prepare">{tr('Prepare authorization', '准备授权')}</a>
+      <a className="underline underline-offset-4" href="#oauth-jobs">{tr('Authorization jobs', '授权任务')}</a>
+      {settings?.auto_recovery_supported && <a className="underline underline-offset-4" href="#oauth-recovery">{tr('Automatic account recovery', '账号自动恢复')}</a>}
+    </nav>
     <ol aria-label={tr('Authorization progress', '授权进度')} className="grid gap-3 border-b border-border pb-4 text-sm sm:grid-cols-3">
       <li><span className="font-medium">1. {tr('Connection', '连接就绪')}</span><p className="mt-1 text-muted-foreground">{settings?.configured && caps ? tr('Ready', '已就绪') : tr('Save settings and load capabilities', '保存设置并读取服务能力')}</p></li>
       <li><span className="font-medium">2. {tr('Preview', '材料预检')}</span><p className="mt-1 text-muted-foreground">{previewReady ? tr('Passed; ready to submit', '已通过，可以提交') : previewChanged ? tr('Changed; preview again', '已修改，需要重新预检') : tr('Fill material, then preview', '填写材料后点击预检')}</p></li>
@@ -343,7 +375,7 @@ export default function OAuthGateway() {
         <div className="space-y-2"><p className="font-medium">{tr('Quota remaining / total', '配额剩余 / 总计')}: {quota?.remaining ?? '—'} / {quota?.total ?? '—'}</p><p className="text-muted-foreground">{quota ? tr(`Reserved ${quota.reserved ?? '—'}; used ${quota.used ?? '—'}.`, `已预留 ${quota.reserved ?? '—'}；已使用 ${quota.used ?? '—'}。`) : pending.quota ? tr('Loading…', '正在读取…') : tr('Unknown; not treated as zero.', '尚未取得配额，不视为零。')}</p>{showError('quota')}{errors.quota && <><p className="text-xs text-muted-foreground">{tr('Other data remains available. Authorization will recheck quota.', '其他已读取数据仍可用，授权执行时会再次检查配额。')}</p><Button size="sm" variant="outline" disabled={configLocked || settingsDirty} onClick={loadQuota}>{tr('Retry quota', '重试读取配额')}</Button></>}</div>
       </div>
     </CardContent></Card>
-    <Card><CardHeader><CardTitle>{tr('Prepare authorization', '准备授权')}</CardTitle></CardHeader><CardContent className="space-y-4">
+    <Card id="oauth-prepare" className="scroll-mt-6"><CardHeader><CardTitle>{tr('Prepare authorization', '准备授权')}</CardTitle></CardHeader><CardContent className="space-y-4">
       {retry && <div role="status" className="space-y-2 rounded-md border border-amber-500/40 p-3 text-sm"><p>{tr('Reauthorize one account; re-enter its material:', '重新授权单个账号，请重新填写该账号材料：')} {retry.identifier} · {retry.job_id} · {tr('Line', '第')} {retry.line} {tr('', '行')}</p><Button variant="outline" disabled={formLocked || !!pending.preview} onClick={() => { setRetry(null); invalidate() }}>{tr('Cancel reauthorization', '取消重新授权')}</Button></div>}
       <fieldset disabled={formLocked} className="space-y-4">
         <p className="max-w-4xl text-sm text-muted-foreground">{tr('TXT: identifier----password----TOTP_SECRET, one per line. Use a JSON array for per-account proxies or passwords containing ----. Maximum 1 MiB / 100 accounts. Material is shown in full; the browser does not persist it and clears it after acceptance. Server tasks are encrypted.', 'TXT 每行：账号----密码----TOTP_SECRET。单账号代理或密码包含 ---- 时请用 JSON 数组。最多 1 MiB、100 个账号。材料完整显示，浏览器不持久保存，接受任务后清空；服务端任务加密存储。')}</p>
@@ -360,7 +392,10 @@ export default function OAuthGateway() {
           }} />)}
         </div>
         {label(tr('Account material', '账号材料'), <textarea aria-label={tr('Account material', '账号材料')} className={`${fieldClass} min-h-32 font-mono`} value={source} autoComplete="off" autoCorrect="off" spellCheck={false} onChange={e => { setSource(e.target.value); setErrors(old => ({ ...old, material: '' })); invalidate() }} />)}{showError('material')}
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{select(tr('Country', '国家'), 'country', caps?.countries)}{select(tr('Environment', '环境'), 'environment', caps?.environments)}{select(tr('Workspace policy', '工作区策略'), 'workspace_policy', caps?.workspace_policies)}{select(tr('OAuth proxy mode', 'OAuth 代理模式'), 'proxy_mode', caps?.proxy_modes, 'system')}</div>
+        <section className="space-y-3 border-t border-border pt-4" aria-labelledby="oauth-exit-heading">
+        <h3 id="oauth-exit-heading" className="text-sm font-semibold">{tr('OAuth authorization exit', 'OAuth 授权出口')}</h3>
+        <p className="text-xs text-muted-foreground">{tr('Used only during authorization. The gateway assigns the dynamic proxy. Country choices come from the gateway; they are not proof of the actual exit.', '仅用于授权。动态代理由 OAuth 网关分配，不是 Codex2API 的运行代理。国家／地区来自网关能力列表，不代表实际出口已验证。')}</p>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{select(tr('OAuth exit country or region', '授权出口国家／地区'), 'country', caps?.countries)}{select(tr('Environment', '环境'), 'environment', caps?.environments)}{select(tr('Workspace policy', '工作区策略'), 'workspace_policy', caps?.workspace_policies)}{select(tr('OAuth proxy mode', 'OAuth 代理模式'), 'proxy_mode', caps?.proxy_modes, 'system')}</div>
         {!caps && <p className="text-sm text-muted-foreground">{tr('Options become available after capabilities load. Material can be entered now.', '服务能力读取成功后即可选择选项；现在可以先填写材料。')}</p>}
         {opts.proxy_mode === 'custom' && <div className="space-y-2">
           {label(tr('OAuth proxy URI', 'OAuth 代理 URI'), <Input type="password" value={opts.proxy || ''} autoComplete="new-password" onChange={e => setOption('proxy', e.target.value)} />)}
@@ -372,21 +407,29 @@ export default function OAuthGateway() {
           {!caps?.features?.proxy_check ? <p className="text-xs text-muted-foreground">{tr('The gateway has not declared proxy-check support.', '网关未声明支持执行机代理检查。')}</p> : !opts.proxy ? <p className="text-xs text-muted-foreground">{tr('Enter a proxy URI before checking.', '填写 OAuth 代理 URI 后即可检查。')}</p> : null}{showError('proxy')}{proxyResult && <p role="status" className="break-words text-sm">{proxyResult}</p>}
         </div>}
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">{label(tr('Runtime proxy URI (optional)', '运行时代理 URI（可选）'), <Input aria-label={tr('Runtime proxy URI (optional)', '运行时代理 URI（可选）')} type="password" value={runtimeProxy} disabled={repairing} autoComplete="new-password" onChange={e => { setRuntimeProxy(e.target.value); invalidate() }} />, repairing ? tr('Repair preserves the original account proxy.', '修复已有账号时保留原账号代理，不使用此处输入。') : tr('Default for accounts without an individual runtime proxy. This is for model requests, not OAuth; blank inherits normal server policy.', '作为未单独设置账号的统一运行代理，用于模型请求，不是 OAuth 代理；留空沿用服务正常策略。'))}<ProxyPoolSelect proxies={runtimeProxies || []} value={runtimeProxy} disabled={formLocked || repairing} onSelect={value => { if (!formLocked && !repairing) { setRuntimeProxy(value); invalidate() } }} /></div>
           {label('User-Agent', <Input value={opts.user_agent || ''} disabled={opts.environment !== 'custom_ua' && !opts.user_agent} onChange={e => setOption('user_agent', e.target.value)} />, tr('Only custom_ua allows this field. Otherwise leave it blank.', '仅 custom_ua 环境需要填写，其他环境请留空。'))}
           {label(tr('Language (optional)', '语言（可选）'), <Input value={opts.language || ''} onChange={e => setOption('language', e.target.value)} />)}
           {label(tr('Timezone (optional)', '时区（可选）'), <Input value={opts.timezone || ''} onChange={e => setOption('timezone', e.target.value)} />)}
         </div>
-        <section aria-labelledby="account-runtime-proxies" className="space-y-3 border-t border-border pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-2"><h3 id="account-runtime-proxies" className="text-sm font-medium">{tr('Per-account runtime proxies (not OAuth)', '按账号设置运行代理（非 OAuth 代理）')}</h3><Button variant="outline" size="sm" disabled={!!pending['runtime-proxies']} onClick={loadRuntimeProxies}>{pending['runtime-proxies'] ? tr('Loading proxies…', '正在读取代理…') : tr('Refresh proxy list', '刷新代理列表')}</Button></div>
-          <p className="text-xs text-muted-foreground">{repairing ? tr('Repair keeps the existing account proxy. These inputs and any runtime_proxy in the material are not applied.', '修复原账号时保留原代理，不使用下方设置或材料中的 runtime_proxy。') : tr('Individual settings override the default above. Leave blank to inherit. Proxies must be registered, enabled and available to new accounts; OAuth proxy settings stay separate.', '单独设置优先于上方统一运行代理；留空则继承。代理须先登记、启用且允许新账号使用，与 OAuth 授权代理完全分开。')}</p>
+        </section>
+        <section className="space-y-3 border-t border-border pt-4" aria-labelledby="runtime-proxy-heading">
+          <div className="flex flex-wrap items-center justify-between gap-2"><h3 id="runtime-proxy-heading" className="text-sm font-semibold">{tr('Runtime proxy for imported accounts', '导入后的运行代理')}</h3><Button variant="outline" size="sm" disabled={!!pending['runtime-proxies']} onClick={loadRuntimeProxies}>{pending['runtime-proxies'] ? tr('Loading proxies…', '正在读取代理…') : tr('Refresh proxy list', '刷新代理列表')}</Button></div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {label(tr('Batch runtime proxy (optional)', '本次批量运行代理（可选）'), <Input aria-label={tr('Batch runtime proxy URI', '本次批量运行代理 URI')} type="password" value={runtimeProxy} disabled={repairing} autoComplete="new-password" onChange={e => { setRuntimeProxy(e.target.value); invalidate() }} />, repairing ? tr('Keep the original account proxy and groups.', '修复已有账号时保留原代理和分组。') : tr('Default for every account in this import, unless explicitly overridden below. Used for model requests only. Blank uses server policy.', '适用于本次导入的所有账号，除非下方单独覆盖。只用于导入后的模型请求；留空沿用服务器策略。'))}
+            <div className="space-y-1"><span className="text-sm font-medium">{tr('Choose a batch proxy from the pool', '从代理池选择批量代理')}</span><ProxyPoolSelect proxies={runtimeProxies || []} value={runtimeProxy} disabled={formLocked || repairing} onSelect={value => { if (!formLocked && !repairing) { setRuntimeProxy(value); invalidate() } }} /></div>
+          </div>
+          <p className="break-words text-xs text-muted-foreground">{tr('Batch default', '本次默认')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(runtimeProxy)}</p>
           <Link className="inline-block text-xs text-primary underline underline-offset-4" to="/proxies" target="_blank" rel="noopener noreferrer">{tr('Add or manage proxies in a new tab', '在新标签页添加或管理代理')}</Link>
           {showError('runtime-proxies')}{errors['runtime-proxies'] && <p className="text-xs text-muted-foreground">{tr('You can still enter a registered URI; preview will verify it on the server.', '仍可填写已登记的代理 URI，预检时由服务端校验。')}</p>}
           {runtimeProxies?.length === 0 && !errors['runtime-proxies'] && <p className="text-xs text-muted-foreground">{tr('No proxies are registered yet. Add one in proxy management to assign it here.', '尚未登记代理，请先到代理管理添加，再回这里选择。')}</p>}
+          <details className="space-y-3 rounded-md border border-border p-3">
+            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">{tr('Per-account override', '单账号覆盖')}{!repairing && ` (${runtimeAccounts.filter(account => account.runtime_proxy).length})`}</summary>
+            <p className="text-xs text-muted-foreground">{repairing ? tr('Repair skips both these settings and runtime_proxy in the material.', '修复不会应用这里的设置或材料里的 runtime_proxy。') : tr('Set only exceptions. Blank inherits the batch default; only registered, available proxies may be used.', '只设置例外；空白继承本次批量代理。代理须已登记且允许该账号使用。')}</p>
           {!runtimeAccounts.length ? <p className="text-sm text-muted-foreground">{tr('Enter valid TXT or JSON material to configure each account here.', '填写有效的 TXT 或 JSON 材料后，即可在这里逐个设置。')}</p> : <div className="divide-y divide-border">{runtimeAccounts.map((account, index) => <div key={`${account.identifier.trim().toLowerCase()}:${index}`} role="group" aria-label={tr(`Runtime proxy for ${account.identifier}`, `账号 ${account.identifier} 的运行代理`)} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
             <p className="min-w-0 break-all text-sm">{index + 1}. {account.identifier}</p>
             <div className="min-w-0 space-y-2"><div className="grid gap-2 sm:grid-cols-2"><Input aria-label={tr(`Runtime proxy URI for ${account.identifier}`, `账号 ${account.identifier} 的运行代理 URI`)} type="password" autoComplete="new-password" value={account.runtime_proxy || ''} disabled={repairing} placeholder={tr('Blank inherits the default above', '留空沿用上方统一设置')} onChange={e => setAccountRuntimeProxy(account, e.target.value)} /><ProxyPoolSelect proxies={runtimeProxies || []} value={account.runtime_proxy || ''} disabled={formLocked || repairing} onSelect={value => setAccountRuntimeProxy(account, value)} /></div><div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{tr('Effective setting', '生效设置')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(account.runtime_proxy || runtimeProxy)}</p><Button size="sm" variant="outline" disabled={repairing || !account.runtime_proxy} onClick={() => setAccountRuntimeProxy(account, '')}>{tr('Inherit default', '沿用统一设置')}</Button></div>{!repairing && runtimeProxies && !errors['runtime-proxies'] && (account.runtime_proxy || runtimeProxy) && !runtimeProxies.some(p => p.url === (account.runtime_proxy || runtimeProxy) && proxyIsSelectable(p)) && <p className="text-xs text-destructive">{tr('This proxy is unavailable to new accounts; correct it before preview.', '该代理当前不可用于新账号，请修正后再预检。')}</p>}</div>
           </div>)}</div>}
+          </details>
         </section>
         <fieldset disabled={repairing} className="space-y-2"><legend className="mb-2 text-sm font-medium">{tr('Destination groups (optional)', '目标分组（可选）')}</legend>
           <p className="text-xs text-muted-foreground">{repairing ? tr('Repair preserves the original groups; selections here are not applied.', '修复已有账号时保留原分组，不使用此处选择。') : tr('Codex groups only. Leave unselected to import without group bindings.', '只列出 Codex 分组。不选择则导入后不绑定分组。')}</p>
@@ -409,27 +452,15 @@ export default function OAuthGateway() {
         {preview && <div className="space-y-1 rounded-md border border-border p-3 text-sm" role="status"><p>{preview.result.valid ? tr('Preview passed', '预检通过') : tr('Preview failed', '预检未通过')} · {preview.result.count} {tr('accounts', '个账号')} · {preview.result.groups} {tr('batches', '个批次')}</p>{preview.result.rows?.map((row, i) => <p className="break-all" key={i}>{row.line}. {identifier(row)} · {row.proxy_mode}</p>)}{preview.result.errors?.map((row, i) => <p key={i}>{tr('Line', '第')} {row.line} {tr('', '行')}: {row.code}</p>)}</div>}
       </div>
     </CardContent></Card>
-    <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><CardTitle>{tr('Authorization jobs', '授权任务')}</CardTitle><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setReload(n => n + 1)}>{tr('Refresh list', '刷新列表')}</Button><Button variant="outline" size="sm" aria-pressed={archived} onClick={() => { setArchived(v => !v); setJobs(null) }}>{archived ? tr('Active jobs', '当前任务') : tr('Archived jobs', '归档任务')}</Button></div></div></CardHeader><CardContent className="space-y-3">
-      <p className="text-xs text-muted-foreground">{tr('The list refreshes automatically. Refresh original continues an existing authorization; retry import only retries a confirmed local write failure, never OAuth.', '列表自动更新。“查询原任务”继续核查已有授权；“重试导入”只重试确定失败的入库，不重新授权。')}</p>
-      {jobsError && <p role="alert" className="break-words text-sm text-destructive">{tr('Could not load jobs; use Refresh list:', '读取任务失败，请刷新列表：')} {jobsError}</p>}
-      {jobs === null ? <p className="text-sm text-muted-foreground">{jobsError ? tr('Waiting for a successful retry.', '等待重试成功。') : tr('Loading jobs…', '正在读取任务…')}</p> : jobs.length === 0 ? <p className="text-sm text-muted-foreground">{tr('No jobs in this view.', '此处暂无任务。')}</p> : jobs.map(job => <article key={job.id} id={`oauth-job-${job.id}`} className="space-y-3 rounded-md border border-border p-4">
-        <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p className="break-all text-sm font-medium">{job.id}</p><p className="text-sm text-muted-foreground">{stateText(job.state)}{job.archived ? ` · ${tr('archived', '已归档')}` : ''}{job.recovery_account_id ? ` · ${tr('Original account', '原账号')} #${job.recovery_account_id}` : ''}</p>{job.retry_of && <p className="break-all text-sm">{tr('Retry of', '重新授权来源')}: {job.retry_of.job_id} · {tr('Line', '第')} {job.retry_of.line} {tr('', '行')}</p>}</div><p className="text-sm">{tr('Imported', '已导入')} {job.imported}/{job.total} · {tr('Failed', '失败')} {job.failed} · {tr('Pending', '待处理')} {job.pending ?? '—'}</p></div>
-        {!job.archived && <>
-          <div className="flex flex-wrap gap-x-4 gap-y-3">{([
-            ['refresh', job.can_refresh, tr('Refresh original', '查询原任务'), tr('The task has ended; no query is needed.', '任务已结束，无需继续查询。')],
-            ['cancel', job.can_cancel, tr('Cancel', '取消'), tr('No cancellable items, or cancellation is already requested.', '没有可取消的项目，或已请求取消。')],
-            ['retry-import', job.can_retry_import, tr('Retry import', '重试导入'), tr('No confirmed, retryable import failures.', '没有确定失败且可重试的入库项。')],
-            ['archive', job.can_archive, tr('Archive', '归档'), tr('Resolve pending results or retryable imports first.', '先处理待核查结果或可重试入库项。')],
-          ] as const).map(([path, allowed, text, reason]) => <div key={path} className="max-w-52 space-y-1"><Button variant="outline" size="sm" disabled={!allowed || !!pending[`job:${job.id}`]} aria-describedby={`reason-${job.id}-${path}`} onClick={() => action(job, path)}>{text}</Button><p id={`reason-${job.id}-${path}`} className="text-xs text-muted-foreground">{pending[`job:${job.id}`] ? tr('Processing this task…', '正在处理此任务…') : !allowed ? reason : path === 'archive' ? tr('Resolved; can archive.', '结果已明确，可以归档。') : ''}</p></div>)}</div>
-          {showError(`job:${job.id}`)}
-          <details><summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">{tr('Batch and account details', '批次与账号详情')}</summary><div className="mt-3 space-y-3">{job.groups?.length ? job.groups.map(g => <div key={g.index} className="space-y-1 border-t border-border pt-3 text-sm"><p>{tr('Batch', '批次')} {g.index + 1}: {stateText(g.state)} · {g.imported}/{g.total}</p><p className="break-all text-muted-foreground">{tr('Batch ID', '批次 ID')}: {g.batch_id || '—'} · {tr('Request', '请求')}: {g.request_id || '—'}</p>{g.error && <p className="break-words text-destructive">{problemText(g.error)}</p>}{(g.read_failures || g.next_check_at) && <p>{tr('Read / failures / next check', '读取 / 失败次数 / 下次检查')}: {g.read_operation || '—'} / {g.read_failures || 0} / {g.next_check_at || '—'}</p>}{g.items?.map((item, i) => <div key={i} className="break-words pl-3">{item.line}. <span className="break-all">{identifier(item)}</span> · OAuth: {stateText(item.state)} · {tr('Import', '导入')}: {item.state === 'failed' && item.import_state === 'not_ready' ? tr('Not imported (authorization failed)', '未导入（授权失败）') : stateText(item.import_state)}{item.error && <p className="text-destructive">{problemText(item.error)}</p>}{item.diagnostic && <p>{item.diagnostic.upstream_code === 'invalid_state' && <span>{tr('Login session has expired.', '登录会话已失效。')} </span>}{[item.diagnostic.upstream_code && `${tr('Cause', '失败原因')}: ${item.diagnostic.upstream_code}`, item.diagnostic.http_status && `HTTP ${item.diagnostic.http_status}`, item.diagnostic.stage && `${tr('Stage', '阶段')}: ${item.diagnostic.stage === 'totp_verify' ? tr('TOTP verification', 'TOTP 验证') : item.diagnostic.stage}`, item.diagnostic.endpoint && `${tr('Endpoint', '接口')}: ${item.diagnostic.endpoint}`].filter(Boolean).join(' · ')}</p>}{item.can_reauthorize && <Button variant="outline" size="sm" disabled={formLocked || !!pending.preview || !item.identifier || !Number.isSafeInteger(item.line) || item.line < 1} onClick={() => startRetry(job, item)}>{tr('Reauthorize account', '重新授权此账号')}</Button>}</div>)}</div>) : <p className="text-sm text-muted-foreground">{tr('No batch details yet.', '暂无批次详情。')}</p>}</div></details>
-        </>}
-      </article>)}
-    </CardContent></Card>
-    {settings?.auto_recovery_supported && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><CardTitle>{tr('Automatic account recovery', '账号自动恢复')}</CardTitle><Button size="sm" variant="outline" onClick={() => setReload(n => n + 1)}>{tr('Refresh recovery status', '刷新恢复状态')}</Button></div></CardHeader><CardContent className="space-y-3">
+    <OAuthJobs jobs={jobs} groups={groups || []} archived={archived} error={jobsError} maxJobs={archived ? settings?.max_archived_jobs : settings?.max_jobs} busy={pending} batchArchiving={batchArchiving} tr={tr} stateText={stateText} problemText={problemText} onRefresh={() => setReload(n => n + 1)} onView={value => { if (archived !== value) { setJobs(null); setJobsError(''); setArchived(value) } }} onAction={action} onArchivePage={archivePage} actionError={key => errors[key]} onReauthorize={startRetry} reauthorizeDisabled={formLocked || !!pending.preview} />
+    {settings?.auto_recovery_supported && <Card id="oauth-recovery" className="scroll-mt-6"><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><CardTitle>{tr('Automatic account recovery', '账号自动恢复')}</CardTitle><Button size="sm" variant="outline" onClick={() => setReload(n => n + 1)}>{tr('Refresh recovery status', '刷新恢复状态')}</Button></div></CardHeader><CardContent className="space-y-3">
       <p className="text-sm text-muted-foreground">{tr('Only accounts explicitly enrolled above are listed. Recovery keeps the original ID, proxy and groups; identity changes or unknown results require review.', '这里只列出明确启用的账号。恢复保留原 ID、代理和分组；身份变化或结果未知时必须核查。')}</p>
       {recoveryError && <p role="alert" className="break-words text-sm text-destructive">{recoveryError}</p>}
-      {recoveries === null ? <p className="text-sm text-muted-foreground">{recoveryError ? tr('Retry with Refresh recovery status.', '请点击刷新恢复状态重试。') : tr('Loading recovery status…', '正在读取恢复状态…')}</p> : !recoveries.length ? <p className="text-sm text-muted-foreground">{tr('No enrolled accounts. Opt in above when authorizing a new account or repairing an existing one.', '暂无启用的账号。在上方新增或修复账号时，明确勾选加密保管材料即可启用。')}</p> : recoveries.map(entry => <div key={entry.account_id} className="space-y-2 border-t border-border pt-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-3"><p className="min-w-0 break-all">#{entry.account_id} {entry.identifier}</p><Button variant="outline" size="sm" disabled={!entry.can_disable || !!pending[`recovery:${entry.account_id}`]} onClick={() => disableRecovery(entry)}>{pending[`recovery:${entry.account_id}`] ? tr('Stopping…', '正在停止…') : tr('Stop recovery and clear material', '停止恢复并清除材料')}</Button></div><p>{stateText(entry.state)} · {tr('Attempts', '尝试次数')}: {entry.attempts}{entry.next_attempt_at ? ` · ${tr('Next attempt', '下次检查')}: ${entry.next_attempt_at}` : ''}</p>{!entry.can_disable && <p className="text-xs text-muted-foreground">{tr('Recovery is not enabled for this entry.', '此条目未启用恢复，无需再次停止。')}</p>}{entry.job_id && <p className="break-all">{tr('Original job', '关联任务')}: {entry.job_id}</p>}{entry.error && <p className="break-words text-destructive">{problemText(entry.error)}</p>}{showError(`recovery:${entry.account_id}`)}</div>)}
+      {recoveries === null ? <p className="text-sm text-muted-foreground">{recoveryError ? tr('Retry with Refresh recovery status.', '请点击刷新恢复状态重试。') : tr('Loading recovery status…', '正在读取恢复状态…')}</p> : !recoveries.length ? <p className="text-sm text-muted-foreground">{tr('No enrolled accounts. Opt in when authorizing or repairing an account.', '暂无登记记录。在上方新增或修复账号时，可勾选加密保管材料。')}</p> : recoveries.map(entry => <div key={entry.account_id} className="space-y-2 border-t border-border pt-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-3"><p className="min-w-0 break-all">#{entry.account_id} {entry.identifier}</p><Button variant="outline" size="sm" disabled={!entry.can_disable || !!pending[`recovery:${entry.account_id}`]} onClick={() => disableRecovery(entry)}>{pending[`recovery:${entry.account_id}`] ? tr('Stopping…', '正在停止…') : tr('Stop recovery and clear material', '停止恢复并清除材料')}</Button></div>
+        <p>{entry.state === 'ready' ? tr('Standing by', '待命') : stateText(entry.state)} · {tr('Reauthorization attempts', '自动重授权次数')}: {entry.attempts}{entry.next_attempt_at ? ` · ${tr('Next check', '下次检查')}: ${new Date(entry.next_attempt_at).toLocaleString()}` : ''}</p>
+        {entry.account_disabled && <p className="text-muted-foreground">{tr('Account disabled; recovery will not enable it.', '账号已禁用；恢复不会自动启用账号。')}</p>}
+        {entry.last_outcome && <p>{tr('Last recovery result', '最近恢复结果')}: {entry.last_outcome === 'refresh_succeeded' ? tr('Token refresh succeeded', '普通令牌刷新成功') : entry.last_outcome === 'reauthorization_succeeded' ? tr('Automatic reauthorization succeeded', '自动重授权成功') : stateText(entry.last_outcome)}{entry.last_outcome_at && ` · ${new Date(entry.last_outcome_at).toLocaleString()}`}</p>}
+        {!entry.can_disable && <p className="text-xs text-muted-foreground">{tr('Recovery is disabled for this record.', '这条记录已停止恢复。')}</p>}{entry.job_id && <p className="break-all">{tr('Linked job', '关联任务')}: {entry.job_id}</p>}{entry.error && <p className="break-words text-destructive">{problemText(entry.error)}</p>}{showError(`recovery:${entry.account_id}`)}</div>)}
     </CardContent></Card>}
   </div>
 }

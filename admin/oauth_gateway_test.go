@@ -114,6 +114,9 @@ func TestOAuthGatewayAdminBoundary(t *testing.T) {
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), `"oauth_token":`) {
 		t.Fatalf("unsafe settings response: %d", w.Code)
 	}
+	if !strings.Contains(w.Body.String(), `"max_jobs":200`) || !strings.Contains(w.Body.String(), `"max_archived_jobs":10000`) {
+		t.Fatal("settings omitted job capacity")
+	}
 	h.oauthGateway = nil
 	h.oauthGatewayInitErr = database.ErrOAuthGatewayEncryption
 	w = oauthGatewayRequest(r, "GET", "settings", "")
@@ -129,12 +132,17 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtimeProxy := "http://runtime.example.invalid:8080"
+	proxyID, err := h.db.InsertProxy(ctx, runtimeProxy, "gateway runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var submissions atomic.Int32
 	var requestID string
 	batch := func() upstream.Batch {
 		return upstream.Batch{BatchID: "gb_00000000000000000000000000000001", RequestID: requestID, State: "completed", Total: 1, Succeeded: 1, Items: []upstream.BatchItem{{ItemID: "gi_00000000000000000000000000000001", Line: 1, IdentifierMasked: "f***@example.invalid", State: "succeeded"}}}
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture"}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","plan_type":"plus"}}`)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Header.Get("Authorization") != "Bearer synthetic-CDK" || req.Header.Get("X-Admin-Key") != "" {
@@ -192,6 +200,7 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 		t.Fatalf("save settings failed/leaked: %d", w.Code)
 	}
 	input := service.Input{RequestID: "native-test-1", SourceText: "fixture@example.invalid----  synthetic-password  ----JBSWY3DPEHPK3PXP", Options: upstream.Options{ProxyMode: "system"}, GroupIDs: []int64{group}}
+	input.RuntimeProxy = runtimeProxy
 	payload, _ := json.Marshal(input)
 	w = oauthGatewayRequest(r, "POST", "preview", string(payload))
 	if w.Code != 200 {
@@ -233,12 +242,19 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 		t.Fatal("missing imported account")
 	}
 	row := rows[0]
-	if row.ProxyURL != "" || row.GetCredential("workspace_id") != "workspace-fixture" || row.GetCredential("user_id") != "user-fixture" || row.GetCredential("access_token") != "synthetic-AT" {
+	if row.ProxyURL != runtimeProxy || row.GetCredential("workspace_id") != "workspace-fixture" || row.GetCredential("user_id") != "user-fixture" || row.GetCredential("access_token") != "synthetic-AT" {
 		t.Fatal("account mapping or proxy isolation failed")
 	}
 	groupIDs, err := h.db.GetAccountGroupIDs(ctx, row.ID)
 	if err != nil || len(groupIDs) != 1 || groupIDs[0] != group || h.store.FindByID(row.ID) == nil {
 		t.Fatal("group/runtime publication missing")
+	}
+	if view.JobType != "import" || view.RequestedCountry != "auto" || len(view.AccountResults) != 1 {
+		t.Fatalf("missing job summary: %+v", view.JobSummary)
+	}
+	final := view.AccountResults[0]
+	if final.Line != 1 || final.AccountID != row.ID || final.PlanType != "plus" || final.WorkspaceID != "workspace-fixture" || final.GroupIDs == nil || len(*final.GroupIDs) != 1 || (*final.GroupIDs)[0] != group || final.RuntimeProxyID == nil || *final.RuntimeProxyID != proxyID || final.RecoveryState != "not_enrolled" || final.Outcome != "imported" {
+		t.Fatalf("wrong committed account result: %+v", final)
 	}
 	stored, _ := state.View()
 	rawState, _ := json.Marshal(stored)
@@ -255,7 +271,7 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 		t.Fatal("duplicate changed stored credential")
 	}
 	w = oauthGatewayRequest(r, "GET", "jobs", "")
-	for _, secret := range []string{"synthetic-CDK", "synthetic-AT", "synthetic-RT", "synthetic-password", "JBSWY3DPEHPK3PXP"} {
+	for _, secret := range []string{"synthetic-CDK", "synthetic-AT", "synthetic-RT", "synthetic-password", "JBSWY3DPEHPK3PXP", runtimeProxy, "observed_country"} {
 		if strings.Contains(w.Body.String(), secret) {
 			t.Fatal("job projection leaked credentials")
 		}
@@ -263,6 +279,9 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	w = oauthGatewayRequest(r, "POST", "jobs/native-test-1/archive", `{"discard_credentials":false}`)
 	if w.Code != 200 {
 		t.Fatalf("archive: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"account_results":[`) || strings.Contains(w.Body.String(), "fixture@example.invalid") || strings.Contains(w.Body.String(), runtimeProxy) {
+		t.Fatal("archive lost committed summary or leaked account material")
 	}
 	w = oauthGatewayRequest(r, "POST", "jobs", string(payload))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"archived":true`) {

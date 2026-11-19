@@ -3578,6 +3578,16 @@ export default function Accounts() {
   }, [currentPage, detailNavIndex, sortedAccounts, totalPages]);
 
   useEffect(() => {
+    if (providerView !== "codex") return;
+    const raw = new URLSearchParams(location.search).get("account_id") ?? "";
+    const id = Number(raw);
+    if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(id)) return;
+    setDetailAccountData(null);
+    setDetailAccountId(id);
+    setQuickConfigAccount(null);
+  }, [location.search, providerView]);
+
+  useEffect(() => {
     if (detailAccountId == null) return undefined;
     const controller = new AbortController();
     void api.getAccount(detailAccountId, controller.signal)

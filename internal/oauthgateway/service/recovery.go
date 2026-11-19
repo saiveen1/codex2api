@@ -11,6 +11,11 @@ import (
 	"github.com/codex2api/internal/oauthgateway/upstream"
 )
 
+const (
+	refreshSucceeded         = "refresh_succeeded"
+	reauthorizationSucceeded = "reauthorization_succeeded"
+)
+
 // RecoveryTarget never upserts: Recover must fence identity, generation, enabled
 // state and credential version in the same transaction as its write.
 type RecoveryTarget interface {
@@ -41,17 +46,22 @@ type Recovery struct {
 	NextAttemptAt     time.Time        `json:"next_attempt_at"`
 	JobID             string           `json:"job_id,omitempty"`
 	Error             *Problem         `json:"error,omitempty"`
+	LastOutcome       string           `json:"last_outcome,omitempty"`
+	LastOutcomeAt     *time.Time       `json:"last_outcome_at,omitempty"`
 }
 
 type RecoveryView struct {
-	AccountID     int64      `json:"account_id"`
-	Identifier    string     `json:"identifier"`
-	State         string     `json:"state"`
-	Attempts      int        `json:"attempts"`
-	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
-	JobID         string     `json:"job_id,omitempty"`
-	Error         *Problem   `json:"error,omitempty"`
-	CanDisable    bool       `json:"can_disable"`
+	AccountID       int64      `json:"account_id"`
+	Identifier      string     `json:"identifier"`
+	State           string     `json:"state"`
+	Attempts        int        `json:"attempts"`
+	NextAttemptAt   *time.Time `json:"next_attempt_at,omitempty"`
+	JobID           string     `json:"job_id,omitempty"`
+	Error           *Problem   `json:"error,omitempty"`
+	CanDisable      bool       `json:"can_disable"`
+	LastOutcome     string     `json:"last_outcome,omitempty"`
+	LastOutcomeAt   *time.Time `json:"last_outcome_at,omitempty"`
+	AccountDisabled bool       `json:"account_disabled,omitempty"`
 }
 
 type recoverySignal struct {
@@ -86,6 +96,7 @@ func (a *App) Recoveries() ([]RecoveryView, error) {
 	out := make([]RecoveryView, 0, len(s.Recoveries))
 	for _, r := range s.Recoveries {
 		v := RecoveryView{AccountID: r.Snapshot.AccountID, Identifier: r.Material.Identifier, State: r.State, Attempts: r.Attempts, JobID: r.JobID, Error: r.Error, CanDisable: r.Enabled}
+		v.LastOutcome, v.LastOutcomeAt = r.LastOutcome, r.LastOutcomeAt
 		if v.Identifier == "" {
 			v.Identifier = r.Snapshot.Identifier
 		}
@@ -262,21 +273,18 @@ func (a *App) stepRecovery(ctx context.Context, state State) (bool, error) {
 					break
 				}
 				return true, a.store.Update(func(s *State) error {
-					for i := range s.Recoveries {
-						rr := &s.Recoveries[i]
-						if rr.Snapshot.AccountID != r.Snapshot.AccountID || rr.Epoch != r.Epoch || !rr.Enabled {
-							continue
-						}
-						if v.State == "completed" {
-							rr.State = "ready"
-							rr.Error = nil
-						} else {
-							rr.State = "manual_review"
-							rr.Error = recoveryJobProblem(j)
-						}
-					}
+					reconcileRecovery(s, r.JobID, v.State, recoveryJobProblem(j))
 					return nil
 				})
+			}
+			// An older worker may already have removed a terminal job before reconciling.
+			for _, archived := range state.Archived {
+				if r.JobID != "" && archived.ID == r.JobID {
+					return true, a.store.Update(func(s *State) error {
+						reconcileRecovery(s, r.JobID, archived.State, safeError("recovery_requires_review", "bridge", "manual_review"))
+						return nil
+					})
+				}
 			}
 			continue
 		}
@@ -299,6 +307,20 @@ func (a *App) stepRecovery(ctx context.Context, state State) (bool, error) {
 		return true, err
 	}
 	return false, nil
+}
+
+func reconcileRecovery(s *State, jobID, jobState string, problem *Problem) {
+	for i := range s.Recoveries {
+		r := &s.Recoveries[i]
+		if !r.Enabled || r.State != "recovering" || r.JobID != jobID {
+			continue
+		}
+		if jobState == "completed" {
+			r.State, r.Error = "ready", nil
+		} else {
+			r.State, r.Error = "manual_review", problem
+		}
+	}
 }
 
 func recoveryJobProblem(j Job) *Problem {
@@ -356,8 +378,11 @@ func (a *App) startRecovery(ctx context.Context, target RecoveryTarget, r Recove
 				for i := range s.Recoveries {
 					rr := &s.Recoveries[i]
 					if rr.Snapshot.AccountID == snap.AccountID && rr.Epoch == r.Epoch && rr.Enabled {
+						now := time.Now().UTC()
 						rr.State = "ready"
-						rr.NextAttemptAt = time.Now().Add(15 * time.Minute)
+						rr.Error = nil
+						rr.LastOutcome, rr.LastOutcomeAt = refreshSucceeded, &now
+						rr.NextAttemptAt = now.Add(15 * time.Minute)
 					}
 				}
 				return nil
@@ -396,7 +421,7 @@ func (a *App) startRecovery(ctx context.Context, target RecoveryTarget, r Recove
 			if rr.Snapshot.AccountID != snap.AccountID || !rr.Enabled || rr.Epoch != r.Epoch {
 				continue
 			}
-			if len(s.Jobs) >= 200 {
+			if len(s.Jobs) >= maxJobs {
 				rr.State = "manual_review"
 				rr.Error = safeError("state_capacity", "bridge", "manual_review")
 				return nil
@@ -464,6 +489,7 @@ func registerRecovery(s *State, next Recovery, automatic bool) {
 			continue
 		}
 		next.Epoch = old.Epoch + 1
+		next.LastOutcome, next.LastOutcomeAt = old.LastOutcome, old.LastOutcomeAt
 		if automatic {
 			next.Epoch = old.Epoch
 			next.Attempts = old.Attempts

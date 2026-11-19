@@ -24,6 +24,11 @@ type Target interface {
 	Import(context.Context, json.RawMessage, []int64, string) (upstream.ImportResult, error)
 }
 
+// AccountResultTarget reads safe fields from the committed local account.
+type AccountResultTarget interface {
+	AccountResult(context.Context, int64) AccountResult
+}
+
 type Fault struct {
 	Status        int
 	Code, Message string
@@ -44,6 +49,8 @@ type SettingsView struct {
 	Configured            bool   `json:"configured"`
 	AutoRecoverySupported bool   `json:"auto_recovery_supported"`
 	AutoRecoveryReason    string `json:"auto_recovery_reason"`
+	MaxJobs               int    `json:"max_jobs"`
+	MaxArchivedJobs       int    `json:"max_archived_jobs"`
 }
 type InputAccount struct {
 	Identifier   string          `json:"identifier"`
@@ -87,6 +94,7 @@ type Delivery struct {
 	State      string          `json:"state"`
 	Error      *Problem        `json:"error,omitempty"`
 	CreatedIDs []int64         `json:"created_ids,omitempty"`
+	Result     *AccountResult  `json:"result,omitempty"`
 }
 type Group struct {
 	Request        upstream.SubmitRequest `json:"request"`
@@ -148,7 +156,29 @@ type GroupView struct {
 	ReadFailures  int        `json:"read_failures,omitempty"`
 	NextCheckAt   *time.Time `json:"next_check_at,omitempty"`
 }
+
+// AccountResult is a point-in-time summary, not account or login material.
+type AccountResult struct {
+	Line             int      `json:"line"`
+	AccountID        int64    `json:"account_id,omitempty"`
+	PlanType         string   `json:"plan_type,omitempty"`
+	WorkspaceID      string   `json:"workspace_id,omitempty"`
+	GroupIDs         *[]int64 `json:"group_ids,omitempty"`
+	RuntimeProxyID   *int64   `json:"runtime_proxy_id,omitempty"`
+	RecoveryState    string   `json:"recovery_state,omitempty"`
+	IdentifierMasked string   `json:"identifier_masked,omitempty"`
+	Outcome          string   `json:"outcome,omitempty"`
+}
+
+type JobSummary struct {
+	JobType          string          `json:"job_type,omitempty"`
+	GroupIDs         *[]int64        `json:"group_ids,omitempty"`
+	RequestedCountry string          `json:"requested_country,omitempty"`
+	AccountResults   []AccountResult `json:"account_results,omitempty"`
+}
+
 type JobView struct {
+	JobSummary
 	ID                string          `json:"id"`
 	State             string          `json:"state"`
 	Total             int             `json:"total"`
@@ -175,14 +205,17 @@ type Problem upstream.Error
 
 // ArchivedJob keeps idempotency and outcome facts, never account material.
 type ArchivedJob struct {
-	ID          string          `json:"id"`
-	Fingerprint string          `json:"fingerprint"`
-	State       string          `json:"state"`
-	Total       int             `json:"total"`
-	Imported    int             `json:"imported"`
-	Failed      int             `json:"failed"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	ArchivedAt  time.Time       `json:"archived_at"`
-	RetryOf     *RetryReference `json:"retry_of,omitempty"`
+	JobSummary
+	RecoveryAccountID int64           `json:"recovery_account_id,omitempty"`
+	AutoRecovery      bool            `json:"auto_recovery,omitempty"`
+	ID                string          `json:"id"`
+	Fingerprint       string          `json:"fingerprint"`
+	State             string          `json:"state"`
+	Total             int             `json:"total"`
+	Imported          int             `json:"imported"`
+	Failed            int             `json:"failed"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	ArchivedAt        time.Time       `json:"archived_at"`
+	RetryOf           *RetryReference `json:"retry_of,omitempty"`
 }

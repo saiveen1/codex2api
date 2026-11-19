@@ -65,8 +65,9 @@ func enrollRecovery(t *testing.T, a *App) {
 	if _, _, err := a.Create(in); err != nil {
 		t.Fatal(err)
 	}
-	if v := drive(t, a, in.RequestID); v.Imported != 1 {
-		t.Fatal(v.State)
+	v := drive(t, a, in.RequestID)
+	if v.Imported != 1 || len(v.AccountResults) != 1 || v.AccountResults[0].AccountID != 42 || v.AccountResults[0].RecoveryState != "ready" || v.AccountResults[0].PlanType != "" {
+		t.Fatalf("incorrect result without optional metadata target: %+v", v)
 	}
 }
 func signalRecovery(t *testing.T, a *App, refresh bool) string {
@@ -190,6 +191,9 @@ func TestOAuthRecoveryOriginalIdentityAndConcurrentDedup(t *testing.T) {
 	if v.Imported != 1 || !v.AutoRecovery || v.RecoveryAccountID != 42 || target.recovered != 1 || target.submits != 2 {
 		t.Fatalf("restore outcome %+v", v)
 	}
+	if v.JobType != "auto_recovery" || len(v.AccountResults) != 1 || v.AccountResults[0].Outcome != reauthorizationSucceeded || v.AccountResults[0].AccountID != 42 || v.GroupIDs != nil {
+		t.Fatalf("incorrect recovery job result: %+v", v.JobSummary)
+	}
 	for _, req := range target.requests {
 		if req.RequestID == id && (req.Accounts[0].ExpectedIdentity == nil || *req.Accounts[0].ExpectedIdentity != target.snapshot.Identity) {
 			t.Fatal("missing identity guard")
@@ -198,6 +202,9 @@ func TestOAuthRecoveryOriginalIdentityAndConcurrentDedup(t *testing.T) {
 	list, _ = a.Recoveries()
 	if list[0].Attempts != 1 || list[0].NextAttemptAt == nil {
 		t.Fatal("attempt/cooldown not retained")
+	}
+	if list[0].LastOutcome != reauthorizationSucceeded || list[0].LastOutcomeAt == nil || list[0].LastOutcomeAt.IsZero() {
+		t.Fatal("guarded reauthorization outcome not recorded")
 	}
 	raw, _ := json.Marshal(list)
 	if bytes.Contains(raw, []byte("JBSWY3DPEHPK3PXP")) || bytes.Contains(raw, []byte("keep spaces")) {
@@ -217,6 +224,10 @@ func TestOAuthRecoveryRefreshBeforePasswordAndCapabilityGuard(t *testing.T) {
 	}
 	if target.refreshCalls != 1 || target.submits != 1 {
 		t.Fatal("password login preceded normal refresh")
+	}
+	list, err := a.Recoveries()
+	if err != nil || len(list) != 1 || list[0].State != "ready" || list[0].LastOutcome != refreshSucceeded || list[0].LastOutcomeAt == nil || list[0].LastOutcomeAt.IsZero() || list[0].Attempts != 0 {
+		t.Fatalf("refresh-only outcome not recorded distinctly: %+v, %v", list, err)
 	}
 	cap := capabilities()
 	cap.Features["automatic_reauthorization"] = false

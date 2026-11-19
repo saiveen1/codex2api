@@ -420,6 +420,10 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 			importErr = LocalImportError("recovery_retention_failed")
 		}
 	}
+	var summary *AccountResult
+	if accepted {
+		summary = committedAccountResult(ctx, c, job, job.Groups[index], delivery.Line, result)
+	}
 	err := a.store.Update(func(s *State) error {
 		for j := range s.Jobs {
 			if s.Jobs[j].ID != job.ID {
@@ -438,6 +442,28 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 				}
 				if retained != nil {
 					registerRecovery(s, *retained, job.AutoRecovery)
+				}
+				if summary != nil {
+					summary.RecoveryState = "not_enrolled"
+					if job.SaveCredentials {
+						summary.RecoveryState = "retention_failed"
+					}
+					for i := range s.Recoveries {
+						r := &s.Recoveries[i]
+						if r.Snapshot.AccountID != summary.AccountID {
+							continue
+						}
+						if summary.Outcome == reauthorizationSucceeded {
+							now := time.Now().UTC()
+							r.LastOutcome, r.LastOutcomeAt = reauthorizationSucceeded, &now
+						}
+						summary.RecoveryState = r.State
+						break
+					}
+					if summary.AccountID == 0 && !job.SaveCredentials {
+						summary.RecoveryState = ""
+					}
+					item.Result = summary
 				}
 			} else {
 				item.State = "import_unknown"

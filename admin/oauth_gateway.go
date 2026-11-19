@@ -193,7 +193,19 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 	case method == "GET" && path == "groups":
 		data, err = app.Groups(ctx)
 	case method == "GET" && path == "recovery":
-		data, err = app.Recoveries()
+		var entries []service.RecoveryView
+		entries, err = app.Recoveries()
+		if err == nil && len(entries) > 0 && h.db != nil {
+			ids := make([]int64, 0, len(entries))
+			for _, entry := range entries {
+				ids = append(ids, entry.AccountID)
+			}
+			disabled := h.db.OAuthGatewayDisabledAccounts(ctx, ids)
+			for i := range entries {
+				entries[i].AccountDisabled = disabled[entries[i].AccountID]
+			}
+		}
+		data = entries
 	case method == "POST" && path == "connections/test":
 		var empty struct{}
 		if !decodeOAuthGatewayJSON(c, &empty) {

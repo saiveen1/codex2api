@@ -190,3 +190,28 @@ func TestOAuthGatewayAccountAndGroupsAtomic(t *testing.T) {
 		t.Fatalf("partial account insert: count=%d err=%v", count, err)
 	}
 }
+
+func TestOAuthGatewayAccountSummaryLookups(t *testing.T) {
+	db := newOAuthGatewayStoreDB(t)
+	ctx := t.Context()
+	_, err := db.conn.ExecContext(ctx, `CREATE TABLE accounts (id INTEGER PRIMARY KEY, status TEXT, enabled BOOLEAN);
+		CREATE TABLE proxies (id INTEGER PRIMARY KEY, url TEXT);
+		INSERT INTO accounts VALUES (1,'active',FALSE),(2,'cooldown',TRUE),(3,'deleted',FALSE),(4,'disabled',TRUE),(5,'active',FALSE);
+		INSERT INTO proxies VALUES (13,'http://proxy.example.invalid:8080');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := db.OAuthGatewayDisabledAccounts(ctx, []int64{1, 2, 3, 4, 6})
+	if len(disabled) != 2 || !disabled[1] || !disabled[4] {
+		t.Fatalf("wrong persisted disabled accounts: %v", disabled)
+	}
+	if id := db.OAuthGatewayProxyID(ctx, ""); id == nil || *id != 0 {
+		t.Fatalf("missing unbound proxy result: %v", id)
+	}
+	if id := db.OAuthGatewayProxyID(ctx, "http://proxy.example.invalid:8080"); id == nil || *id != 13 {
+		t.Fatalf("missing committed proxy result: %v", id)
+	}
+	if id := db.OAuthGatewayProxyID(ctx, "http://unknown.example.invalid"); id != nil {
+		t.Fatalf("invented proxy result: %v", id)
+	}
+}
