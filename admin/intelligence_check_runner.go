@@ -96,7 +96,7 @@ func (h *Handler) intelligenceQuotaHold(account *auth.Account, model string) (ti
 func (h *Handler) runIntelligenceCheck(parent context.Context, run database.IntelligenceCheckRun, account *auth.Account) {
 	ctx, cancel := context.WithTimeout(parent, time.Duration(run.Settings.TimeoutSeconds)*time.Second)
 	result := intelligenceExecution{}
-	if h.db != nil {
+	if h.db != nil && !run.RecordOnly {
 		if err := h.db.ValidateIntelligenceCheckAccountSettings(ctx, run.Settings, run.Channel, run.AccountID); err != nil {
 			result.Error = "配置错误：" + err.Error()
 			result.Interrupted = true
@@ -112,7 +112,7 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 		}
 	}
 	if result.Error == "" {
-		result = h.executeIntelligenceCheck(ctx, account, run.Model, run.ReasoningEffort, run.Question.Prompt)
+		result = h.executeIntelligenceCheck(ctx, account, run.Model, run.ReasoningEffort, run.Question.Prompt, run.RecordOnly)
 		if result.Error != "" && !result.Interrupted && !result.CredentialRejected {
 			if _, held := h.intelligenceQuotaHold(account, run.Model); held {
 				result.Error = "账号限流或额度耗尽，本次检测不计入结果：" + result.Error
@@ -134,7 +134,7 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 		log.Printf("降智检测 %d 保存失败: %v", run.ID, err)
 		return
 	}
-	if committed {
+	if committed && !run.RecordOnly {
 		if err = h.store.RefreshIntelligenceAccount(finishCtx, run.AccountID); err != nil {
 			log.Printf("降智检测 %d 调度同步失败，等待 outbox: %v", run.ID, err)
 		}

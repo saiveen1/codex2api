@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,11 +37,11 @@ func intelligenceAPIError(c *gin.Context, err error) {
 	}
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, database.ErrIntelligenceCheckRevisionConflict):
+	case errors.Is(err, database.ErrIntelligenceCheckRevisionConflict), errors.Is(err, database.ErrIntelligenceCheckTrialActive):
 		status = http.StatusConflict
 	case errors.Is(err, sql.ErrNoRows):
 		status = http.StatusNotFound
-	case errors.Is(err, database.ErrIntelligenceCheckUnsupportedAccount), errors.Is(err, database.ErrIntelligenceCheckTargetGroup):
+	case errors.Is(err, database.ErrIntelligenceCheckUnsupportedAccount), errors.Is(err, database.ErrIntelligenceCheckTargetGroup), errors.Is(err, database.ErrIntelligenceCheckNoEnabledQuestion):
 		status = http.StatusBadRequest
 	}
 	c.JSON(status, gin.H{"error": err.Error()})
@@ -92,7 +93,12 @@ func intelligencePagination(c *gin.Context) (page, size int) {
 func (h *Handler) ListIntelligenceAccounts(c *gin.Context) {
 	page, size := intelligencePagination(c)
 	id, _ := strconv.ParseInt(c.Query("account_id"), 10, 64)
-	items, total, err := h.db.ListIntelligenceCheckAccounts(c.Request.Context(), database.IntelligenceCheckAccountFilter{AccountID: id, Search: strings.TrimSpace(c.Query("search")), Channel: c.Query("channel"), Status: c.Query("status"), Offset: (page - 1) * size, Limit: size})
+	group, err := intelligenceGroupFilter(c)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	items, total, err := h.db.ListIntelligenceCheckAccounts(c.Request.Context(), database.IntelligenceCheckAccountFilter{AccountID: id, GroupID: group, Plan: strings.TrimSpace(c.Query("plan")), Search: strings.TrimSpace(c.Query("search")), Channel: c.Query("channel"), Status: c.Query("status"), Offset: (page - 1) * size, Limit: size})
 	if err != nil {
 		intelligenceAPIError(c, err)
 		return
@@ -143,6 +149,7 @@ func (h *Handler) CreateIntelligenceRuns(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
 	var body struct {
 		AccountIDs []int64 `json:"account_ids"`
+		RecordOnly bool    `json:"record_only"`
 	}
 	if c.ShouldBindJSON(&body) != nil {
 		c.JSON(400, gin.H{"error": "无效的账号集合"})
@@ -152,6 +159,25 @@ func (h *Handler) CreateIntelligenceRuns(c *gin.Context) {
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
+	}
+	initialSkipped := []int64{}
+	if body.RecordOnly {
+		active, err := h.db.ActiveIntelligenceCheckAccounts(c.Request.Context(), ids)
+		if err != nil {
+			intelligenceAPIError(c, err)
+			return
+		}
+		ids = slices.DeleteFunc(ids, func(id int64) bool {
+			if !active[id] {
+				return false
+			}
+			initialSkipped = append(initialSkipped, id)
+			return true
+		})
+		if len(ids) == 0 {
+			c.JSON(http.StatusAccepted, gin.H{"runs": []database.IntelligenceCheckRun{}, "skipped_account_ids": initialSkipped})
+			return
+		}
 	}
 	settings, err := h.db.GetIntelligenceCheckSettings(c.Request.Context())
 	if err != nil {
@@ -172,13 +198,18 @@ func (h *Handler) CreateIntelligenceRuns(c *gin.Context) {
 			c.JSON(400, gin.H{"error": fmt.Sprintf("账号 %d 不在运行时池中", id)})
 			return
 		}
-		model, effort := settings.ModelForChannel(intelligenceAccountChannel(account))
+		policy, err := h.db.ResolveIntelligenceCheckPolicy(c.Request.Context(), id, settings)
+		if err != nil {
+			intelligenceAPIError(c, err)
+			return
+		}
+		model, effort := policy.ModelForChannel(intelligenceAccountChannel(account))
 		if err = h.validateQualityTestForAccount(c.Request.Context(), account, qualityTestRequest{Model: model, ReasoningEffort: effort}); err != nil {
 			c.JSON(400, gin.H{"error": fmt.Sprintf("账号 %d: %s", id, err)})
 			return
 		}
 	}
-	runIDs, err := h.db.EnqueueIntelligenceChecks(c.Request.Context(), ids, time.Now())
+	runIDs, skipped, err := h.db.SubmitIntelligenceChecks(c.Request.Context(), ids, time.Now(), body.RecordOnly)
 	if err != nil {
 		intelligenceAPIError(c, err)
 		return
@@ -192,17 +223,69 @@ func (h *Handler) CreateIntelligenceRuns(c *gin.Context) {
 		}
 		runs = append(runs, run)
 	}
+	if body.RecordOnly {
+		c.JSON(http.StatusAccepted, gin.H{"runs": runs, "skipped_account_ids": append(initialSkipped, skipped...)})
+		return
+	}
 	c.JSON(http.StatusAccepted, gin.H{"runs": runs})
 }
 func (h *Handler) ListIntelligenceRuns(c *gin.Context) {
 	page, size := intelligencePagination(c)
 	id, _ := strconv.ParseInt(c.Query("account_id"), 10, 64)
-	items, total, err := h.db.ListIntelligenceCheckRuns(c.Request.Context(), database.IntelligenceCheckRunFilter{AccountID: id, Search: strings.TrimSpace(c.Query("search")), Channel: c.Query("channel"), Status: c.Query("status"), Offset: (page - 1) * size, Limit: size})
+	group, err := intelligenceGroupFilter(c)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	filter := database.IntelligenceCheckRunFilter{AccountID: id, GroupID: group, Plan: strings.TrimSpace(c.Query("plan")), Search: strings.TrimSpace(c.Query("search")), Channel: c.Query("channel"), Status: c.Query("status"), Offset: (page - 1) * size, Limit: size, Source: c.Query("source"), Summary: c.Query("summary") == "1"}
+	if filter.Source != "" && filter.Source != "manual" && filter.Source != "automatic" {
+		c.JSON(400, gin.H{"error": "无效的检测发起方式"})
+		return
+	}
+	if value := c.Query("record_only"); value != "" {
+		if value != "true" && value != "false" {
+			c.JSON(400, gin.H{"error": "record_only 必须为 true 或 false"})
+			return
+		}
+		only := value == "true"
+		filter.RecordOnly = &only
+	}
+	if value := c.Query("from"); value != "" {
+		filter.From, err = time.Parse(time.RFC3339, value)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "无效的检测开始时间"})
+			return
+		}
+	}
+	if value := c.Query("before"); value != "" {
+		filter.Before, err = time.Parse(time.RFC3339, value)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "无效的检测结束时间"})
+			return
+		}
+	}
+	if !filter.From.IsZero() && !filter.Before.IsZero() && !filter.From.Before(filter.Before) {
+		c.JSON(400, gin.H{"error": "检测结束时间必须晚于开始时间"})
+		return
+	}
+	items, total, err := h.db.ListIntelligenceCheckRuns(c.Request.Context(), filter)
 	if err != nil {
 		intelligenceAPIError(c, err)
 		return
 	}
 	c.JSON(200, gin.H{"items": items, "total": total, "page": page, "page_size": size})
+}
+
+func intelligenceGroupFilter(c *gin.Context) (int64, error) {
+	value := c.Query("group_id")
+	if value == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("无效的分组 ID")
+	}
+	return id, nil
 }
 func (h *Handler) GetIntelligenceRun(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

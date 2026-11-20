@@ -689,6 +689,27 @@ func TestExecuteGrokProtocolRequest426RefreshesSettingsAndRetriesOnce(t *testing
 	}
 }
 
+func TestExecuteGrokProtocolRecordOnlySkipsSettingsRefresh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		w.Header().Set("x-grok-context-window", "500000")
+		w.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer server.Close()
+	account := &auth.Account{UpstreamType: auth.UpstreamGrok, AccessToken: "fixture", BaseURL: server.URL + "/v1"}
+	ctx := WithRecordOnlyDetector(context.Background())
+	resp, err := ExecuteGrokProtocolRequest(ctx, account, GrokProtocolResponses, nil, []byte(`{"model":"grok-4.5","input":"hi","stream":true}`), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUpgradeRequired || account.GetGrokContextWindow() != 0 {
+		t.Fatalf("trial response status=%d context window=%d", resp.StatusCode, account.GetGrokContextWindow())
+	}
+}
+
 func TestMessagesAdapterRequiresMessageStopAndKeepsSparseTools(t *testing.T) {
 	source := io.NopCloser(bytes.NewBufferString(
 		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"grok\",\"usage\":{\"input_tokens\":1}}}\n\n" +

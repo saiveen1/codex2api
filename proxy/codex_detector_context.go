@@ -23,3 +23,15 @@ func isCodexDetectorRequest(ctx context.Context) bool {
 	marked, _ := ctx.Value(codexDetectorRequestKey{}).(bool)
 	return marked
 }
+
+type recordOnlyDetectorKey struct{}
+
+// WithRecordOnlyDetector marks a trial that must not refresh runtime settings.
+func WithRecordOnlyDetector(ctx context.Context) context.Context {
+	return context.WithValue(ctx, recordOnlyDetectorKey{}, true)
+}
+
+func isRecordOnlyDetector(ctx context.Context) bool {
+	marked, _ := ctx.Value(recordOnlyDetectorKey{}).(bool)
+	return marked
+}

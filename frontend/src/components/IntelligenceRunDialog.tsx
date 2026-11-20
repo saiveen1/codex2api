@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import {
+  intelligenceGroupNames,
+  intelligencePolicyName,
   intelligenceLabels,
   type IntelligenceRun,
 } from "../lib/intelligenceCheck";
@@ -78,6 +80,10 @@ export default function IntelligenceRunDialog({
             <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {[
                 ["账号", `${run.account_name} (#${run.account_id})`],
+                ["检测时套餐", run.plan || "未知"],
+                ["检测时分组", intelligenceGroupNames(run.groups)],
+                ["检测时规则", intelligencePolicyName(run)],
+                ["检测类型", run.record_only ? "试跑（只记录）" : "常规检测"],
                 ["结果", intelligenceLabels[run.status]],
                 ["请求模型", run.model],
                 ["响应模型", run.response_model || "—"],
@@ -104,7 +110,7 @@ export default function IntelligenceRunDialog({
                     ? new Date(run.started_at).toLocaleString()
                     : "尚未开始",
                 ],
-                ["处置", intelligenceLabels[run.action] || run.action || "无"],
+                ["处置", run.record_only ? "不执行处置" : intelligenceLabels[run.action] || run.action || "无"],
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt className="text-xs text-muted-foreground">{label}</dt>

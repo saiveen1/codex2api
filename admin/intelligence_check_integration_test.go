@@ -213,6 +213,36 @@ func TestIntelligenceClaudeAndProxyUseAccountConfiguration(t *testing.T) {
 	}
 }
 
+func TestIntelligenceRecordOnlySkipsBusyBeforeValidation(t *testing.T) {
+	db := newTestAdminDB(t)
+	ctx := context.Background()
+	busy, available := insertTestAccount(t, db), insertTestAccount(t, db)
+	if _, err := db.EnqueueIntelligenceChecks(ctx, []int64{busy}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateCredentials(ctx, available, map[string]any{"upstream_type": auth.UpstreamOpenAIResponses, "base_url": "http://127.0.0.1:1", "api_key": "fixture", "models": []string{"gpt-6-astra"}}); err != nil {
+		t.Fatal(err)
+	}
+	store := auth.NewStore(db, nil, nil)
+	if err := store.LoadAccountByID(ctx, available); err != nil {
+		t.Fatal(err)
+	}
+	// The busy account is deliberately absent from the runtime pool.
+	h := &Handler{store: store, db: db}
+	router := gin.New()
+	router.POST("/runs", h.CreateIntelligenceRuns)
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(fmt.Sprintf(`{"account_ids":[%d,%d],"record_only":true}`, busy, available)))
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	var result struct {
+		Runs    []database.IntelligenceCheckRun `json:"runs"`
+		Skipped []int64                         `json:"skipped_account_ids"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil || res.Code != 202 || len(result.Runs) != 1 || result.Runs[0].AccountID != available || !result.Runs[0].RecordOnly || len(result.Skipped) != 1 || result.Skipped[0] != busy {
+		t.Fatalf("trial batch = %d %s (%v)", res.Code, res.Body, err)
+	}
+}
+
 func TestIntelligenceAdminAPIAndRunner(t *testing.T) {
 	db := newTestAdminDB(t)
 	id := insertTestAccount(t, db)

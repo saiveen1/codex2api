@@ -655,23 +655,24 @@ Codex 的流式 remote compact v2（`POST /v1/responses`，`stream:true`，`inpu
 | --- | --- | --- |
 | GET | `/api/admin/intelligence-check/settings` | 返回当前配置和题库，含 `revision` |
 | PUT | `/api/admin/intelligence-check/settings` | 提交完整配置及读取到的 `revision`；返回新配置，版本冲突为 409 |
-| GET | `/api/admin/intelligence-check/accounts` | 分页账号状态；支持 `account_id`、`search`、`channel`、`status` 筛选 |
+| GET | `/api/admin/intelligence-check/accounts` | 分页账号状态；支持 `account_id`、`search`、`channel`、`status`、`group_id`、`plan`。返回当前 `groups`、`plan`、命中规则和 `automatic_effective` |
 | PATCH | `/api/admin/intelligence-check/accounts` | `{ "account_ids": [1], "enabled": true }`，返回 `{ "updated": 1 }` |
-| POST | `/api/admin/intelligence-check/runs` | `{ "account_ids": [1] }`，返回 202 和 `{ "runs": [...] }`；同账号已有活动任务时复用 |
-| GET | `/api/admin/intelligence-check/runs` | 分页历史；支持与账号列表相同的筛选参数 |
+| POST | `/api/admin/intelligence-check/runs` | `{ "account_ids": [1], "record_only": true }` 开始试跑，返回 202 和 `{ "runs": [...], "skipped_account_ids": [...] }`；有活动任务的账号跳过。省略 `record_only` 沿用普通手动检测，可复用现有普通任务，遇试跑返回 409 |
+| GET | `/api/admin/intelligence-check/runs` | 分页历史，支持账号列表的筛选参数以及 `source`、`record_only`、`from`（含）、`before`（不含）。历史按请求时快照过滤；`summary=1` 省略正文和配置快照 |
 | GET | `/api/admin/intelligence-check/runs/:id` | 返回 `{ "run": {...} }`，不存在为 404 |
 | GET | `/api/admin/intelligence-check/bars?account_ids=1,2` | 返回 `{ "bars": { "1": {...}, "2": {...} } }` |
 
 分页使用 `page`（默认 1）和 `page_size`（默认 20，最多 100），响应为
 `{ "items": [...], "total": 0, "page": 1, "page_size": 20 }`。
 账号开关及手动检测每次最多提交 200 个账号，状态条每次最多读取 500 个账号。
-`channel` 使用 `codex` 或 `claude`。任务 `status` 为 `queued`、`running`、
+`channel` 使用 `codex`、`claude`、`grok`、`antigravity` 或 `kiro`。任务 `status` 为 `queued`、`running`、
 `normal`、`degraded`、`error`、`interrupted`；未检测账号的 `latest_status` 为 `unknown`。
 
 任务详情包含配置版本、题目快照、请求及响应模型、推理强度、判定模式、最终输出、
-耗时、token 用量、错误、发起来源及自动处置。`source` 为 `manual` 或 `automatic`，
-时间使用 RFC3339。状态条只返回最近 20 条终态摘要及 `enabled`、`quality_paused`、
-`action`，存在运行中或当前可执行的排队任务时附带 `active_run_id` 和 `active_status`。
+耗时、token 用量、错误、发起来源及处置。新任务另含检测时的 `groups` 和 `plan`，
+命中范围规则时返回 `rule_id`、`rule_name`；旧记录不补造快照。`source` 为 `manual` 或
+`automatic`，时间使用 RFC3339，历史时间筛选基于创建时间。状态条只返回最近 20 条
+非试跑终态摘要及 `enabled`、`quality_paused`、`action`，存在运行中或当前可执行的排队任务时附带 `active_run_id` 和 `active_status`。
 关闭自动检测后，不可执行的自动排队任务不占用按钮的活动状态，仍可提交手动检测。
 
 ### 账号管理

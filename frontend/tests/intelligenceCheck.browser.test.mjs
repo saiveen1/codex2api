@@ -59,6 +59,7 @@ async function fixture(t, options = {}) {
   if (options.dark) document.documentElement.classList.add('dark')
   window.__conflictActive = !!options.conflict
   if (options.conflict) window.__config = {...settings, action: 'switch_group', target_group_id: 1}
+  const historicalRun = {...run, groups:[{id:1, name:'检测时的旧分组名'}], plan:'plus', rule_id:'premium', rule_name:'Plus 试跑规则', record_only:true};
   window.__api = async (name, args) => {
    window.__calls.push({ name, args })
    const account = { id: 1, name: '本地 Codex 测试账号', email: 'fixture@example.test', account_type: 'oauth', status: 'active', enabled: true, health_tier: 'healthy', created_at: '2026-10-15T12:00:00Z', group_ids: [], models: ['gpt-6-astra'], detail_loaded: true, usage_percent_7d: 12, active_requests: 2, dynamic_concurrency_limit: 200, ...options.accountOverrides }
@@ -75,15 +76,32 @@ async function fixture(t, options = {}) {
    if (name === 'getChannelMonitorBillingRates') return { rates: [] }
    if (name === 'getIntelligenceSettings') return window.__config
    if (name === 'listAccountGroups') return { groups: [{ id: 1, name: '隔离分组', channel: 'codex' }, { id: 2, name: 'Claude 隔离', channel: 'claude' }, { id: 3, name: 'Grok 隔离', channel: 'grok' }] }
-   if (name === 'getIntelligenceAccounts') { if (options.error) throw new Error('本地模拟读取失败'); return { items: options.empty ? [] : accounts, total: options.empty ? 0 : 1, page: 1, page_size: 20 } }
-   if (name === 'getIntelligenceRuns') { if (options.error) throw new Error('本地模拟读取失败'); return { items: options.empty ? [] : (options.pagination ? [{...run,id:args[0] === 2 ? 3 : 21,source:'automatic'},run].sort((a,b)=>b.id-a.id) : [run]), total: options.empty ? 0 : options.pagination ? 22 : 1, page: args[0], page_size: 20 } }
-   if (name === 'getIntelligenceRun') return { run }
+   if (name === 'getIntelligenceAccounts') {
+    if (options.error) throw new Error('本地模拟读取失败')
+    if (options.bulk) {
+     const [page, filters] = args, page_size = filters.page_size ?? 20, total = filters.group_id === '1' && filters.plan === 'plus' ? 121 : 201
+     const items = Array.from({length: Math.min(page_size, total - (page - 1) * page_size)}, (_, index) => ({ ...accounts[0], account_id: (page - 1) * page_size + index + 1, account_name: `批量测试 #${(page - 1) * page_size + index + 1}`, groups: [{id:1, name:'隔离分组'}], plan:'plus', automatic_effective:false }))
+     return { items, total, page, page_size }
+    }
+    return { items: options.empty ? [] : accounts, total: options.empty ? 0 : 1, page: 1, page_size: 20 }
+   }
+   if (name === 'getIntelligenceRuns') { if (options.error) throw new Error('本地模拟读取失败'); return { items: options.empty ? [] : (options.pagination ? [{...run,id:args[0] === 2 ? 3 : 21,source:'automatic'},run].sort((a,b)=>b.id-a.id) : [options.trialHistory ? historicalRun : run]), total: options.empty ? 0 : options.pagination ? 22 : 1, page: args[0], page_size: 20 } }
+   if (name === 'getIntelligenceRunSummaries') {
+    const { question, output, error, ...summary } = historicalRun
+    const { prompt, expected_answer, ...questionSummary } = question
+    return { items: [{ ...summary, id: args[0] === 2 ? 12 : 11, question: questionSummary }], total: 21, page_size: 20, page: args[0] }
+   }
+   if (name === 'getIntelligenceRun') return { run: options.trialHistory || options.globalHistory ? { ...historicalRun, id: args[0] } : run }
    if (name === 'saveIntelligenceSettings') {
     if (options.saveError) throw new Error('配置版本冲突')
     if (window.__conflictActive) throw Object.assign(new Error('intelligence check target group is incompatible: 1 enabled accounts belong to another channel'), {details: {code:'intelligence_check_target_conflict',target_group_id:1,target_group_channel:'codex',conflict_count:options.conflictCount || 1,conflicts:[{account_id:68876,account_name:'冲突 Claude 账号',channel:'claude'}]}})
     window.__config = { ...args[0], revision: args[0].revision + 1 }; return window.__config
    }
-   if (name === 'createIntelligenceRuns') { if (options.createError) throw new Error('检测提交失败'); window.__bar = {...window.__bar,active_run_id:99,active_status:'queued'}; return { runs: [{...run,id:99,status:'queued'}] } }
+   if (name === 'createIntelligenceRuns') {
+    if (options.createError) throw new Error('检测提交失败')
+    if (args[1] === true) return { runs: args[0].slice(1).map(account_id => ({ ...historicalRun, account_id, status:'queued' })), skipped_account_ids:[args[0][0]] }
+    window.__bar = {...window.__bar,active_run_id:99,active_status:'queued'}; return { runs: [{...run,id:99,status:'queued'}] }
+   }
    if (name === 'setIntelligenceAccounts') { if (options.toggleError) throw new Error('保存开关失败'); if (args[0].includes(68876) && !args[1]) window.__conflictActive=false; window.__bar.enabled=args[1]; return { updated: args[0].length } }
    throw new Error(`unexpected API ${name}`)
   }
@@ -94,7 +112,7 @@ async function fixture(t, options = {}) {
 }
 test('configuration and questions share one page and preserve their save flow', async t => {
  const page = await fixture(t)
- assert.equal(await page.getByRole('tab').count(),0)
+ assert.deepEqual(await page.getByRole('tab').allTextContents(), ['配置', '检测历史', '批量操作'])
  const config = page.getByRole('region', {name:'检测配置'}), questions = page.getByRole('region', {name:'检测题库'})
  await questions.getByRole('button', {name:'编辑',exact:true}).click()
  assert.equal(await page.getByLabel('题目正文').inputValue(),question.prompt)
@@ -106,7 +124,7 @@ test('configuration and questions share one page and preserve their save flow', 
  await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
  assert.equal(await page.evaluate(()=>window.__config.gpt_model),'gpt-6.1-sol')
  assert.equal(await page.evaluate(()=>window.__config.questions[0].prompt),'第一行\n第二行')
- assert.equal(await page.evaluate(()=>window.__calls.some(c=>c.name==='getIntelligenceRuns')),false)
+ assert.equal(await page.evaluate(()=>window.__calls.some(c=>c.name==='getIntelligenceRuns'||c.name==='getIntelligenceRunSummaries')),false)
  await page.screenshot({path:path.join(artifactDir,'settings-light.png'),fullPage:true})
 })
 
@@ -138,6 +156,7 @@ test('manual and automatic runs keep spinning until the batch reports completion
  await page.waitForTimeout(4300)
  assert.equal(await running.locator('.animate-spin').count(),1)
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.name==='createIntelligenceRuns').length),1)
+ assert.deepEqual(await page.evaluate(()=>window.__calls.find(c=>c.name==='createIntelligenceRuns').args), [[1]])
  await page.evaluate(()=>{window.__bar={...window.__bar,active_run_id:undefined,active_status:undefined,records:[...window.__bar.records,{id:99,status:'normal'}]}})
  await page.getByRole('button',{name:'立即检测',exact:true}).waitFor({timeout:6000})
  await page.evaluate(()=>{window.__bar={...window.__bar,active_run_id:100,active_status:'running'}})
@@ -360,4 +379,111 @@ test('adding a question works on insecure HTTP origins without crypto.randomUUID
  assert.notEqual(ids[1], ids[0])
  assert.match(ids[1], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
  assert.equal(await page.evaluate(() => window.__config.questions[1].prompt), '回退题目正文')
+})
+
+async function selectOption(page, label, value, scope = page) {
+ await scope.getByRole('button', {name:label, exact:true}).click()
+ await page.getByRole('option', {name:value, exact:true}).click()
+}
+
+test('global history paginates summary records, forwards filters and loads detail only on demand', async t => {
+ const page = await fixture(t, {globalHistory:true})
+ await page.getByRole('tab', {name:'检测历史'}).click()
+ const panel = page.getByRole('tabpanel', {name:'检测历史'})
+ const list = panel.getByRole('list', {name:'检测历史列表'})
+ await list.getByText('试跑（只记录）').waitFor()
+ assert.equal(await page.evaluate(() => window.__calls.some(c=>c.name==='getIntelligenceRun')), false)
+ assert.doesNotMatch(await list.innerText(), /本地演示题目/)
+ await panel.getByLabel('账号搜索').fill('本地')
+ await selectOption(page,'账号来源','GPT / Codex',panel)
+ await selectOption(page,'分组','隔离分组 #1',panel)
+ await panel.getByLabel('套餐',{exact:true}).fill(' PLUS ')
+ await selectOption(page,'状态','未通过',panel)
+ await selectOption(page,'发起方式','手动',panel)
+ await selectOption(page,'检测类型','试跑（只记录）',panel)
+ await panel.getByLabel('开始时间（含）').fill('2026-10-15T11:00')
+ await panel.getByLabel('结束时间（不含）').fill('2026-10-15T13:00')
+ await panel.getByRole('button',{name:'下一页'}).click()
+ const filter = await page.evaluate(() => window.__calls.findLast(c=>c.name==='getIntelligenceRunSummaries'&&c.args[0]===2).args[1])
+ const time = await page.evaluate(() => ['2026-10-15T11:00','2026-10-15T13:00'].map(v=>new Date(v).toISOString()))
+ assert.deepEqual(filter, {search:'本地', channel:'codex', group_id:'1', plan:'plus', status:'degraded', source:'manual', from:time[0], before:time[1], record_only:'true'})
+ await panel.getByRole('button',{name:'查看详情 #12'}).click()
+ const detail = page.getByRole('dialog', {name:'检测详情 #12'})
+ await detail.getByText('检测时的旧分组名').waitFor()
+ assert.match(await detail.innerText(), /Plus 试跑规则/)
+ assert.match(await detail.innerText(), /不执行处置/)
+ await detail.getByText(question.prompt).waitFor()
+ await page.keyboard.press('Escape')
+ await panel.getByRole('button',{name:'查看详情 #12'}).waitFor()
+ const account = await fixture(t, {initialPath:'/?account_id=1',trialHistory:true})
+ await account.getByRole('dialog').getByText('试跑（只记录）').waitFor()
+})
+
+test('bulk selection caps filtered IDs, resets on filters, and submits only confirmed trial IDs', async t => {
+ const page = await fixture(t, {bulk:true})
+ await page.getByRole('tab', {name:'批量操作'}).click()
+ const panel = page.getByRole('tabpanel', {name:'批量操作'})
+ const all = panel.getByRole('button', {name:'选择全部筛选结果（最多 200 个）'})
+ await panel.getByText(/筛选结果超过 200 个/).waitFor()
+ assert.equal(await all.isDisabled(),true)
+ await panel.getByRole('button',{name:'选择本页'}).click()
+ await panel.getByText('已选 20 个账号',{exact:true}).waitFor()
+ await panel.getByRole('button',{name:'取消本页选择'}).click()
+ await panel.getByText('已选 0 个账号',{exact:true}).waitFor()
+ await selectOption(page,'分组','隔离分组 #1',panel)
+ await panel.getByLabel('套餐',{exact:true}).fill('plus')
+ await all.click()
+ await panel.getByText('已选 121 个账号',{exact:true}).waitFor()
+ await panel.getByLabel('账号搜索').fill('批量测试')
+ await panel.getByText('已选 0 个账号',{exact:true}).waitFor()
+ await all.click()
+ await panel.getByText('已选 121 个账号',{exact:true}).waitFor()
+ await panel.getByRole('button',{name:'立即检测（只记录）',exact:true}).click()
+ const confirmation = page.getByRole('dialog')
+ assert.match(await confirmation.innerText(), /已选定的 121 个账号/)
+ assert.equal(await page.evaluate(() => window.__calls.some(c=>c.name==='createIntelligenceRuns')), false)
+ await confirmation.getByRole('button',{name:'确认操作'}).click()
+ await panel.getByText(/已创建 120 条检测，跳过 1 个账号/).waitFor()
+ const requested = await page.evaluate(() => window.__calls.filter(c=>c.name==='getIntelligenceAccounts'&&c.args[1].page_size).map(c=>[c.args[0],c.args[1].page_size]))
+ assert.deepEqual(requested,[[1,100],[2,100],[1,100],[2,100]])
+ assert.deepEqual(await page.evaluate(() => window.__calls.find(c=>c.name==='createIntelligenceRuns').args),[Array.from({length:121},(_,i)=>i+1),true])
+ await panel.getByRole('button',{name:'选择本页'}).click()
+ await panel.getByRole('button',{name:'关闭自动检测',exact:true}).click()
+ await page.getByRole('dialog').getByRole('button',{name:'确认操作'}).click()
+ await panel.getByText(/已更新 20 个账号/).waitFor()
+ assert.deepEqual(await page.evaluate(() => window.__calls.find(c=>c.name==='setIntelligenceAccounts').args),[Array.from({length:20},(_,i)=>i+1),false])
+})
+
+test('rules require a matcher and a same-source target, then save priority and overrides', async t => {
+ const page = await fixture(t)
+ const rules = page.getByRole('region', {name:'分组 / 套餐规则'})
+ const add = rules.getByRole('button',{name:'新增规则'})
+ await add.click()
+ await rules.getByText('请填写分组或套餐码，至少一项。',{exact:true}).waitFor()
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ assert.equal(await page.evaluate(() => window.__calls.some(c=>c.name==='saveIntelligenceSettings')),false)
+ await rules.getByLabel('规则名称').fill('套餐规则')
+ await rules.getByLabel('匹配套餐码').fill(' PLUS ')
+ await rules.getByRole('switch',{name:'允许自动检测',exact:true}).click()
+ await selectOption(page,'处置策略','切换分组',rules)
+ await rules.getByText('切换分组需要选择目标分组。',{exact:true}).waitFor()
+ await selectOption(page,'规则目标分组','隔离分组 #1',rules)
+ await rules.getByRole('checkbox',{name:question.name}).check()
+ await rules.getByLabel('请求超时（秒）').fill('90')
+ await add.click()
+ await rules.getByLabel('规则名称').fill('组合规则')
+ await selectOption(page,'匹配分组','隔离分组 #1',rules)
+ await rules.getByLabel('匹配套餐码').fill('pro')
+ await rules.getByRole('button',{name:'上移 组合规则'}).click()
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
+ const saved = JSON.parse(await page.evaluate(() => JSON.stringify(window.__config.rules)))
+ assert.deepEqual(saved.map(({id,...rule})=>rule),[
+  {name:'组合规则',channel:'codex',automatic:true,group_id:1,plan:'pro'},
+  {name:'套餐规则',channel:'codex',automatic:false,plan:'plus',action:'switch_group',target_group_id:1,question_ids:['candy'],timeout_seconds:90},
+ ])
+ await rules.getByRole('button',{name:'删除 组合规则'}).click()
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
+ assert.deepEqual(await page.evaluate(()=>window.__config.rules.map(r=>r.name)),['套餐规则'])
 })

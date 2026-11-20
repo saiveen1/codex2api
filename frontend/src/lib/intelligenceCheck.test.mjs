@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { intelligenceWindow, intelligenceColor, intelligenceQuery, latestRequestGuard, intelligenceTargetConflict, intelligenceScheduleLabel } from './intelligenceCheck.ts'
+import { intelligenceWindow, intelligenceColor, intelligenceQuery, latestRequestGuard, intelligenceTargetConflict, intelligenceScheduleLabel, intelligenceGroupNames, intelligencePolicyName, intelligenceRuleError, intelligenceTimeRange, normalizeIntelligenceRule } from './intelligenceCheck.ts'
 test('last 20 completed checks remain chronological and errors do not dilute pass rate', () => {
   const records = Array.from({ length: 23 }, (_, i) => ({ id: i, status: i % 3 === 0 ? 'normal' : i % 3 === 1 ? 'degraded' : 'error', created_at: new Date(i * 1000).toISOString() }))
   records.push({ id: 24, status: 'running' })
@@ -38,4 +38,33 @@ test('conflict actions require structured account details and never infer IDs fr
 test('a quota wait is labelled without promising a check time', () => {
   assert.equal(intelligenceScheduleLabel({ enabled: true, action: 'none', records: [], probe_phase: 'quota_wait', next_due_at: null }), '等待额度恢复')
   assert.equal(intelligenceScheduleLabel({ enabled: true, action: 'none', records: [] }), '')
+})
+
+test('history preserves legacy, empty and populated snapshots and sends UTC time bounds', () => {
+  assert.equal(intelligenceGroupNames(undefined), '未记录')
+  assert.equal(intelligenceGroupNames([]), '无分组')
+  assert.equal(intelligenceGroupNames([{id:1, name:'旧分组'}, {id:2, name:''}]), '旧分组、#2')
+  assert.equal(intelligencePolicyName({ groups: [] }), '全局配置')
+  assert.equal(intelligencePolicyName({ rule_id:'rule-1', rule_name:'旧规则' }), '旧规则')
+  assert.deepEqual(intelligenceTimeRange('2026-10-15T10:00:00+02:00', '2026-10-15T11:00:00+02:00'), { from:'2026-10-15T08:00:00.000Z', before:'2026-10-15T09:00:00.000Z' })
+  assert.equal(intelligenceTimeRange('bad', ''), null)
+  assert.equal(intelligenceTimeRange('2026-10-15T10:00:00Z', '2026-10-15T10:00:00Z'), null)
+})
+
+test('rule validation distinguishes omitted overrides, required matchers and enabled question subsets', () => {
+  const rule = { id:'r1', name:' 套餐规则 ', channel:'codex', automatic:false, plan:' PLUS ' }
+  const groups = [{id:1, channel:'codex'}, {id:2, channel:'claude'}]
+  const questions = [{id:'on', enabled:true}, {id:'off', enabled:false}]
+  const validate = patch => intelligenceRuleError({...rule, ...patch}, questions, groups)
+  assert.equal(normalizeIntelligenceRule(rule).name, '套餐规则')
+  assert.equal(normalizeIntelligenceRule(rule).plan, 'plus')
+  assert.equal(validate({}), '')
+  assert.equal(validate({ group_id:1, plan:undefined, question_ids:[] }), '')
+  assert.match(validate({ plan:' ' }), /分组或套餐码/)
+  assert.match(validate({ channel:'' }), /账号来源/)
+  assert.match(validate({ action:'switch_group' }), /目标分组/)
+  assert.match(validate({ action:'switch_group', target_group_id:2 }), /同来源/)
+  assert.equal(validate({ action:'switch_group', target_group_id:1, question_ids:['off','on'] }), '')
+  assert.match(validate({ question_ids:['off'] }), /至少启用/)
+  assert.match(validate({ timeout_seconds:0 }), /1–3600/)
 })

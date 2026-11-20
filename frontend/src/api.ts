@@ -1,5 +1,5 @@
 import type { ProxySubscriptionEngine, ProxySubscriptionInput, ProxySubscription, ProxySubscriptionsView } from './types'
-import { intelligenceQuery, type IntelligenceSettings, type IntelligenceAccount, type IntelligenceRun, type IntelligenceBar, type IntelligencePage } from './lib/intelligenceCheck.ts'
+import { intelligenceQuery, type IntelligenceSettings, type IntelligenceAccount, type IntelligenceRun, type IntelligenceRunSummary, type IntelligenceBar, type IntelligencePage } from './lib/intelligenceCheck.ts'
 import { qualityTestFilterQuery, type QualityTestJob, type QualityTestJobsFilter, type QualityTestJobsResponse, type QualityTestPrompt } from './lib/qualityTest.ts'
 import type {
   AccountEventTrendPoint,
@@ -1665,8 +1665,9 @@ export const api = {
   saveIntelligenceSettings: (body: IntelligenceSettings) => request<IntelligenceSettings>('/intelligence-check/settings', { method: 'PUT', body: JSON.stringify(body) }),
   getIntelligenceAccounts: (page = 1, filters: Record<string, string | number | undefined> = {}, signal?: AbortSignal) => request<IntelligencePage<IntelligenceAccount>>(`/intelligence-check/accounts?${intelligenceQuery(page, filters)}`, { signal }),
   setIntelligenceAccounts: (account_ids: number[], enabled: boolean) => request<{ updated: number }>('/intelligence-check/accounts', { method: 'PATCH', body: JSON.stringify({ account_ids, enabled }) }),
-  createIntelligenceRuns: (account_ids: number[]) => request<{ runs: IntelligenceRun[] }>('/intelligence-check/runs', { method: 'POST', body: JSON.stringify({ account_ids }) }),
+  createIntelligenceRuns: (account_ids: number[], recordOnly?: true) => request<{ runs: IntelligenceRun[]; skipped_account_ids?: number[] }>('/intelligence-check/runs', { method: 'POST', body: JSON.stringify(recordOnly ? { account_ids, record_only: true } : { account_ids }) }),
   getIntelligenceRuns: (page = 1, filters: Record<string, string | number | undefined> = {}, signal?: AbortSignal) => request<IntelligencePage<IntelligenceRun>>(`/intelligence-check/runs?${intelligenceQuery(page, filters)}`, { signal }),
+  getIntelligenceRunSummaries: (page: number, filters: Record<string, string | number | undefined>, signal?: AbortSignal) => request<IntelligencePage<IntelligenceRunSummary>>(`/intelligence-check/runs?${intelligenceQuery(page, { ...filters, summary: 1 })}`, { signal }),
   getIntelligenceRun: (id: number, signal?: AbortSignal) => request<{ run: IntelligenceRun }>(`/intelligence-check/runs/${id}`, { signal }),
   getIntelligenceBars: (ids: number[], signal?: AbortSignal) => request<{ bars: Record<string, IntelligenceBar> }>(`/intelligence-check/bars?account_ids=${ids.join(',')}`, { signal }),
   getQualityTestOptions: (id: number, signal?: AbortSignal) =>

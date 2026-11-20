@@ -683,7 +683,14 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 
 	isAgentIdentity := account.IsCodexAgentIdentity()
 	// Agent Identity 无 access_token，鉴权靠 AgentAssertion；请求前确保 task 已注册。
-	if isAgentIdentity {
+	if isAgentIdentity && isRecordOnlyDetector(ctx) {
+		account.Mu().RLock()
+		hasTask := strings.TrimSpace(account.AgentTaskID) != ""
+		account.Mu().RUnlock()
+		if !hasTask {
+			return nil, ErrUpstream(0, "只记录试跑需要已有 Agent Identity task_id，不会自动注册", nil)
+		}
+	} else if isAgentIdentity {
 		if EnsureCodexAgentIdentityTaskFunc != nil {
 			if err := EnsureCodexAgentIdentityTaskFunc(ctx, account, false); err != nil {
 				return nil, ErrUpstream(0, "agent identity task 注册失败", err)
@@ -824,7 +831,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	}
 
 	// Agent Identity：task 失效（401 invalid_task_id 等）时重注册并重试一次。
-	if isAgentIdentity && resp != nil && resp.StatusCode == http.StatusUnauthorized && EnsureCodexAgentIdentityTaskFunc != nil {
+	if isAgentIdentity && !isRecordOnlyDetector(ctx) && resp != nil && resp.StatusCode == http.StatusUnauthorized && EnsureCodexAgentIdentityTaskFunc != nil {
 		peeked, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		_ = resp.Body.Close()
 		if auth.IsAgentIdentityTaskInvalidResponse(resp.StatusCode, peeked) {

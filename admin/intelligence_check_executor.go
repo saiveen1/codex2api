@@ -53,7 +53,8 @@ func intelligenceAccountChannel(account *auth.Account) string {
 // Uses the same outbound executors as generation, with no browser request context
 // or application-level retry. The detector context freezes the measurement prompt
 // and model against user payload rules; identity/fingerprint/timezone still apply.
-func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Account, model, effort, prompt string) (result intelligenceExecution) {
+func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Account, model, effort, prompt string, recordOnly ...bool) (result intelligenceExecution) {
+	applySignals := len(recordOnly) == 0 || !recordOnly[0]
 	if account == nil {
 		return intelligenceExecution{Interrupted: true, Error: "配置错误：该账号渠道不支持降智检测"}
 	}
@@ -70,9 +71,12 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	if err := h.validateQualityTestForAccount(ctx, account, qualityTestRequest{Model: model, ReasoningEffort: effort}); err != nil {
 		return intelligenceExecution{Interrupted: true, Error: "配置错误：" + err.Error()}
 	}
-	if err := h.ensureKiroBearer(ctx, account); err != nil {
-		// 只有上游明确拒绝凭据才封住本代凭据的自动检测；网络或 5xx 之类的临时故障保持可重试。
-		return intelligenceExecution{Error: "Kiro 账号令牌刷新失败: " + err.Error(), CredentialRejected: auth.IsPermanentRefreshFailure(err)}
+	// A trial must not rotate credentials or mark an account on refresh failure.
+	if applySignals {
+		if err := h.ensureKiroBearer(ctx, account); err != nil {
+			// 只有上游明确拒绝凭据才封住本代凭据的自动检测；临时故障保持可重试。
+			return intelligenceExecution{Error: "Kiro 账号令牌刷新失败: " + err.Error(), CredentialRejected: auth.IsPermanentRefreshFailure(err)}
+		}
 	}
 	payload := map[string]any{"model": model, "stream": true}
 	security := h.store.ClaudeSecurityConfig()
@@ -93,6 +97,9 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	}
 	body, _ := json.Marshal(payload)
 	proxyURL := strings.TrimSpace(account.GetProxyURL())
+	if !applySignals {
+		ctx = proxy.WithRecordOnlyDetector(ctx)
+	}
 	ctx, cancel := context.WithCancel(proxy.WithAccountBoundEgress(proxy.WithUpstreamIdentityAudit(proxy.WithCodexDetectorRequest(ctx)), proxyURL))
 	defer cancel()
 	fingerprint := ""
@@ -137,7 +144,7 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	case claude:
 		resp, err = proxy.ExecuteClaudeMessagesRequest(ctx, account, body, proxyURL, make(http.Header), fingerprint, security)
 	case account.IsAntigravityAPI():
-		resp, err = h.executeAntigravityConnectionTest(ctx, account, model, body, proxyURL, true)
+		resp, err = h.executeAntigravityConnectionTest(ctx, account, model, body, proxyURL, applySignals)
 	case account.IsGrokAPI():
 		resp, err = proxy.ExecuteGrokProtocolRequest(ctx, account, proxy.GrokProtocolResponses, nil, body, proxyURL, nil)
 	case account.IsRelayStyle():
@@ -155,12 +162,17 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		result.Error = fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(raw), 4096))
 		result.CredentialRejected = intelligenceCredentialRejected(raw) || (account.IsAntigravityAPI() || account.IsKiro()) && resp.StatusCode == http.StatusUnauthorized
-		h.applyIntelligenceUpstreamFailure(account, resp, model, raw)
+		if applySignals {
+			h.applyIntelligenceUpstreamFailure(account, resp, model, raw)
+		}
+		if !applySignals && resp.StatusCode == http.StatusTooManyRequests {
+			result.Interrupted = true
+		}
 		return
 	}
-	if claude {
+	if applySignals && claude {
 		proxy.SyncClaudeUsageState(h.store, account, resp)
-	} else if !account.IsRelayStyle() {
+	} else if applySignals && !account.IsRelayStyle() {
 		proxy.SyncCodexUsageState(h.store, account, resp)
 	}
 	result = readIntelligenceStream(resp.Body, claude)
@@ -169,14 +181,12 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		result.Complete = false
 		result.Error = ctx.Err().Error()
 	}
-	if !claude && !account.IsAntigravityAPI() && result.Error != "" && len(result.terminalPayload) > 0 {
+	if applySignals && !claude && !account.IsAntigravityAPI() && result.Error != "" && len(result.terminalPayload) > 0 {
 		h.applyResponsesUsageLimitFailure(account, resp, model, result.terminalPayload)
 	}
 	// Never mark an account successful/reset its authentication or quota state here.
-	if result.Error != "" {
-		if claude {
-			applyClaudeConnectionStreamFailure(h, account, model, "failed", result.Error, resp)
-		}
+	if applySignals && claude && result.Error != "" {
+		applyClaudeConnectionStreamFailure(h, account, model, "failed", result.Error, resp)
 	}
 	return
 }

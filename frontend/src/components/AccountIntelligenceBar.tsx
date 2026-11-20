@@ -41,7 +41,7 @@ export function AccountIntelligenceActions({ bar, accountID, accountName }: Acco
     finally { setSubmitting(false) }
   }
   return <div role="group" aria-label="检测操作" className="inline-flex shrink-0 items-center gap-0.5" onClick={event => event.stopPropagation()}>
-    <Button variant="ghost" size="icon-xs" className="size-4.5 rounded-sm text-muted-foreground hover:text-foreground" aria-label={active ? '检测中' : '立即检测'} title={active ? '检测中' : '立即检测'} disabled={active} aria-busy={active} onClick={() => void run()}>
+    <Button variant="ghost" size="icon-xs" className="size-4.5 rounded-sm text-muted-foreground hover:text-foreground" aria-label={active ? '检测中' : '立即检测'} title={active ? '检测中' : '立即检测（可能按已保存策略触发处置）'} aria-description={active ? undefined : '可能按已保存策略触发处置'} disabled={active} aria-busy={active} onClick={() => void run()}>
       {active ? <LoaderCircle className="size-3 animate-spin" /> : <Play className="size-3" />}
     </Button>
     <Button variant="ghost" size="icon-xs" className="size-4.5 rounded-sm text-muted-foreground hover:text-foreground" aria-label="检测记录" title="检测记录" onClick={() => setHistory(true)}><History className="size-3" /></Button>

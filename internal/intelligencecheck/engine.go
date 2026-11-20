@@ -20,6 +20,7 @@ type Question struct {
 	Enabled        bool   `json:"enabled"`
 }
 type Settings struct {
+	Rules                    []Rule          `json:"rules,omitempty"`
 	GrokModelSupplied        bool            `json:"-"`
 	AntigravityModelSupplied bool            `json:"-"`
 	KiroModelSupplied        bool            `json:"-"`
@@ -207,7 +208,7 @@ func ValidateSettings(s Settings) error {
 	if s.Enabled && enabled == 0 {
 		return fmt.Errorf("automatic checks need an enabled question")
 	}
-	return nil
+	return validateRules(s)
 }
 
 type Observation struct {
@@ -295,6 +296,7 @@ func Grade(q Question, mode string, o Observation) Result {
 type State struct {
 	PauseBackoffSeconds         int              `json:"pause_backoff_seconds,omitempty"`
 	ErrorRetrySeconds           int              `json:"error_retry_seconds,omitempty"`
+	PolicyRuleID                string           `json:"policy_rule_id,omitempty"`
 	NextIntervalSeconds         int              `json:"next_interval_seconds,omitempty"`
 	ProbePhase                  string           `json:"probe_phase,omitempty"`
 	BlockedCredentialGeneration *int64           `json:"blocked_credential_generation,omitempty"`

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Tabs } from "radix-ui";
 import {
   ArrowDown,
   ArrowUp,
@@ -11,6 +12,8 @@ import { api } from "../api";
 import PageHeader from "../components/PageHeader";
 import AccountIntelligenceHistoryDialog from "../components/AccountIntelligenceHistoryDialog";
 import IntelligenceRunDialog from "../components/IntelligenceRunDialog";
+import { IntelligenceBatch, IntelligenceHistory } from "../components/IntelligenceOperations";
+import IntelligenceRules from "../components/IntelligenceRules";
 import { Button } from "../components/ui/button";
 import {
   Card,
@@ -26,9 +29,12 @@ import { getErrorMessage } from "../utils/error";
 import { refreshIntelligenceBars } from "../hooks/useIntelligenceBars";
 import { createUUID } from "../lib/uuid";
 import {
+  intelligenceRuleError,
+  normalizeIntelligenceRule,
   intelligenceTargetConflict,
   type IntelligenceTargetConflict,
   type IntelligenceQuestion,
+  type IntelligenceGroup,
   type IntelligenceSettings,
 } from "../lib/intelligenceCheck";
 
@@ -48,14 +54,14 @@ export default function IntelligenceCheck() {
   const [params, setParams] = useSearchParams();
   const accountID = Number(params.get("account_id")) || undefined;
   const runID = Number(params.get("run")) || null;
+  const [tab, setTab] = useState("config");
   const [settings, setSettings] = useState<IntelligenceSettings | null>(null);
   const [saved, setSaved] = useState<IntelligenceSettings | null>(null);
-  const [groups, setGroups] = useState<
-    { id: number; name: string; channel?: string }[]
-  >([]);
+  const [groups, setGroups] = useState<IntelligenceGroup[]>([]);
   const [targetConflict, setTargetConflict] = useState<IntelligenceTargetConflict | null>(null);
   const conflictPanel = useRef<HTMLDivElement>(null);
   const [configError, setConfigError] = useState("");
+  const [groupsError, setGroupsError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editor, setEditor] = useState<string | null>(null);
   const { showToast } = useToast();
@@ -63,25 +69,19 @@ export default function IntelligenceCheck() {
     !!settings && JSON.stringify(settings) !== JSON.stringify(saved);
 
   useEffect(() => {
-    if (targetConflict) conflictPanel.current?.scrollIntoView({ block: "center" });
-  }, [targetConflict]);
+    if (tab === "config" && targetConflict) conflictPanel.current?.scrollIntoView({ block: "center" });
+  }, [tab, targetConflict]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.all([
-      api.getIntelligenceSettings(controller.signal),
-      api.listAccountGroups(),
-    ])
-      .then(([config, result]) => {
-        if (controller.signal.aborted) return;
-        setSettings(config);
-        setSaved(config);
-        setGroups(result.groups ?? []);
-        setConfigError("");
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setConfigError(getErrorMessage(e));
-      });
+    void api.getIntelligenceSettings(controller.signal).then(config => {
+      if (controller.signal.aborted) return;
+      setSettings(config);
+      setSaved(config);
+    }).catch(e => { if (!controller.signal.aborted) setConfigError(getErrorMessage(e)); });
+    void api.listAccountGroups().then(result => {
+      if (!controller.signal.aborted) setGroups(result.groups ?? []);
+    }).catch(e => { if (!controller.signal.aborted) setGroupsError(getErrorMessage(e)); });
     return () => controller.abort();
   }, []);
   useEffect(() => {
@@ -97,7 +97,7 @@ export default function IntelligenceCheck() {
     key: K,
     value: IntelligenceSettings[K],
   ) => {
-    if (key === "action" || key === "target_group_id") setTargetConflict(null);
+    if (key === "action" || key === "target_group_id" || key === "rules") setTargetConflict(null);
     setSettings((s) => (s ? { ...s, [key]: value } : s));
   };
   const mutate = async (fn: () => Promise<unknown>, message: string) => {
@@ -121,11 +121,16 @@ export default function IntelligenceCheck() {
   const save = () =>
     mutate(async () => {
       if (!settings) return;
-      const next = await api.saveIntelligenceSettings(settings);
+      const rules = settings.rules?.map(normalizeIntelligenceRule);
+      for (const rule of rules ?? []) {
+        const error = intelligenceRuleError(rule, settings.questions, groups);
+        if (error) throw new Error(`${rule.name || "未命名规则"}：${error}`);
+      }
+      const next = await api.saveIntelligenceSettings({ ...settings, rules });
       setSettings(next);
       setSaved(next);
       setTargetConflict(null);
-    }, "检测配置和题库已保存");
+    }, "检测配置、规则和题库已保存");
   const disableConflicts = () =>
     mutate(async () => {
       if (!targetConflict) return;
@@ -193,16 +198,26 @@ export default function IntelligenceCheck() {
                 有未保存更改
               </span>
             )}
-            <Button
+            {tab === "config" && <Button
               onClick={() => void save()}
               disabled={!settings || busy || !dirty}
             >
               <Save className="size-4" />
               保存配置
-            </Button>
+            </Button>}
           </div>
         }
       />
+      {groupsError && <p role="alert" className="mb-4 text-sm text-destructive">分组加载失败：{groupsError}。请刷新页面重试。</p>}
+      <Tabs.Root value={tab} onValueChange={setTab}>
+        <Tabs.List aria-label="降智检测页面" className="mb-5 inline-flex max-w-full gap-1 rounded-xl border border-border/60 bg-muted/40 p-1">
+          {[["config", "配置"], ["history", "检测历史"], ["batch", "批量操作"]].map(([value, label]) => (
+            <Tabs.Trigger key={value} value={value} asChild>
+              <Button variant="ghost" size="sm" className="min-w-0 px-2 text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">{label}</Button>
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+        <Tabs.Content value="config" className="space-y-6">
       {configError && (
         <p role="alert" className="mb-4 text-sm text-destructive">
           配置加载失败：{configError}。请刷新页面重试。
@@ -620,6 +635,18 @@ export default function IntelligenceCheck() {
           )}
         </section>
       </div>}
+      {settings && <IntelligenceRules settings={settings} groups={groups} disabled={busy}
+        onChange={rules => change("rules", rules)} />}
+        </Tabs.Content>
+        <Tabs.Content value="history">
+          <IntelligenceHistory groups={groups} onRun={id => {
+            const next = new URLSearchParams(params);
+            next.set("run", String(id));
+            setParams(next);
+          }} />
+        </Tabs.Content>
+        <Tabs.Content value="batch"><IntelligenceBatch groups={groups} /></Tabs.Content>
+      </Tabs.Root>
       <AccountIntelligenceHistoryDialog accountID={runID ? null : accountID ?? null} onClose={() => { const next = new URLSearchParams(params); next.delete("account_id"); setParams(next); }} />
       <IntelligenceRunDialog
         id={runID}

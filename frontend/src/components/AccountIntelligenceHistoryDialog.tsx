@@ -74,7 +74,7 @@ export default function AccountIntelligenceHistoryDialog({ accountID, accountNam
     <DialogContent className="sm:max-w-3xl">
       <DialogHeader>
         <DialogTitle className="break-all pr-6">降智检测记录 · {accountName || data?.items[0]?.account_name || `#${accountID}`}</DialogTitle>
-        <DialogDescription>最近记录在上；请求错误不计入通过率。</DialogDescription>
+        <DialogDescription>最近记录在上；试跑只记录、不触发处置，请求错误不计入通过率。</DialogDescription>
       </DialogHeader>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4 text-sm">
         <label className="flex items-center gap-2">此账号自动检测
@@ -91,6 +91,7 @@ export default function AccountIntelligenceHistoryDialog({ accountID, accountNam
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="inline-flex items-center gap-1.5 font-medium"><span className="size-2 rounded-full bg-muted" style={{ backgroundColor: intelligenceColor(run.status) }} />{intelligenceLabels[run.status]}</span>
             <span className="text-xs text-muted-foreground">{run.source === 'manual' ? '手动' : '自动'}</span>
+            {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">试跑（只记录）</span>}
             <time className="text-xs text-muted-foreground">{new Date(run.created_at || 0).toLocaleString()}</time>
             <span className="ml-auto text-xs tabular-nums text-muted-foreground">#{run.id}</span>
           </div>

@@ -11,6 +11,73 @@ export interface IntelligenceQuestion {
   enabled: boolean;
 }
 export type IntelligenceChannel = "codex" | "claude" | "grok" | "antigravity" | "kiro";
+export const intelligenceChannels: Record<IntelligenceChannel, string> = {
+  codex: "GPT / Codex", claude: "Claude", grok: "Grok", antigravity: "Antigravity", kiro: "Kiro",
+};
+export interface IntelligenceRule {
+  id: string;
+  name: string;
+  channel: IntelligenceChannel;
+  automatic: boolean;
+  group_id?: number;
+  plan?: string;
+  model?: string;
+  reasoning_effort?: string;
+  judge_mode?: IntelligenceSettings["judge_mode"];
+  interval_seconds?: number;
+  retry_seconds?: number;
+  timeout_seconds?: number;
+  degrade_threshold?: number;
+  recover_threshold?: number;
+  action?: IntelligenceAction;
+  target_group_id?: number;
+  question_ids?: string[];
+}
+export interface IntelligenceGroup { id: number; name: string; channel?: string }
+interface IntelligencePolicySnapshot {
+  groups?: { id: number; name: string }[];
+  plan?: string;
+  rule_id?: string;
+  rule_name?: string;
+}
+export function intelligenceGroupNames(groups: IntelligencePolicySnapshot["groups"]) {
+  return groups == null ? "未记录" : groups.length ? groups.map(g => g.name || `#${g.id}`).join("、") : "无分组";
+}
+export function intelligencePolicyName(snapshot: IntelligencePolicySnapshot) {
+  return snapshot.rule_name || snapshot.rule_id || (snapshot.groups != null ? "全局配置" : "未记录");
+}
+export const intelligenceRuleNumbers = [
+  ["interval_seconds", "正常间隔（秒）", 86400],
+  ["retry_seconds", "异常重试间隔（秒）", 86400],
+  ["timeout_seconds", "请求超时（秒）", 3600],
+  ["degrade_threshold", "连续未通过次数", 1000],
+  ["recover_threshold", "连续恢复次数", 1000],
+] as const;
+
+export function intelligenceRuleError(rule: IntelligenceRule, questions: IntelligenceQuestion[], groups: IntelligenceGroup[]) {
+  if (!rule.name.trim()) return "请输入规则名称。";
+  if (!Object.prototype.hasOwnProperty.call(intelligenceChannels, rule.channel)) return "请选择账号来源。";
+  if (!rule.group_id && !rule.plan?.trim()) return "请填写分组或套餐码，至少一项。";
+  const sameChannel = (id: number) => groups.some(g => g.id === id && (g.channel || "codex") === rule.channel);
+  if (rule.group_id && !sameChannel(rule.group_id)) return "请选择同来源的匹配分组。";
+  if (rule.action === "switch_group" && !rule.target_group_id) return "切换分组需要选择目标分组。";
+  if (rule.target_group_id && !sameChannel(rule.target_group_id)) return "请选择同来源的目标分组。";
+  for (const [key, label, max] of intelligenceRuleNumbers) {
+    const value = rule[key];
+    if (value != null && (!Number.isInteger(value) || value < 1 || value > max)) return `${label}须为 1–${max} 的整数，或留空继承。`;
+  }
+  if (rule.question_ids?.length) {
+    if (rule.question_ids.some(id => !questions.some(q => q.id === id))) return "指定题目包含已删除题目，请重新选择。";
+    if (!questions.some(q => q.enabled && rule.question_ids?.includes(q.id))) return "指定题目中至少启用一道。";
+  }
+  return "";
+}
+
+export function normalizeIntelligenceRule(rule: IntelligenceRule) {
+  return { ...rule, name: rule.name.trim(), plan: rule.plan?.trim().toLowerCase() || undefined,
+    model: rule.model?.trim() || undefined };
+}
+
 export interface IntelligenceSettings {
   channels?: Partial<Record<IntelligenceChannel, boolean>>;
   grok_model?: string;
@@ -38,6 +105,7 @@ export interface IntelligenceSettings {
   recover_threshold: number;
   target_group_id: number;
   questions: IntelligenceQuestion[];
+  rules?: IntelligenceRule[];
 }
 export interface IntelligenceTargetConflict {
   code: "intelligence_check_target_conflict";
@@ -67,7 +135,8 @@ export interface IntelligenceRecord {
   created_at?: string;
   completed_at?: string | null;
 }
-export interface IntelligenceRun extends IntelligenceRecord {
+export interface IntelligenceRun extends IntelligenceRecord, IntelligencePolicySnapshot {
+  record_only?: boolean;
   account_id: number;
   account_name: string;
   channel: string;
@@ -90,7 +159,11 @@ export interface IntelligenceRun extends IntelligenceRecord {
   action_message?: string;
   effective_context?: Record<string, unknown>;
 }
-export interface IntelligenceAccount {
+export type IntelligenceRunSummary = Omit<IntelligenceRun, "question" | "output" | "error" | "effective_context"> & {
+  question?: Omit<IntelligenceQuestion, "prompt" | "expected_answer">;
+};
+export interface IntelligenceAccount extends IntelligencePolicySnapshot {
+  automatic_effective?: boolean;
   account_id: number;
   account_name: string;
   channel: string;
@@ -167,6 +240,13 @@ export function intelligenceQuery(
   for (const [key, value] of Object.entries(filters))
     if (value !== undefined && value !== "") params.set(key, String(value));
   return params.toString();
+}
+
+export function intelligenceTimeRange(from: string, before: string) {
+  const start = from ? new Date(from) : undefined;
+  const end = before ? new Date(before) : undefined;
+  if ((start && !Number.isFinite(start.getTime())) || (end && !Number.isFinite(end.getTime())) || (start && end && start >= end)) return null;
+  return { from: start?.toISOString(), before: end?.toISOString() };
 }
 export function latestRequestGuard() {
   let revision = 0;

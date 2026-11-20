@@ -2129,7 +2129,7 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 	// 426 is a control-plane compatibility signal, not an account failure. The
 	// request has produced no visible output yet, so refresh settings and retry
 	// this same account exactly once with a validated minimum client version.
-	if resp.StatusCode == http.StatusUpgradeRequired {
+	if resp.StatusCode == http.StatusUpgradeRequired && !isRecordOnlyDetector(ctx) {
 		if minVersion := fetchGrokMinimumClientVersion(ctx, account, proxyURL); minVersion != "" {
 			_ = resp.Body.Close()
 			resp, err = send(preflight.Body, minVersion)
@@ -2156,8 +2156,10 @@ func ExecuteGrokProtocolRequest(ctx context.Context, account *auth.Account, inbo
 			resp.Body = io.NopCloser(bytes.NewReader(errBody))
 		}
 	}
-	recordGrokUpstreamObservationsAtOrigin(account, resp.Header, route.BaseURL)
-	observeGrokNativeProtocolFailure(account, route, inbound, resp)
+	if !isRecordOnlyDetector(ctx) {
+		recordGrokUpstreamObservationsAtOrigin(account, resp.Header, route.BaseURL)
+		observeGrokNativeProtocolFailure(account, route, inbound, resp)
+	}
 	markGrokNativeRoute(resp, route, inbound)
 	// Same-protocol native routes retain the provider wire representation. The
 	// concrete handler streams/copies it directly; converted routes continue to

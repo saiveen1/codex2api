@@ -37,16 +37,21 @@ func (e *IntelligenceCheckTargetConflictError) Error() string {
 func (e *IntelligenceCheckTargetConflictError) Unwrap() error { return ErrIntelligenceCheckTargetGroup }
 
 type IntelligenceCheckAccountFilter struct {
-	AccountID               int64
-	Search, Channel, Status string
-	Offset, Limit           int
+	AccountID, GroupID            int64
+	Search, Channel, Status, Plan string
+	Offset, Limit                 int
 }
 type IntelligenceCheckRunFilter struct {
-	AccountID               int64
-	Search, Channel, Status string
-	Offset, Limit           int
+	AccountID, GroupID                    int64
+	Search, Channel, Status, Plan, Source string
+	From, Before                          time.Time
+	RecordOnly                            *bool
+	Summary                               bool
+	Offset, Limit                         int
 }
 type IntelligenceCheckAccount struct {
+	IntelligenceCheckScope
+	AutomaticEffective   bool       `json:"automatic_effective"`
 	CredentialGeneration int64      `json:"-"`
 	ConfigError          string     `json:"config_error,omitempty"`
 	AccountID            int64      `json:"account_id"`
@@ -63,6 +68,8 @@ type IntelligenceCheckAccount struct {
 	ic.State
 }
 type IntelligenceCheckRun struct {
+	IntelligenceCheckScope
+	RecordOnly           bool        `json:"record_only,omitempty"`
 	CredentialGeneration int64       `json:"credential_generation,omitempty"`
 	ID                   int64       `json:"id"`
 	AccountID            int64       `json:"account_id"`
@@ -144,12 +151,12 @@ func (db *DB) ensureIntelligenceCheckSchema(ctx context.Context) error {
 		}
 		// Reuse the eligibility/channel predicates used by manual enrollment and
 		// settings validation. AFTER INSERT can read the newly inserted account.
-		action := `json_extract(s.config_json,'$.action')`
-		target := `json_extract(s.config_json,'$.target_group_id')`
-		if !db.isSQLite() {
-			action = `(s.config_json::jsonb)->>'action'`
-			target = `((s.config_json::jsonb)->>'target_group_id')::bigint`
-		}
+		baseAction := db.intelligenceFieldSQL("s.config_json", "action", "")
+		baseTarget := db.intelligenceFieldSQL("s.config_json", "target_group_id", "bigint")
+		rule := db.intelligenceRuleSQL("a", "", "s")
+		ruleAction := `NULLIF(` + db.intelligenceFieldSQL(rule, "action", "") + `,'')`
+		action := `COALESCE(` + ruleAction + `,` + baseAction + `,'none')`
+		target := `(CASE WHEN ` + ruleAction + ` IS NULL THEN ` + baseTarget + ` ELSE ` + db.intelligenceFieldSQL(rule, "target_group_id", "bigint") + ` END)`
 		channelEnabled := db.intelligenceSourceEnabledSQL("a", "s")
 		defaultEnabled := `COALESCE((SELECT s.new_accounts_enabled AND (` + db.intelligenceEligibleSQL() + `) AND (` + channelEnabled + `) AND
 			(COALESCE(` + action + `,'none')<>'switch_group' OR EXISTS (
@@ -226,13 +233,28 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if !s.KiroModelSupplied && s.KiroModel == "" {
 			s.KiroModel = old.KiroModel
 		}
+		if s.Rules == nil {
+			s.Rules = old.Rules
+		}
+		for i := range s.Rules {
+			s.Rules[i].Plan = ic.NormalizePlan(s.Rules[i].Plan)
+		}
+		if err := ic.ValidateSettings(s); err != nil {
+			return err
+		}
+		if err := db.validateIntelligenceRules(ctx, tx, s); err != nil {
+			return err
+		}
 		if s.Action == "switch_group" {
 			channel, err := intelligenceTargetGroupChannel(ctx, tx, s)
 			if err != nil {
 				return err
 			}
 			conflict := &IntelligenceCheckTargetConflictError{TargetGroupID: s.TargetGroupID, TargetGroupChannel: channel}
-			rows, err := tx.QueryContext(ctx, `SELECT a.id,COALESCE(a.name,''),`+db.intelligenceChannelExpr()+`,COUNT(*) OVER () FROM accounts a JOIN intelligence_check_accounts st ON st.account_id=a.id WHERE `+db.intelligenceEligibleSQL()+` AND `+db.intelligenceEnabledChannelsSQL(s)+` AND st.enabled=TRUE AND COALESCE(`+db.intelligenceStateActionExpr("st")+`,'')='' AND `+db.intelligenceChannelExpr()+`<>$1 ORDER BY a.id LIMIT 200`, channel)
+			raw, _ := json.Marshal(s)
+			rule := db.intelligenceRuleSQL("a", "st", "proposed")
+			usesBase := `COALESCE(` + db.intelligenceFieldSQL(rule, "action", "") + `,'')='' AND ` + db.intelligenceRuleAutomaticSQL("a", "st", "proposed")
+			rows, err := tx.QueryContext(ctx, `SELECT a.id,COALESCE(a.name,''),`+db.intelligenceChannelExpr()+`,COUNT(*) OVER () FROM accounts a JOIN intelligence_check_accounts st ON st.account_id=a.id CROSS JOIN (SELECT CAST($2 AS TEXT) config_json) proposed WHERE `+db.intelligenceEligibleSQL()+` AND `+db.intelligenceEnabledChannelsSQL(s)+` AND st.enabled=TRUE AND COALESCE(`+db.intelligenceStateActionExpr("st")+`,'')='' AND `+db.intelligenceChannelExpr()+`<>$1 AND `+usesBase+` ORDER BY a.id LIMIT 200`, channel, string(raw))
 			if err != nil {
 				return err
 			}
@@ -259,36 +281,37 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if _, err := tx.ExecContext(ctx, `UPDATE intelligence_check_settings SET revision=$1,config_json=$2,new_accounts_enabled=$3 WHERE id=1`, s.Revision, string(raw), s.NewAccountsEnabled); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT st.account_id,st.state_json,`+db.intelligenceChannelExpr()+` FROM intelligence_check_accounts st JOIN accounts a ON a.id=st.account_id`)
+		rows, err := tx.QueryContext(ctx, `SELECT a.id,st.state_json,`+db.intelligenceChannelExpr()+db.intelligenceScopeColumns("a")+` FROM intelligence_check_accounts st JOIN accounts a ON a.id=st.account_id`)
 		if err != nil {
 			return err
 		}
-		states := map[int64]ic.State{}
-		channels := map[int64]string{}
+		var accounts []IntelligenceCheckAccount
 		for rows.Next() {
-			var id int64
-			var raw, channel string
-			if err = rows.Scan(&id, &raw, &channel); err != nil {
+			var a IntelligenceCheckAccount
+			var raw, groups string
+			if err = rows.Scan(&a.AccountID, &raw, &a.Channel, &a.Plan, &groups); err == nil {
+				err = json.Unmarshal([]byte(raw), &a.State)
+			}
+			if err == nil {
+				err = scanIntelligenceScope(groups, &a.IntelligenceCheckScope)
+			}
+			if err != nil {
 				rows.Close()
 				return err
 			}
-			var state ic.State
-			if err = json.Unmarshal([]byte(raw), &state); err != nil {
-				rows.Close()
-				return err
-			}
-			state.DegradeStreak = 0
-			state.RecoverStreak = 0
-			states[id] = state
-			channels[id] = channel
+			accounts = append(accounts, a)
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return err
 		}
-		for id, state := range states {
-			delay := s.IntervalSeconds
+		for _, a := range accounts {
+			state := a.State
+			policy, rule := a.resolve(s)
+			state.PolicyRuleID = rule.ID
+			state.DegradeStreak, state.RecoverStreak = 0, 0
+			delay := policy.IntervalSeconds
 			state.ErrorRetrySeconds = 0
 			state.ProbePhase = ""
 			if s.AdaptiveEnabled {
@@ -303,7 +326,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 					delay, state.ProbePhase = state.PauseBackoffSeconds, "backoff"
 				}
 			} else {
-				if channels[id] != "antigravity" {
+				if a.Channel != "antigravity" {
 					state.BlockedCredentialGeneration = nil
 				}
 				state.PauseBackoffSeconds = 0
@@ -312,7 +335,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 			raw, _ := json.Marshal(state)
 			// Keep an earlier due check unless switching timing policies.
 			due := time.Now().Add(time.Duration(delay) * time.Second).UnixMilli()
-			if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET state_json=$1,next_due_ms=CASE WHEN next_due_ms>$3 OR $4 THEN $3 ELSE next_due_ms END WHERE account_id=$2`, string(raw), id, due, old.AdaptiveEnabled != s.AdaptiveEnabled); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET state_json=$1,next_due_ms=CASE WHEN next_due_ms>$3 OR $4 THEN $3 ELSE next_due_ms END WHERE account_id=$2`, string(raw), a.AccountID, due, old.AdaptiveEnabled != s.AdaptiveEnabled); err != nil {
 				return err
 			}
 		}
@@ -372,7 +395,7 @@ func (db *DB) intelligenceAutomaticSQL(account, state string) string {
 	if db.isSQLite() {
 		blocked = "json_extract(" + state + ".state_json,'$.blocked_credential_generation')"
 	}
-	return state + `.enabled=TRUE AND COALESCE(` + account + `.enabled,TRUE)=TRUE AND (` + blocked + ` IS NULL OR ` + blocked + `<>COALESCE(` + account + `.credential_generation,1)) AND (SELECT ` + db.intelligenceSourceEnabledSQL(account, "source_config") + ` FROM intelligence_check_settings source_config WHERE id=1)`
+	return state + `.enabled=TRUE AND COALESCE(` + account + `.enabled,TRUE)=TRUE AND (` + blocked + ` IS NULL OR ` + blocked + `<>COALESCE(` + account + `.credential_generation,1)) AND (SELECT ` + db.intelligenceSourceEnabledSQL(account, "source_config") + ` AND ` + db.intelligenceRuleAutomaticSQL(account, state, "source_config") + ` FROM intelligence_check_settings source_config WHERE id=1)`
 }
 func intelligencePage(offset, limit int) (int, int) {
 	if offset < 0 {
@@ -392,10 +415,13 @@ const intelligenceAccountColumns = `a.id,a.name,COALESCE(a.credential_generation
 func scanIntelligenceAccount(row interface{ Scan(...interface{}) error }) (IntelligenceCheckAccount, error) {
 	var a IntelligenceCheckAccount
 	var due int64
-	var raw string
-	err := row.Scan(&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel)
+	var raw, groups string
+	err := row.Scan(&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel, &a.Plan, &groups)
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &a.State)
+	}
+	if err == nil {
+		err = scanIntelligenceScope(groups, &a.IntelligenceCheckScope)
 	}
 	if due > 0 {
 		at := time.UnixMilli(due).UTC()
@@ -410,18 +436,6 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 	if err != nil {
 		return nil, 0, err
 	}
-	targetChannel, targetError := "", ""
-	if settings.Action == "switch_group" {
-		var e error
-		targetChannel, e = intelligenceTargetGroupChannel(ctx, db.conn, settings)
-		if e != nil {
-			if !errors.Is(e, ErrIntelligenceCheckTargetGroup) {
-				return nil, 0, e
-			}
-			targetError = e.Error()
-		}
-	}
-
 	where := db.intelligenceEligibleSQL()
 	args := []interface{}{}
 	add := func(expr string, val interface{}) {
@@ -440,6 +454,12 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 	if f.Status != "" {
 		add(`s.status=%s`, f.Status)
 	}
+	if f.GroupID > 0 {
+		add(`EXISTS(SELECT 1 FROM account_group_members gm WHERE gm.account_id=a.id AND gm.group_id=%s)`, f.GroupID)
+	}
+	if f.Plan != "" {
+		add(db.intelligencePlanSQL("a")+`=%s`, ic.NormalizePlan(f.Plan))
+	}
 	from := ` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE ` + where
 	var total int
 	if err := db.conn.QueryRowContext(ctx, `SELECT COUNT(*)`+from, args...).Scan(&total); err != nil {
@@ -447,7 +467,7 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 	}
 	offset, limit := intelligencePage(f.Offset, f.Limit)
 	args = append(args, limit, offset)
-	rows, err := db.conn.QueryContext(ctx, `SELECT `+intelligenceAccountColumns+db.intelligenceChannelExpr()+from+fmt.Sprintf(` ORDER BY a.id LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
+	rows, err := db.conn.QueryContext(ctx, `SELECT `+intelligenceAccountColumns+db.intelligenceChannelExpr()+db.intelligenceScopeColumns("a")+from+fmt.Sprintf(` ORDER BY a.id LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -458,28 +478,67 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 		if e != nil {
 			return nil, 0, e
 		}
-		if a.Enabled && settings.ChannelEnabled(a.Channel) && a.OwnedAction == "" && settings.Action == "switch_group" {
-			if targetError != "" {
-				a.ConfigError = targetError
-			} else if a.Channel != targetChannel {
-				a.ConfigError = fmt.Sprintf("target group belongs to %s, account belongs to %s", targetChannel, a.Channel)
-			}
-		}
-
 		out = append(out, a)
 	}
-	return out, total, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, 0, err
+	}
+	targets := map[int64]struct {
+		channel string
+		err     error
+	}{}
+	for i := range out {
+		a := &out[i]
+		policy, rule := a.resolve(settings)
+		a.RuleID, a.RuleName = rule.ID, rule.Name
+		if a.Enabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(*a, rule) && policy.Action == "switch_group" && a.OwnedAction == "" {
+			target, ok := targets[policy.TargetGroupID]
+			if !ok {
+				target.channel, target.err = intelligenceTargetGroupChannel(ctx, db.conn, policy)
+				targets[policy.TargetGroupID] = target
+			}
+			if target.err != nil {
+				if !errors.Is(target.err, ErrIntelligenceCheckTargetGroup) {
+					return nil, 0, target.err
+				}
+				a.ConfigError = target.err.Error()
+			} else if target.channel != a.Channel {
+				a.ConfigError = fmt.Sprintf("target group belongs to %s, account belongs to %s", target.channel, a.Channel)
+			}
+		}
+		a.AutomaticEffective = settings.Enabled && a.Enabled && a.ManualEnabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(*a, rule) && a.ConfigError == "" && (a.BlockedCredentialGeneration == nil || *a.BlockedCredentialGeneration != a.CredentialGeneration)
+		if !a.AutomaticEffective {
+			a.NextDueAt = nil
+		}
+	}
+	return out, total, nil
 }
 func (db *DB) intelligenceAccountTx(ctx context.Context, tx *sql.Tx, id int64) (IntelligenceCheckAccount, error) {
-	q := `SELECT ` + intelligenceAccountColumns + db.intelligenceChannelExpr() + ` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE a.id=$1 AND ` + db.intelligenceEligibleSQL()
-	if !db.isSQLite() {
-		q += ` FOR UPDATE OF s`
+	return db.intelligenceAccount(ctx, tx, id, true)
+}
+
+func (db *DB) intelligenceAccount(ctx context.Context, q intelligenceQueryRower, id int64, lock bool) (IntelligenceCheckAccount, error) {
+	query := `SELECT ` + intelligenceAccountColumns + db.intelligenceChannelExpr() + db.intelligenceScopeColumns("a") + ` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE a.id=$1 AND ` + db.intelligenceEligibleSQL()
+	if lock && !db.isSQLite() {
+		// Freeze persisted plan and credential generation through the state transition.
+		query += ` FOR NO KEY UPDATE OF a FOR UPDATE OF s`
 	}
-	a, err := scanIntelligenceAccount(tx.QueryRowContext(ctx, q, id))
+	a, err := scanIntelligenceAccount(q.QueryRowContext(ctx, query, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrIntelligenceCheckUnsupportedAccount
 	}
 	return a, err
+}
+
+func (db *DB) ResolveIntelligenceCheckPolicy(ctx context.Context, id int64, base ic.Settings) (ic.Settings, error) {
+	a, err := db.intelligenceAccount(ctx, db.conn, id, false)
+	if err != nil {
+		return ic.Settings{}, err
+	}
+	policy, _ := a.resolve(base)
+	return policy, nil
 }
 func (db *DB) SetIntelligenceCheckEnabled(ctx context.Context, ids []int64, enabled bool) error {
 	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
@@ -493,8 +552,11 @@ func (db *DB) SetIntelligenceCheckEnabled(ctx context.Context, ids []int64, enab
 				return err
 			}
 			if enabled {
-				if err := validateIntelligenceAccountSettings(ctx, tx, s, a.Channel, a.OwnedAction); err != nil {
-					return err
+				policy, rule := a.resolve(s)
+				if intelligenceRuleAllowsAutomatic(a, rule) {
+					if err := validateIntelligenceAccountSettings(ctx, tx, policy, a.Channel, a.OwnedAction); err != nil {
+						return err
+					}
 				}
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET enabled=$1,next_due_ms=0 WHERE account_id=$2`, enabled, id); err != nil {
@@ -664,7 +726,7 @@ func (db *DB) ensureIntelligenceCheckSummariesTx(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return err
 	}
-	for _, col := range []struct{ name, def string }{{"question_name", "TEXT NOT NULL DEFAULT ''"}, {"duration_ms", "BIGINT NOT NULL DEFAULT 0"}, {"summary_version", "INTEGER NOT NULL DEFAULT 0"}} {
+	for _, col := range []struct{ name, def string }{{"question_name", "TEXT NOT NULL DEFAULT ''"}, {"duration_ms", "BIGINT NOT NULL DEFAULT 0"}, {"summary_version", "INTEGER NOT NULL DEFAULT 0"}, {"record_only", "BOOLEAN NOT NULL DEFAULT FALSE"}} {
 		if !columns[col.name] {
 			if _, err = tx.ExecContext(ctx, `ALTER TABLE intelligence_check_runs ADD COLUMN `+col.name+` `+col.def); err != nil {
 				return err
@@ -680,6 +742,11 @@ func (db *DB) ensureIntelligenceCheckSummariesTx(ctx context.Context, tx *sql.Tx
 	if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_runs SET question_name=`+nameExpr+`,duration_ms=`+durationExpr+`,summary_version=1 WHERE summary_version=0 AND status NOT IN ('queued','running')`); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_intelligence_bars ON intelligence_check_runs(account_id,id DESC,status,question_name,duration_ms,completed_ms) WHERE status NOT IN ('queued','running')`)
+	if !columns["record_only"] {
+		if _, err = tx.ExecContext(ctx, `DROP INDEX IF EXISTS idx_intelligence_bars`); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_intelligence_bars ON intelligence_check_runs(account_id,id DESC,status,question_name,duration_ms,completed_ms) WHERE NOT record_only AND status NOT IN ('queued','running')`)
 	return err
 }
