@@ -43,18 +43,18 @@ func Schedule(c Settings, before, next State, status string) (State, int) {
 		next.PauseBackoffSeconds = min(c.PauseMaxSeconds, max(c.PauseInitialSeconds, next.PauseBackoffSeconds))
 	}
 	next.ProbePhase = "normal"
-	if next.OwnedAction == "pause" {
+	if PausesDispatch(next.OwnedAction) {
 		next.ErrorRetrySeconds = 0
 		// An old pause starts at the initial interval, not an inferred historical
 		// failure count. A failed recovery keeps its previous interval unchanged.
 		if next.PauseBackoffSeconds == 0 {
 			next.PauseBackoffSeconds = c.PauseInitialSeconds
-		} else if before.OwnedAction == "pause" && before.RecoverStreak == 0 && status != "normal" {
+		} else if PausesDispatch(before.OwnedAction) && before.RecoverStreak == 0 && status != "normal" {
 			next.PauseBackoffSeconds = min(c.PauseMaxSeconds, next.PauseBackoffSeconds*2)
 		}
 		delay = next.PauseBackoffSeconds
 		next.ProbePhase = "backoff"
-		if status == "normal" && c.Action == "pause" {
+		if status == "normal" && canResumePause(c, next) {
 			next.ProbePhase = "recovering"
 			delay = c.RecoveryInitialSeconds
 			// Round the next half down to whole minutes when the configured floor
@@ -71,7 +71,7 @@ func Schedule(c Settings, before, next State, status string) (State, int) {
 		next.ErrorRetrySeconds = 0
 		// The confirmation which releases a pause is not a routine successful
 		// check. Only subsequent healthy checks forgive the retained penalty.
-		if before.OwnedAction != "pause" && next.PauseBackoffSeconds > 0 {
+		if !PausesDispatch(before.OwnedAction) && next.PauseBackoffSeconds > 0 {
 			next.PauseBackoffSeconds /= 2
 			if next.PauseBackoffSeconds <= c.PauseInitialSeconds {
 				next.PauseBackoffSeconds = 0

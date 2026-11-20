@@ -112,7 +112,7 @@ async function fixture(t, options = {}) {
 }
 test('configuration and questions share one page and preserve their save flow', async t => {
  const page = await fixture(t)
- assert.deepEqual(await page.getByRole('tab').allTextContents(), ['配置', '检测历史', '批量操作'])
+ assert.deepEqual(await page.getByRole('tab').allTextContents(), ['配置', '独立策略', '检测历史', '批量操作'])
  const config = page.getByRole('region', {name:'检测配置'}), questions = page.getByRole('region', {name:'检测题库'})
  await questions.getByRole('button', {name:'编辑',exact:true}).click()
  assert.equal(await page.getByLabel('题目正文').inputValue(),question.prompt)
@@ -456,6 +456,8 @@ test('bulk selection caps filtered IDs, resets on filters, and submits only conf
 
 test('rules require a matcher and a same-source target, then save priority and overrides', async t => {
  const page = await fixture(t)
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ await page.getByRole('switch', {name:'只对命中独立策略的账号自动检测'}).click()
  const rules = page.getByRole('region', {name:'分组 / 套餐规则'})
  const add = rules.getByRole('button',{name:'新增规则'})
  await add.click()
@@ -465,8 +467,8 @@ test('rules require a matcher and a same-source target, then save priority and o
  await rules.getByLabel('规则名称').fill('套餐规则')
  await rules.getByLabel('匹配套餐码').fill(' PLUS ')
  await rules.getByRole('switch',{name:'允许自动检测',exact:true}).click()
- await selectOption(page,'处置策略','切换分组',rules)
- await rules.getByText('切换分组需要选择目标分组。',{exact:true}).waitFor()
+ await selectOption(page,'处置策略','禁用业务调度并转移分组',rules)
+ await rules.getByText('转移分组需要选择目标分组。',{exact:true}).waitFor()
  await selectOption(page,'规则目标分组','隔离分组 #1',rules)
  await rules.getByRole('checkbox',{name:question.name}).check()
  await rules.getByLabel('请求超时（秒）').fill('90')
@@ -477,10 +479,11 @@ test('rules require a matcher and a same-source target, then save priority and o
  await rules.getByRole('button',{name:'上移 组合规则'}).click()
  await page.getByRole('button',{name:'保存配置',exact:true}).click()
  await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
+ assert.equal(await page.evaluate(() => window.__config.rules_only), true)
  const saved = JSON.parse(await page.evaluate(() => JSON.stringify(window.__config.rules)))
  assert.deepEqual(saved.map(({id,...rule})=>rule),[
   {name:'组合规则',channel:'codex',automatic:true,group_id:1,plan:'pro'},
-  {name:'套餐规则',channel:'codex',automatic:false,plan:'plus',action:'switch_group',target_group_id:1,question_ids:['candy'],timeout_seconds:90},
+  {name:'套餐规则',channel:'codex',automatic:false,plan:'plus',action:'pause_and_switch_group',target_group_id:1,question_ids:['candy'],timeout_seconds:90},
  ])
  await rules.getByRole('button',{name:'删除 组合规则'}).click()
  await page.getByRole('button',{name:'保存配置',exact:true}).click()

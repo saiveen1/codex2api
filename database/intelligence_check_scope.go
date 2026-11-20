@@ -23,7 +23,7 @@ type IntelligenceCheckScope struct {
 
 func (a IntelligenceCheckAccount) resolve(s ic.Settings) (ic.Settings, ic.Rule) {
 	ids := a.OriginalGroupIDs
-	if a.OwnedAction != "switch_group" {
+	if !ic.MovesGroups(a.OwnedAction) {
 		ids = make([]int64, 0, len(a.Groups))
 		for _, g := range a.Groups {
 			ids = append(ids, g.ID)
@@ -32,8 +32,8 @@ func (a IntelligenceCheckAccount) resolve(s ic.Settings) (ic.Settings, ic.Rule) 
 	return s.Resolve(a.Channel, a.Plan, ids)
 }
 
-func intelligenceRuleAllowsAutomatic(a IntelligenceCheckAccount, r ic.Rule) bool {
-	return r.ID == "" || r.Automatic || a.OwnedAction != ""
+func intelligenceRuleAllowsAutomatic(s ic.Settings, a IntelligenceCheckAccount, r ic.Rule) bool {
+	return a.OwnedAction != "" || r.Automatic || (!s.RulesOnly && r.ID == "")
 }
 
 func (db *DB) intelligencePlanSQL(account string) string {
@@ -81,7 +81,7 @@ func (db *DB) intelligenceRuleSQL(account, state, config string) string {
 		if !db.isSQLite() {
 			original = `EXISTS(SELECT 1 FROM jsonb_array_elements_text(` + state + `.state_json::jsonb->'original_group_ids') orig(value) WHERE orig.value::bigint=` + group + `)`
 		}
-		member = `(CASE WHEN ` + db.intelligenceStateActionExpr(state) + `='switch_group' THEN ` + original + ` ELSE ` + member + ` END)`
+		member = `(CASE WHEN ` + db.intelligenceStateActionExpr(state) + ` IN ('switch_group','` + ic.ActionPauseAndMove + `') THEN ` + original + ` ELSE ` + member + ` END)`
 	}
 	return `(SELECT ir.value FROM ` + from + ` WHERE ` + db.intelligenceFieldSQL("ir.value", "channel", "") + `=` + channel +
 		` AND (` + plan + `='' OR ` + plan + `=` + db.intelligencePlanSQL(account) + `)` +
@@ -90,7 +90,8 @@ func (db *DB) intelligenceRuleSQL(account, state, config string) string {
 
 func (db *DB) intelligenceRuleAutomaticSQL(account, state, config string) string {
 	rule := db.intelligenceRuleSQL(account, state, config)
-	return `(COALESCE(` + db.intelligenceFieldSQL(rule, "automatic", "boolean") + `,TRUE) OR COALESCE(` + db.intelligenceStateActionExpr(state) + `,'')<>'')`
+	baseAllowed := `NOT COALESCE(` + db.intelligenceFieldSQL(config+`.config_json`, "rules_only", "boolean") + `,FALSE)`
+	return `(COALESCE(` + db.intelligenceFieldSQL(rule, "automatic", "boolean") + `,` + baseAllowed + `) OR COALESCE(` + db.intelligenceStateActionExpr(state) + `,'')<>'')`
 }
 
 func (db *DB) validateIntelligenceRules(ctx context.Context, q intelligenceQueryRower, s ic.Settings) error {

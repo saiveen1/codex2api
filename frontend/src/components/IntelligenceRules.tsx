@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import {
-  intelligenceChannels, intelligenceRuleError, intelligenceRuleNumbers,
+  intelligenceActionMovesGroups, intelligenceActionOptions, intelligenceChannels, intelligenceRuleError, intelligenceRuleNumbers,
   type IntelligenceGroup, type IntelligenceRule, type IntelligenceSettings,
 } from "../lib/intelligenceCheck";
 import { createUUID } from "../lib/uuid";
@@ -35,7 +35,7 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
     <h2 id="intelligence-rules-title" className="text-lg font-semibold">分组 / 套餐规则</h2>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <p className="max-w-3xl flex-1 basis-64 text-sm text-muted-foreground">
-        从上到下采用首条匹配规则；账号属于多个分组时仍按规则顺序。分组和套餐都填写时须同时匹配。未匹配或未覆盖的参数使用全局配置；自动检测总开关、来源开关和账号开关优先于规则。规则关闭自动参与时，已有处置的账号在其他开关允许下仍可进行恢复检测。
+        从上到下采用首条匹配策略；分组和套餐都填写时须同时匹配。未覆盖的参数继承全局。自动检测仍受总开关、来源开关和账号开关限制。
       </p>
       <Button variant="outline" disabled={disabled} onClick={() => {
         const id = createUUID();
@@ -43,7 +43,7 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
         setEditor(id);
       }}><Plus className="size-4" />新增规则</Button>
     </div>
-    {!rules.length && <p className="text-sm text-muted-foreground">暂无规则，所有账号使用全局配置。</p>}
+    {!rules.length && <p className="text-sm text-muted-foreground">{settings.rules_only ? "暂无策略，不会启动新的自动检测；已处置账号仍可检测恢复。" : "暂无规则，未受其他开关限制的账号使用全局配置。"}</p>}
     <ol className="space-y-3">
       {rules.map((rule, index) => {
         const name = rule.name || "未命名规则";
@@ -62,6 +62,7 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
             <div className="min-w-0 flex-1 basis-44 [overflow-wrap:anywhere]">
               <h3 className="font-medium">{name}</h3>
               <p className="text-xs text-muted-foreground">{intelligenceChannels[rule.channel]}{rule.group_id ? ` · 分组：${groups.find(g => g.id === rule.group_id)?.name || `#${rule.group_id}`}` : ""}{rule.plan?.trim() ? ` · 套餐：${rule.plan.trim().toLowerCase()}` : ""} · {rule.automatic ? "允许自动检测" : "不参与新自动检测"}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{rule.action ? intelligenceActionOptions[rule.action] : "处置继承全局"}{rule.target_group_id ? ` → ${groups.find(g => g.id === rule.target_group_id)?.name || `#${rule.target_group_id}`}` : ""}</p>
             </div>
             <div className="flex gap-1">
               <Button variant="ghost" size="icon" aria-label={`上移 ${name}`} disabled={disabled || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-4" /></Button>
@@ -87,12 +88,13 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
             {intelligenceRuleNumbers.map(([key, label, max]) => <Field key={key} label={label}>
               <Input type="number" min={1} max={max} value={rule[key] ?? ""} placeholder="继承全局" onChange={e => patch({ [key]: e.target.value === "" ? undefined : Number(e.target.value) })} />
             </Field>)}
-            <Field label="处置策略"><Select aria-label="处置策略" value={rule.action ?? ""} options={[inherit, ...choices({ none: "不自动处置", pause: "暂停业务调度", switch_group: "切换分组" })]} onValueChange={v => patch({
+            <Field label="处置策略"><Select aria-label="处置策略" value={rule.action ?? ""} options={[inherit, ...choices(intelligenceActionOptions)]} onValueChange={v => patch({
               action: (v || undefined) as IntelligenceRule["action"],
-              target_group_id: v === "switch_group" ? rule.target_group_id : undefined,
+              target_group_id: intelligenceActionMovesGroups(v) ? rule.target_group_id : undefined,
             })} /></Field>
-            {(rule.action === "switch_group" || !!rule.target_group_id) && <Field label="规则目标分组">
+            {(intelligenceActionMovesGroups(rule.action) || !!rule.target_group_id) && <Field label="规则目标分组">
               <Select aria-label="规则目标分组" value={String(rule.target_group_id || "")} options={groupOptions(rule.target_group_id, "请选择同来源分组")} onValueChange={v => patch({ target_group_id: Number(v) || undefined })} />
+              <span className="text-xs text-muted-foreground">恢复达标后还原原分组；管理员手动改组优先。</span>
             </Field>}
             <fieldset className="col-span-full min-w-0 space-y-2 rounded-md border px-3 py-2 text-sm">
               <legend className="px-1 font-medium">指定题目</legend>

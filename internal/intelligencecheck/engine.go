@@ -21,6 +21,8 @@ type Question struct {
 }
 type Settings struct {
 	Rules                    []Rule          `json:"rules,omitempty"`
+	RulesOnly                bool            `json:"rules_only"`
+	RulesOnlySupplied        bool            `json:"-"`
 	GrokModelSupplied        bool            `json:"-"`
 	AntigravityModelSupplied bool            `json:"-"`
 	KiroModelSupplied        bool            `json:"-"`
@@ -66,6 +68,7 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	_, decoded.GrokModelSupplied = fields["grok_model"]
 	_, decoded.AntigravityModelSupplied = fields["antigravity_model"]
 	_, decoded.KiroModelSupplied = fields["kiro_model"]
+	_, decoded.RulesOnlySupplied = fields["rules_only"]
 	*s = Settings(decoded)
 	return nil
 }
@@ -166,7 +169,7 @@ func ValidateSettings(s Settings) error {
 	}
 	switch s.Action {
 	case "none", "pause":
-	case "switch_group":
+	case "switch_group", ActionPauseAndMove:
 		if s.TargetGroupID <= 0 {
 			return fmt.Errorf("target group is required")
 		}
@@ -306,7 +309,18 @@ type State struct {
 	DegradeStreak               int              `json:"failed_streak"`
 	RecoverStreak               int              `json:"passed_streak"`
 	OwnedAction                 string           `json:"action"`
+	OwnedRecoverThreshold       int              `json:"owned_recover_threshold,omitempty"`
 	OriginalGroupIDs            []int64          `json:"original_group_ids,omitempty"`
+}
+
+const ActionPauseAndMove = "pause_and_switch_group"
+const ActionResumeAndRestore = "resume_and_restore_groups"
+
+func MovesGroups(action string) bool    { return action == "switch_group" || action == ActionPauseAndMove }
+func PausesDispatch(action string) bool { return action == "pause" || action == ActionPauseAndMove }
+
+func canResumePause(c Settings, s State) bool {
+	return s.OwnedAction == ActionPauseAndMove || s.OwnedRecoverThreshold > 0 || c.Action == "pause"
 }
 
 // Transition never grades errors as degradation. Adaptive pause recovery
@@ -321,26 +335,40 @@ func Transition(c Settings, s State, status string) (State, string) {
 		s.DegradeStreak++
 		s.RecoverStreak = 0
 	default:
-		if c.AdaptiveEnabled && s.OwnedAction == "pause" {
+		if c.AdaptiveEnabled && PausesDispatch(s.OwnedAction) {
 			s.RecoverStreak = 0
 		}
 		return s, ""
 	}
 	if s.OwnedAction != "" {
-		if s.RecoverStreak >= c.RecoverThreshold && status == "normal" {
-			if s.OwnedAction == "switch_group" {
-				s.OwnedAction = ""
-				return s, "restore_groups"
+		threshold := c.RecoverThreshold
+		if s.OwnedRecoverThreshold > 0 {
+			threshold = s.OwnedRecoverThreshold
+		}
+		if s.RecoverStreak >= threshold && status == "normal" {
+			action := ""
+			switch s.OwnedAction {
+			case ActionPauseAndMove:
+				action = ActionResumeAndRestore
+			case "switch_group":
+				action = "restore_groups"
+			case "pause":
+				if canResumePause(c, s) {
+					action = "resume"
+				}
 			}
-			if s.OwnedAction == "pause" && c.Action == "pause" {
-				s.OwnedAction = ""
-				return s, "resume"
+			if action != "" {
+				s.OwnedAction, s.OwnedRecoverThreshold = "", 0
+				return s, action
 			}
 		}
 		return s, ""
 	}
 	if status == "degraded" && s.DegradeStreak >= c.DegradeThreshold && c.Action != "none" {
 		s.OwnedAction = c.Action
+		if s.PolicyRuleID != "" || c.Action == ActionPauseAndMove {
+			s.OwnedRecoverThreshold = c.RecoverThreshold
+		}
 		return s, c.Action
 	}
 	return s, ""

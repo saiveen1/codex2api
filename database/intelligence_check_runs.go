@@ -197,7 +197,7 @@ type intelligenceQueryer interface {
 func (db *DB) intelligenceDueAccounts(ctx context.Context, q intelligenceQueryer, s ic.Settings, now time.Time, limit int) ([]IntelligenceCheckAccount, error) {
 	filter := ""
 	args := []interface{}{now.UnixMilli(), limit}
-	if s.Action == "switch_group" && len(s.Rules) == 0 {
+	if ic.MovesGroups(s.Action) && len(s.Rules) == 0 && !s.RulesOnly {
 		channel, e := intelligenceTargetGroupChannel(ctx, q, s)
 		owned := "COALESCE(" + db.intelligenceStateActionExpr("s") + ",'')<>''"
 		if e != nil {
@@ -374,7 +374,7 @@ func (db *DB) ClaimIntelligenceCheck(ctx context.Context, owner string, now time
 			}
 			policy, rule := a.resolve(s)
 			a.RuleID, a.RuleName = rule.ID, rule.Name
-			if r.Source == "automatic" && (!s.Enabled || !a.Enabled || !a.ManualEnabled || !s.ChannelEnabled(a.Channel) || !intelligenceRuleAllowsAutomatic(a, rule)) {
+			if r.Source == "automatic" && (!s.Enabled || !a.Enabled || !a.ManualEnabled || !s.ChannelEnabled(a.Channel) || !intelligenceRuleAllowsAutomatic(s, a, rule)) {
 				continue
 			}
 			fresh, snapshotErr := intelligenceCheckSnapshot(policy, a, r.Source, r.CreatedAt)
@@ -568,11 +568,11 @@ func (db *DB) intelligenceApplyActionTx(ctx context.Context, tx *sql.Tx, a *Inte
 		a.QualityPaused = true
 	case "resume":
 		a.QualityPaused = false
-	case "switch_group":
+	case "switch_group", ic.ActionPauseAndMove:
 		var channel string
 		err := tx.QueryRowContext(ctx, `SELECT channel FROM account_groups WHERE id=$1`, s.TargetGroupID).Scan(&channel)
 		if errors.Is(err, sql.ErrNoRows) || err == nil && NormalizeAccountGroupChannel(channel) != a.Channel {
-			next.OwnedAction = ""
+			next.OwnedAction, next.OwnedRecoverThreshold = "", 0
 			r.ActionMessage = "target group missing or belongs to another channel"
 			return nil
 		}
@@ -588,7 +588,10 @@ func (db *DB) intelligenceApplyActionTx(ctx context.Context, tx *sql.Tx, a *Inte
 		if err = db.batchReplaceAccountGroups(ctx, tx, []int64{a.AccountID}, []int64{s.TargetGroupID}); err != nil {
 			return err
 		}
-	case "restore_groups":
+		if action == ic.ActionPauseAndMove {
+			a.QualityPaused = true
+		}
+	case "restore_groups", ic.ActionResumeAndRestore:
 		surviving := []int64{}
 		missing := []int64{}
 		incompatible := []int64{}
@@ -608,11 +611,21 @@ func (db *DB) intelligenceApplyActionTx(ctx context.Context, tx *sql.Tx, a *Inte
 			}
 			surviving = append(surviving, gid)
 		}
+		if action == ic.ActionResumeAndRestore && len(a.OriginalGroupIDs) > 0 && len(surviving) == 0 {
+			// Never return a previously grouped account to the ungrouped business pool.
+			next.OwnedAction, next.OwnedRecoverThreshold = a.OwnedAction, a.OwnedRecoverThreshold
+			next.RecoverStreak = 0
+			r.ActionMessage = "原分组均已删除或不兼容；保留业务禁用，请手动指定分组"
+			return nil
+		}
 		if err := db.batchReplaceAccountGroups(ctx, tx, []int64{a.AccountID}, surviving); err != nil {
 			return err
 		}
 		next.OriginalGroupIDs = nil
 		next.OriginalGroupChannels = nil
+		if action == ic.ActionResumeAndRestore {
+			a.QualityPaused = false
+		}
 		if len(missing) > 0 || len(incompatible) > 0 {
 			r.ActionMessage = fmt.Sprintf("original groups omitted: deleted=%v incompatible=%v", missing, incompatible)
 		}

@@ -159,7 +159,8 @@ func (db *DB) ensureIntelligenceCheckSchema(ctx context.Context) error {
 		target := `(CASE WHEN ` + ruleAction + ` IS NULL THEN ` + baseTarget + ` ELSE ` + db.intelligenceFieldSQL(rule, "target_group_id", "bigint") + ` END)`
 		channelEnabled := db.intelligenceSourceEnabledSQL("a", "s")
 		defaultEnabled := `COALESCE((SELECT s.new_accounts_enabled AND (` + db.intelligenceEligibleSQL() + `) AND (` + channelEnabled + `) AND
-			(COALESCE(` + action + `,'none')<>'switch_group' OR EXISTS (
+			(COALESCE(` + db.intelligenceFieldSQL("s.config_json", "rules_only", "boolean") + `,FALSE) OR
+			` + action + ` NOT IN ('switch_group','` + ic.ActionPauseAndMove + `') OR EXISTS (
 				SELECT 1 FROM account_groups g WHERE g.id=` + target + ` AND LOWER(TRIM(COALESCE(g.channel,'codex')))=` + db.intelligenceChannelExpr() + `))
 			FROM intelligence_check_settings s JOIN accounts a ON a.id=NEW.id WHERE s.id=1),FALSE)`
 		insert := `INSERT INTO intelligence_check_accounts(account_id,enabled) VALUES(NEW.id,` + defaultEnabled + `) ON CONFLICT(account_id) DO NOTHING;`
@@ -233,6 +234,9 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if !s.KiroModelSupplied && s.KiroModel == "" {
 			s.KiroModel = old.KiroModel
 		}
+		if !s.RulesOnlySupplied && !s.RulesOnly {
+			s.RulesOnly = old.RulesOnly
+		}
 		if s.Rules == nil {
 			s.Rules = old.Rules
 		}
@@ -245,7 +249,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if err := db.validateIntelligenceRules(ctx, tx, s); err != nil {
 			return err
 		}
-		if s.Action == "switch_group" {
+		if ic.MovesGroups(s.Action) {
 			channel, err := intelligenceTargetGroupChannel(ctx, tx, s)
 			if err != nil {
 				return err
@@ -319,7 +323,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 				if state.PauseBackoffSeconds > 0 {
 					state.PauseBackoffSeconds = min(s.PauseMaxSeconds, max(s.PauseInitialSeconds, state.PauseBackoffSeconds))
 				}
-				if state.OwnedAction == "pause" {
+				if ic.PausesDispatch(state.OwnedAction) {
 					if state.PauseBackoffSeconds == 0 {
 						state.PauseBackoffSeconds = s.PauseInitialSeconds
 					}
@@ -493,7 +497,7 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 		a := &out[i]
 		policy, rule := a.resolve(settings)
 		a.RuleID, a.RuleName = rule.ID, rule.Name
-		if a.Enabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(*a, rule) && policy.Action == "switch_group" && a.OwnedAction == "" {
+		if a.Enabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(settings, *a, rule) && ic.MovesGroups(policy.Action) && a.OwnedAction == "" {
 			target, ok := targets[policy.TargetGroupID]
 			if !ok {
 				target.channel, target.err = intelligenceTargetGroupChannel(ctx, db.conn, policy)
@@ -508,7 +512,7 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 				a.ConfigError = fmt.Sprintf("target group belongs to %s, account belongs to %s", target.channel, a.Channel)
 			}
 		}
-		a.AutomaticEffective = settings.Enabled && a.Enabled && a.ManualEnabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(*a, rule) && a.ConfigError == "" && (a.BlockedCredentialGeneration == nil || *a.BlockedCredentialGeneration != a.CredentialGeneration)
+		a.AutomaticEffective = settings.Enabled && a.Enabled && a.ManualEnabled && settings.ChannelEnabled(a.Channel) && intelligenceRuleAllowsAutomatic(settings, *a, rule) && a.ConfigError == "" && (a.BlockedCredentialGeneration == nil || *a.BlockedCredentialGeneration != a.CredentialGeneration)
 		if !a.AutomaticEffective {
 			a.NextDueAt = nil
 		}
@@ -553,7 +557,7 @@ func (db *DB) SetIntelligenceCheckEnabled(ctx context.Context, ids []int64, enab
 			}
 			if enabled {
 				policy, rule := a.resolve(s)
-				if intelligenceRuleAllowsAutomatic(a, rule) {
+				if intelligenceRuleAllowsAutomatic(s, a, rule) {
 					if err := validateIntelligenceAccountSettings(ctx, tx, policy, a.Channel, a.OwnedAction); err != nil {
 						return err
 					}
@@ -620,10 +624,12 @@ func (db *DB) intelligenceManualMutationTx(ctx context.Context, tx *sql.Tx, ids 
 		if schedulingWrite {
 			state.PauseBackoffSeconds, state.ErrorRetrySeconds, state.NextIntervalSeconds = 0, 0, 0
 			state.ProbePhase = ""
-			state.OwnedAction = ""
+			state.OwnedAction, state.OwnedRecoverThreshold = "", 0
 			paused = false
+		} else if state.OwnedAction == ic.ActionPauseAndMove {
+			state.OwnedAction = "pause"
 		} else if state.OwnedAction == "switch_group" {
-			state.OwnedAction = ""
+			state.OwnedAction, state.OwnedRecoverThreshold = "", 0
 		}
 		encoded, _ := json.Marshal(state)
 		if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET manual_revision=manual_revision+1,state_json=$1,quality_paused=$2 WHERE account_id=$3`, string(encoded), paused, id); err != nil {
@@ -660,7 +666,7 @@ func validateIntelligenceAccountSettings(ctx context.Context, q intelligenceQuer
 	if len(ownedAction) > 0 && ownedAction[0] != "" {
 		return nil
 	}
-	if s.Action != "switch_group" {
+	if !ic.MovesGroups(s.Action) {
 		return nil
 	}
 	target, err := intelligenceTargetGroupChannel(ctx, q, s)

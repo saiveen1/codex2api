@@ -1,6 +1,10 @@
 export type IntelligenceStatus =
   "queued" | "running" | "normal" | "degraded" | "error" | "interrupted";
-export type IntelligenceAction = "none" | "pause" | "switch_group";
+export type IntelligenceAction = "none" | "pause" | "switch_group" | "pause_and_switch_group";
+export const intelligenceActionOptions: Record<IntelligenceAction, string> = {
+  none: "不自动处置", pause: "禁用业务调度", switch_group: "转移分组", pause_and_switch_group: "禁用业务调度并转移分组",
+};
+export const intelligenceActionMovesGroups = (action?: string) => action === "switch_group" || action === "pause_and_switch_group";
 export interface IntelligenceQuestion {
   id: string;
   name: string;
@@ -60,7 +64,7 @@ export function intelligenceRuleError(rule: IntelligenceRule, questions: Intelli
   if (!rule.group_id && !rule.plan?.trim()) return "请填写分组或套餐码，至少一项。";
   const sameChannel = (id: number) => groups.some(g => g.id === id && (g.channel || "codex") === rule.channel);
   if (rule.group_id && !sameChannel(rule.group_id)) return "请选择同来源的匹配分组。";
-  if (rule.action === "switch_group" && !rule.target_group_id) return "切换分组需要选择目标分组。";
+  if (intelligenceActionMovesGroups(rule.action) && !rule.target_group_id) return "转移分组需要选择目标分组。";
   if (rule.target_group_id && !sameChannel(rule.target_group_id)) return "请选择同来源的目标分组。";
   for (const [key, label, max] of intelligenceRuleNumbers) {
     const value = rule[key];
@@ -106,6 +110,7 @@ export interface IntelligenceSettings {
   target_group_id: number;
   questions: IntelligenceQuestion[];
   rules?: IntelligenceRule[];
+  rules_only?: boolean;
 }
 export interface IntelligenceTargetConflict {
   code: "intelligence_check_target_conflict";
@@ -201,9 +206,11 @@ export const intelligenceLabels: Record<string, string> = {
   interrupted: "已中断",
   resume: "恢复调度",
   restore_groups: "还原分组",
+  resume_and_restore_groups: "恢复调度并还原分组",
   none: "无处置",
   pause: "检测暂停调度",
-  switch_group: "检测切换分组",
+  switch_group: "检测转移分组",
+  pause_and_switch_group: "检测禁用调度并转移分组",
 };
 export function intelligenceColor(status: string): string | undefined {
   return (

@@ -29,6 +29,8 @@ import { getErrorMessage } from "../utils/error";
 import { refreshIntelligenceBars } from "../hooks/useIntelligenceBars";
 import { createUUID } from "../lib/uuid";
 import {
+  intelligenceActionMovesGroups,
+  intelligenceActionOptions,
   intelligenceRuleError,
   normalizeIntelligenceRule,
   intelligenceTargetConflict,
@@ -97,7 +99,7 @@ export default function IntelligenceCheck() {
     key: K,
     value: IntelligenceSettings[K],
   ) => {
-    if (key === "action" || key === "target_group_id" || key === "rules") setTargetConflict(null);
+    if (key === "action" || key === "target_group_id" || key === "rules" || key === "rules_only") setTargetConflict(null);
     setSettings((s) => (s ? { ...s, [key]: value } : s));
   };
   const mutate = async (fn: () => Promise<unknown>, message: string) => {
@@ -107,7 +109,7 @@ export default function IntelligenceCheck() {
       showToast(message);
     } catch (e) {
       const conflict = intelligenceTargetConflict(e);
-      if (conflict) setTargetConflict(conflict);
+      if (conflict) { setTargetConflict(conflict); setTab("config"); }
       showToast(
         conflict
           ? `有 ${conflict.conflict_count} 个账号的检测通道不兼容，请处理下方列表后重新保存`
@@ -124,7 +126,7 @@ export default function IntelligenceCheck() {
       const rules = settings.rules?.map(normalizeIntelligenceRule);
       for (const rule of rules ?? []) {
         const error = intelligenceRuleError(rule, settings.questions, groups);
-        if (error) throw new Error(`${rule.name || "未命名规则"}：${error}`);
+        if (error) { setTab("policies"); throw new Error(`${rule.name || "未命名规则"}：${error}`); }
       }
       const next = await api.saveIntelligenceSettings({ ...settings, rules });
       setSettings(next);
@@ -198,7 +200,7 @@ export default function IntelligenceCheck() {
                 有未保存更改
               </span>
             )}
-            {tab === "config" && <Button
+            {(tab === "config" || tab === "policies") && <Button
               onClick={() => void save()}
               disabled={!settings || busy || !dirty}
             >
@@ -210,8 +212,8 @@ export default function IntelligenceCheck() {
       />
       {groupsError && <p role="alert" className="mb-4 text-sm text-destructive">分组加载失败：{groupsError}。请刷新页面重试。</p>}
       <Tabs.Root value={tab} onValueChange={setTab}>
-        <Tabs.List aria-label="降智检测页面" className="mb-5 inline-flex max-w-full gap-1 rounded-xl border border-border/60 bg-muted/40 p-1">
-          {[["config", "配置"], ["history", "检测历史"], ["batch", "批量操作"]].map(([value, label]) => (
+        <Tabs.List aria-label="降智检测页面" className="mb-5 inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/40 p-1">
+          {[["config", "配置"], ["policies", "独立策略"], ["history", "检测历史"], ["batch", "批量操作"]].map(([value, label]) => (
             <Tabs.Trigger key={value} value={value} asChild>
               <Button variant="ghost" size="sm" className="min-w-0 px-2 text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">{label}</Button>
             </Tabs.Trigger>
@@ -370,16 +372,12 @@ export default function IntelligenceCheck() {
                     onValueChange={(v) =>
                       change("action", v as IntelligenceSettings["action"])
                     }
-                    options={options({
-                      none: "不自动处置",
-                      pause: "暂停业务调度",
-                      switch_group: "切换分组",
-                    })}
+                    options={options(intelligenceActionOptions)}
                   />,
                 )}
                 {numeric("degrade_threshold", "连续未通过次数", 1, 1000)}
                 {numeric("recover_threshold", "连续恢复次数", 1, 1000)}
-                {settings.action === "switch_group" &&
+                {intelligenceActionMovesGroups(settings.action) &&
                   field(
                     "目标分组",
                     <Select
@@ -466,7 +464,7 @@ export default function IntelligenceCheck() {
                 </div>
               )}
               <p className="text-xs leading-relaxed text-muted-foreground">
-                上游错误不计为降智；开启自适应时会中断恢复确认。人工修改调度或分组优先，并重置连续次数。关闭暂停策略不会自动释放已有暂停；关闭切组策略后，已切组账号仍可按恢复阈值还原原分组。检测暂停期间继续检测。
+                只有判定未通过才累计降智次数。业务禁用不改账号的人工启用状态；转移分组时保存原分组。组合处置达到恢复次数后解除禁用并还原分组，管理员的手动改组或调度操作优先。
               </p>
             </CardContent>
           </Card>
@@ -635,8 +633,19 @@ export default function IntelligenceCheck() {
           )}
         </section>
       </div>}
-      {settings && <IntelligenceRules settings={settings} groups={groups} disabled={busy}
-        onChange={rules => change("rules", rules)} />}
+        </Tabs.Content>
+        <Tabs.Content value="policies" className="space-y-6">
+          {configError && <p role="alert" className="text-sm text-destructive">配置加载失败：{configError}。请刷新页面重试。</p>}
+          {settings && <>
+            <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border px-4 py-3">
+              <div className="max-w-3xl space-y-1">
+                <label htmlFor="intelligence-rules-only" className="text-sm font-medium">只对命中独立策略的账号自动检测</label>
+                <p className="text-xs text-muted-foreground">关闭时，未命中账号使用全局配置。开启后，未命中账号不再创建自动检测；已处置账号仍可检测恢复，不影响手动检测。</p>
+              </div>
+              <Switch id="intelligence-rules-only" checked={!!settings.rules_only} disabled={busy} onCheckedChange={value => change("rules_only", value)} />
+            </div>
+            <IntelligenceRules settings={settings} groups={groups} disabled={busy} onChange={rules => change("rules", rules)} />
+          </>}
         </Tabs.Content>
         <Tabs.Content value="history">
           <IntelligenceHistory groups={groups} onRun={id => {
