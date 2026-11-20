@@ -143,3 +143,55 @@ func TestIntelligenceCheckIndependentPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestIntelligenceCheckNarrowScopeClearsQueuedFallback(t *testing.T) {
+	db := intelligenceDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	freeRunning, freeQueued, team, manual := intelligenceAccount(t, db), intelligenceAccount(t, db), intelligenceAccount(t, db), intelligenceAccount(t, db)
+	group, err := db.CreateAccountGroup(ctx, "team", "", "", 0, 0, sql.NullInt64{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountGroups(ctx, team, []int64{group}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnqueueIntelligenceChecks(ctx, []int64{manual}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Enabled = true
+	s.Rules = []ic.Rule{{ID: "team", Name: "Team only", Channel: "codex", GroupID: group, Automatic: true}}
+	s, err = db.SaveIntelligenceCheckSettings(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 10); err != nil || n != 3 {
+		t.Fatal(n, err)
+	}
+	if r, err := db.ClaimIntelligenceCheck(ctx, "worker", now, time.Minute); err != nil || r == nil || r.AccountID != freeRunning {
+		t.Fatal(r, err)
+	}
+	s.RulesOnly = true
+	if _, err := db.SaveIntelligenceCheckSettings(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]string{freeRunning: "running", freeQueued: "interrupted", team: "queued", manual: "queued"} {
+		runs, total, err := db.ListIntelligenceCheckRuns(ctx, IntelligenceCheckRunFilter{AccountID: id})
+		if err != nil || total != 1 || len(runs) != 1 || runs[0].Status != want {
+			t.Fatal(id, runs, total, err)
+		}
+		if id == freeQueued && (!runs[0].Interrupted || runs[0].Error == "" || runs[0].StartedAt != nil) {
+			t.Fatal(runs[0])
+		}
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now.Add(time.Minute), 10); n != 0 || err != nil {
+		t.Fatal(n, err)
+	}
+	if r, err := db.ClaimIntelligenceCheck(ctx, "worker2", now.Add(time.Second), time.Minute); err != nil || r == nil || r.AccountID != team || r.RuleID != "team" {
+		t.Fatal(r, err)
+	}
+}

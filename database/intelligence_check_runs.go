@@ -439,6 +439,41 @@ func (db *DB) RequeueIntelligenceCheck(ctx context.Context, id int64, owner stri
 		return err
 	})
 }
+
+// Save holds the settings lock here, so a queued run cannot be claimed or
+// promoted to manual while we close it. Preserve historical and live runs.
+func (db *DB) interruptIntelligenceOutsideScopeTx(ctx context.Context, tx *sql.Tx, retention int, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, `SELECT `+intelligenceRunColumns+` FROM intelligence_check_runs WHERE status='queued' AND `+db.intelligenceJSONField("source")+`='automatic' AND account_id NOT IN (
+		SELECT st.account_id FROM intelligence_check_accounts st JOIN accounts a ON a.id=st.account_id CROSS JOIN intelligence_check_settings cfg WHERE cfg.id=1 AND `+db.intelligenceRuleAutomaticSQL("a", "st", "cfg")+`)`)
+	if err != nil {
+		return err
+	}
+	var runs []IntelligenceCheckRun
+	for rows.Next() {
+		r, err := scanIntelligenceRun(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		runs = append(runs, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		r.Observation = ic.Observation{Interrupted: true, Error: "账号不在当前自动检测范围，未发送请求"}
+		if err := db.intelligenceTerminalTx(ctx, tx, &r, now, "interrupted"); err != nil {
+			return err
+		}
+		if err := db.intelligenceRetainTx(ctx, tx, r, retention); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) intelligenceTerminalTx(ctx context.Context, tx *sql.Tx, r *IntelligenceCheckRun, now time.Time, status string) error {
 	r.Status = status
 	completed := now.UTC()

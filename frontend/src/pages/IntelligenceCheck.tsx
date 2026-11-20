@@ -131,6 +131,7 @@ export default function IntelligenceCheck() {
       const next = await api.saveIntelligenceSettings({ ...settings, rules });
       setSettings(next);
       setSaved(next);
+      refreshIntelligenceBars();
       setTargetConflict(null);
     }, "检测配置、规则和题库已保存");
   const disableConflicts = () =>
@@ -243,8 +244,17 @@ export default function IntelligenceCheck() {
                   checked={settings.enabled}
                   onCheckedChange={(v) => change("enabled", v)}
                 />,
-                "保存后生效；关闭时仍可手动检测。",
+                "管控所有自动检测，包括独立策略和恢复检测。关闭不影响手动检测。",
               )}
+              <div className="flex flex-col gap-2 text-sm">
+                <span className="font-medium">自动检测范围</span>
+                <Select aria-label="自动检测范围" value={settings.rules_only ? "rules" : "global"}
+                  options={options({ rules: "仅命中独立策略", global: "未命中账号也按全局配置检测" })}
+                  onValueChange={(value) => change("rules_only", value === "rules")} />
+                <span className="text-xs text-muted-foreground">
+                  {settings.rules_only ? "只测命中且允许自动检测的账号；已有处置的账号仍可检测恢复。" : "开启总开关后，未匹配任何策略、但已启用检测的账号也会参加。只想测指定分组或套餐，请先选「仅命中独立策略」。"}
+                </span>
+              </div>
               <div className="col-span-full space-y-3 rounded-lg border p-4">
                 <h3 className="text-sm font-medium">自动检测来源</h3>
                 <p className="text-xs text-muted-foreground">按账号来源独立控制，不按所调用的模型名称分类。保存后停止该来源的新自动检测，手动立即检测不受影响；已有账号的单独开关保留。</p>
@@ -637,6 +647,10 @@ export default function IntelligenceCheck() {
         <Tabs.Content value="policies" className="space-y-6">
           {configError && <p role="alert" className="text-sm text-destructive">配置加载失败：{configError}。请刷新页面重试。</p>}
           {settings && <>
+            <p className="text-sm text-muted-foreground">
+              {settings.enabled ? "自动检测总开关已开启。" : "自动检测总开关已关闭，独立策略不会自动执行。"}{" "}
+              <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setTab("config")}>查看总开关</Button>
+            </p>
             <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border px-4 py-3">
               <div className="max-w-3xl space-y-1">
                 <label htmlFor="intelligence-rules-only" className="text-sm font-medium">只对命中独立策略的账号自动检测</label>
@@ -644,6 +658,7 @@ export default function IntelligenceCheck() {
               </div>
               <Switch id="intelligence-rules-only" checked={!!settings.rules_only} disabled={busy} onCheckedChange={value => change("rules_only", value)} />
             </div>
+            <p className="text-xs text-muted-foreground">匹配分组不等于匹配同名套餐。已有账号还需开启自己的检测开关；可到 <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setTab("batch")}>批量操作</Button> 按分组筛选并开启。</p>
             <IntelligenceRules settings={settings} groups={groups} disabled={busy} onChange={rules => change("rules", rules)} />
           </>}
         </Tabs.Content>

@@ -285,6 +285,11 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if _, err := tx.ExecContext(ctx, `UPDATE intelligence_check_settings SET revision=$1,config_json=$2,new_accounts_enabled=$3 WHERE id=1`, s.Revision, string(raw), s.NewAccountsEnabled); err != nil {
 			return err
 		}
+		if s.RulesOnly {
+			if err := db.interruptIntelligenceOutsideScopeTx(ctx, tx, s.Retention, time.Now()); err != nil {
+				return err
+			}
+		}
 		rows, err := tx.QueryContext(ctx, `SELECT a.id,st.state_json,`+db.intelligenceChannelExpr()+db.intelligenceScopeColumns("a")+` FROM intelligence_check_accounts st JOIN accounts a ON a.id=st.account_id`)
 		if err != nil {
 			return err

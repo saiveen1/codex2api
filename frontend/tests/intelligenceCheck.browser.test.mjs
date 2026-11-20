@@ -490,3 +490,15 @@ test('rules require a matcher and a same-source target, then save priority and o
  await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
  assert.deepEqual(await page.evaluate(()=>window.__config.rules.map(r=>r.name)),['套餐规则'])
 })
+
+test('scope can be narrowed next to the master switch before enabling automatic checks', async t => {
+ const page = await fixture(t)
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ await page.getByText('自动检测总开关已关闭，独立策略不会自动执行。').waitFor()
+ await page.getByRole('button', {name:'查看总开关'}).click()
+ await selectOption(page, '自动检测范围', '仅命中独立策略')
+ await page.getByRole('switch', {name:'自动检测总开关',exact:true}).click()
+ await page.getByRole('button', {name:'保存配置',exact:true}).click()
+ await page.getByRole('button', {name:'保存配置',exact:true,disabled:true}).waitFor()
+ assert.deepEqual(await page.evaluate(() => [window.__config.rules_only, window.__config.enabled]), [true, true])
+})
