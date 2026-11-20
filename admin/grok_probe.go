@@ -293,16 +293,23 @@ var grokImportProbeSlots = make(chan struct{}, 4)
 // the required three minimal native capability probes. The latter are bounded
 // globally and serialised per account by runGrokCapabilityProbe.
 func (h *Handler) triggerGrokUsageProbe(accountID int64) {
-	if h == nil || h.store == nil || h.db == nil || accountID <= 0 {
+	if h == nil || h.store == nil || h.db == nil || accountID <= 0 || !h.store.ImportUsageProbeEnabled() {
 		return
 	}
-	h.startDBBackgroundTask(func(parent context.Context) {
+	h.runImportProbeTask(func(parent context.Context) {
+		if !h.store.ImportUsageProbeEnabled() || parent.Err() != nil {
+			return
+		}
 		select {
 		case grokImportProbeSlots <- struct{}{}:
 		case <-parent.Done():
 			return
 		}
 		defer func() { <-grokImportProbeSlots }()
+		if !h.store.ImportUsageProbeEnabled() || parent.Err() != nil {
+			return
+		}
+		defer h.invalidateAccountSnapshotCaches()
 
 		syncCtx, cancel := context.WithTimeout(parent, 2*time.Minute)
 		if _, err := h.syncGrokAccountState(syncCtx, accountID); err != nil {

@@ -314,6 +314,8 @@ func (h *Handler) createKiroAccount(ctx context.Context, item kiroImportCredenti
 			warnings = append(warnings, "已保存，但装载进号池失败，请重载账号")
 		} else if usageErr == nil {
 			h.syncKiroUsageCooldown(id, usage, usage.FetchedAt)
+		} else {
+			h.triggerImportedAccountUsageProbe(id, "kiro_import")
 		}
 	}
 	return &kiroCreateResult{ID: id, Email: item.Email, Warnings: warnings}, http.StatusOK, nil

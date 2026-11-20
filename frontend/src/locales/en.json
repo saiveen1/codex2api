@@ -4951,6 +4951,8 @@
     "usageProbeConcurrencyDesc": "Maximum parallel usage probes (1~128, default 16). Raising it speeds up sampling for large pools but may trigger upstream rate limits.",
     "usageProbeResponsesFallback": "Responses Probe Fallback",
     "usageProbeResponsesFallbackDesc": "Allow a real /responses probe when wham usage lookup fails. Disable for wham-only sampling; lazy mode always skips this fallback.",
+    "importUsageProbe": "Sample Usage After Account Import",
+    "importUsageProbeDesc": "On by default. Sample usage once in the background after a successful import without delaying the import; channels that already fetched quota during import validation are not sampled again. Probes follow each channel's policy and the existing Responses fallback setting, and may consume quota. Turning this off does not affect required credential validation, manual refreshes, or periodic checks.",
     "recoveryProbeInterval": "Recovery Probe Interval",
     "recoveryProbeIntervalDesc": "Minimum gap between recovery probes for banned accounts, in minutes (1~10080).",
     "lazyMode": "Lazy Mode",

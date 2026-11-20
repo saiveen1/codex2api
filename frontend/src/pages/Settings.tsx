@@ -2992,6 +2992,7 @@ export default function Settings() {
       codex_images_main_model: cacheNormalized.codex_images_main_model ?? '',
       codex_telemetry_enabled: cacheNormalized.codex_telemetry_enabled ?? false,
       codex_telemetry_timing_debug: cacheNormalized.codex_telemetry_timing_debug ?? false,
+      import_usage_probe_enabled: cacheNormalized.import_usage_probe_enabled ?? true,
       billing_tier_policy: normalizeBillingTierPolicyValue(cacheNormalized.billing_tier_policy),
       first_token_mode: 'loose',
       models_list_read_max_bytes:
@@ -3024,6 +3025,7 @@ export default function Settings() {
 	    usage_probe_max_age_minutes: 10,
 	    usage_probe_concurrency: 16,
 	    usage_probe_responses_fallback_enabled: true,
+	    import_usage_probe_enabled: true,
 	    recovery_probe_interval_minutes: 30,
     lazy_mode: false,
     codex_oauth_keepalive_enabled: false,
@@ -4339,6 +4341,13 @@ export default function Settings() {
                         <Switch
                           checked={settingsForm.usage_probe_responses_fallback_enabled}
                           onCheckedChange={(checked) => autoSaveBooleanField('usage_probe_responses_fallback_enabled', checked)}
+                        />
+                      </SettingField>
+                      <SettingField label={t('settings.importUsageProbe')} description={t('settings.importUsageProbeDesc')} layout="switch">
+                        <Switch
+                          aria-label={t('settings.importUsageProbe')}
+                          checked={settingsForm.import_usage_probe_enabled}
+                          onCheckedChange={(checked) => autoSaveBooleanField('import_usage_probe_enabled', checked)}
                         />
                       </SettingField>
                       <SettingField label={t('settings.lazyMode')} description={t('settings.lazyModeDesc')} layout="switch">

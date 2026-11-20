@@ -165,14 +165,14 @@ func TestPersistProxyTestResultRefreshesRuntimePool(t *testing.T) {
 	store := newAdminProxyTestStore(t, db)
 	handler := &Handler{db: db, store: store}
 
-	if err := handler.persistProxyTestResult(ctx, id, "http://proxy.example:8080", database.ProxyTestStatusError, "", "", 0); err != nil {
+	if err := handler.persistProxyTestResult(ctx, id, "http://proxy.example:8080", database.ProxyTestStatusError, "", "", 0, ""); err != nil {
 		t.Fatalf("persistProxyTestResult(error) returned error: %v", err)
 	}
 	if got := store.NextProxy(); got != "" {
 		t.Fatalf("NextProxy after error = %q, want empty", got)
 	}
 
-	if err := handler.persistProxyTestResult(ctx, id, "http://proxy.example:8080", database.ProxyTestStatusSuccess, "1.2.3.4", "US", 100); err != nil {
+	if err := handler.persistProxyTestResult(ctx, id, "http://proxy.example:8080", database.ProxyTestStatusSuccess, "1.2.3.4", "US", 100, ""); err != nil {
 		t.Fatalf("persistProxyTestResult(success) returned error: %v", err)
 	}
 	if got := store.NextProxy(); got != "http://proxy.example:8080" {
@@ -205,6 +205,7 @@ func TestPersistProxyTestResultFailsClosedBeforeReloadFailure(t *testing.T) {
 		"",
 		"",
 		0,
+		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "reload unavailable") {
 		t.Fatalf("persistProxyTestResult() error = %v, want reload failure", err)

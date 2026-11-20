@@ -696,6 +696,8 @@
     "autoResetCreditsDesc": "分別控制額度窗口用盡和重置券臨期時的自動消耗，兩項預設關閉，每輪每帳號最多消耗一次。",
     "autoResetCreditsOnExhaustionEnabled": "7d 窗口用盡後自動重置",
     "autoResetCreditsOnExhaustionDesc": "每 5 分鐘檢查官方 Codex 帳號（含 Business Pro Lite）。僅當上游確認 7d 長窗口（team 等為 30 天月窗）達到 100%，且有可用重置次數時消耗一次，無需等待券臨期；5h 窗口用盡不會觸發。預設關閉；開啟後立即檢查。",
+    "importUsageProbe": "匯入帳號後取樣用量",
+    "importUsageProbeDesc": "預設開啟。成功匯入後在背景取樣一次用量，不阻礙資料寫入；已於匯入驗證取得額度的管道不重複取樣。遵循各管道策略及現有 Responses 回退開關，可能消耗額度。關閉不影響必要的憑據驗證、手動重新整理或定期檢查。",
     "codexOAuthKeepalive": "惰性模式下保持 Codex 授權",
     "codexOAuthKeepaliveDesc": "開啟後，惰性模式仍會為即將到期的 Codex Token 續期，包括額度冷卻中的帳號；不會解除冷卻或發送生成請求。預設關閉。",
     "codexTelemetry": "用戶端遙測（實驗性）",

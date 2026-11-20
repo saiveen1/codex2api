@@ -4046,6 +4046,7 @@ type Store struct {
 	usageProbeMaxAge                   atomic.Int64 // 用量探针快照最大缓存时长（ns）
 	usageProbeConcurrency              atomic.Int64 // 用量探针并行度
 	usageProbeResponsesFallbackEnabled atomic.Bool
+	importUsageProbeDisabled           atomic.Bool
 	recoveryProbeInterval              atomic.Int64 // 恢复探测最小间隔（ns）
 	backgroundRefreshWakeCh            chan struct{}
 	// 到点即探：限流冷却 / 5h·7d 窗口重置的倒计时归零那一刻，精确唤醒一次 wham 探针，
@@ -4870,6 +4871,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.SetUsageProbeMaxAge(time.Duration(settings.UsageProbeMaxAgeMinutes) * time.Minute)
 	s.SetUsageProbeConcurrency(settings.UsageProbeConcurrency)
 	s.SetUsageProbeResponsesFallbackEnabled(settings.UsageProbeResponsesFallbackEnabled)
+	s.SetImportUsageProbeEnabled(settings.ImportUsageProbeEnabled == nil || *settings.ImportUsageProbeEnabled)
 	s.SetRecoveryProbeInterval(time.Duration(settings.RecoveryProbeIntervalMinutes) * time.Minute)
 	s.autoCleanUnauthorized.Store(settings.AutoCleanUnauthorized)
 	s.autoCleanRateLimited.Store(settings.AutoCleanRateLimited)

@@ -2299,6 +2299,7 @@ export interface SystemSettings {
 	  usage_probe_max_age_minutes: number
 	  usage_probe_concurrency: number
 	  usage_probe_responses_fallback_enabled: boolean
+	  import_usage_probe_enabled: boolean
 	  recovery_probe_interval_minutes: number
   lazy_mode: boolean
   codex_oauth_keepalive_enabled: boolean

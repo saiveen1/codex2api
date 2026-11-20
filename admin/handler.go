@@ -363,19 +363,34 @@ func (h *Handler) usageProbeFunc() func(context.Context, *auth.Account) error {
 }
 
 func (h *Handler) probeImportedAccountUsage(ctx context.Context, accountID int64, source string) {
-	if h == nil || h.store == nil {
+	if h == nil || h.store == nil || !h.store.ImportUsageProbeEnabled() || ctx.Err() != nil {
 		return
 	}
 	account := h.store.FindByID(accountID)
 	if account == nil {
 		return
 	}
-	// Agent Identity 无 AccessToken 但可凭签名做 /responses 探针，不能被此门拦下。
-	if account.GetAccessToken() == "" && !account.IsCodexAgentIdentity() {
+	if account.IsOpenAIResponsesAPI() || account.IsClaudeAPIKey() {
 		return
 	}
-	defer h.refreshImportedDaybreak(ctx, accountID)
+	if account.GetAccessToken() == "" && !account.IsCodexAgentIdentity() &&
+		!account.IsGrokAPI() && !account.IsAntigravityAPI() && !account.IsKiro() {
+		return
+	}
+	if !account.TryBeginUsageProbe() {
+		return
+	}
+	defer account.FinishUsageProbe()
+	if shouldMergeImportedIdentity(account) {
+		defer h.refreshImportedDaybreak(ctx, accountID)
+	}
+	defer h.invalidateAccountSnapshotCaches()
 	probeFn := h.usageProbeFunc()
+	if account.IsAntigravityAPI() {
+		probeFn = func(ctx context.Context, _ *auth.Account) error {
+			return h.syncAntigravityAccountByID(ctx, accountID)
+		}
+	}
 	if probeFn == nil {
 		return
 	}
@@ -401,7 +416,9 @@ func (h *Handler) probeImportedAccountUsage(ctx context.Context, accountID int64
 }
 
 func shouldMergeImportedIdentity(account *auth.Account) bool {
-	return account != nil && !account.IsCodexAgentIdentity() && !account.IsClaudeOAuth()
+	return account != nil && !account.IsCodexAgentIdentity() && !account.IsClaudeOAuth() &&
+		!account.IsClaudeAPIKey() && !account.IsOpenAIResponsesAPI() &&
+		!account.IsGrokAPI() && !account.IsAntigravityAPI() && !account.IsKiro()
 }
 
 func (h *Handler) startDBBackgroundTask(task func(context.Context)) bool {
@@ -703,6 +720,9 @@ func (l *adaptiveImportDBLimiter) release() {
 }
 
 func (h *Handler) triggerImportedAccountUsageProbe(accountID int64, source string) {
+	if h == nil || h.store == nil || !h.store.ImportUsageProbeEnabled() || accountID <= 0 {
+		return
+	}
 	h.runImportProbeTask(func(ctx context.Context) {
 		h.probeImportedAccountUsage(ctx, accountID, source)
 	})
@@ -9515,6 +9535,7 @@ type settingsResponse struct {
 	UsageProbeMaxAgeMinutes             int    `json:"usage_probe_max_age_minutes"`
 	UsageProbeConcurrency               int    `json:"usage_probe_concurrency"`
 	UsageProbeResponsesFallbackEnabled  bool   `json:"usage_probe_responses_fallback_enabled"`
+	ImportUsageProbeEnabled             bool   `json:"import_usage_probe_enabled"`
 	RecoveryProbeIntervalMinutes        int    `json:"recovery_probe_interval_minutes"`
 	LazyMode                            bool   `json:"lazy_mode"`
 	CodexOAuthKeepaliveEnabled          bool   `json:"codex_oauth_keepalive_enabled"`
@@ -9718,6 +9739,7 @@ type updateSettingsReq struct {
 	UsageProbeMaxAgeMinutes             *int                             `json:"usage_probe_max_age_minutes"`
 	UsageProbeConcurrency               *int                             `json:"usage_probe_concurrency"`
 	UsageProbeResponsesFallbackEnabled  *bool                            `json:"usage_probe_responses_fallback_enabled"`
+	ImportUsageProbeEnabled             *bool                            `json:"import_usage_probe_enabled"`
 	RecoveryProbeIntervalMinutes        *int                             `json:"recovery_probe_interval_minutes"`
 	LazyMode                            *bool                            `json:"lazy_mode"`
 	CodexOAuthKeepaliveEnabled          *bool                            `json:"codex_oauth_keepalive_enabled"`
@@ -10574,6 +10596,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
 		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		ImportUsageProbeEnabled:             h.store.ImportUsageProbeEnabled(),
 		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
 		LazyMode:                            h.store.GetLazyMode(),
 		CodexOAuthKeepaliveEnabled:          h.store.GetCodexOAuthKeepalive(),
@@ -11276,6 +11299,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.UsageProbeResponsesFallbackEnabled != nil {
 		h.store.SetUsageProbeResponsesFallbackEnabled(*req.UsageProbeResponsesFallbackEnabled)
 		log.Printf("设置已更新: usage_probe_responses_fallback_enabled = %t", *req.UsageProbeResponsesFallbackEnabled)
+	}
+
+	if req.ImportUsageProbeEnabled != nil {
+		h.store.SetImportUsageProbeEnabled(*req.ImportUsageProbeEnabled)
 	}
 
 	if req.RecoveryProbeIntervalMinutes != nil {
@@ -12183,6 +12210,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
 		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		ImportUsageProbeEnabled:             boolPtr(h.store.ImportUsageProbeEnabled()),
 		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
 		LazyMode:                            h.store.GetLazyMode(),
 		CodexOAuthKeepaliveEnabled:          h.store.GetCodexOAuthKeepalive(),
@@ -12577,6 +12605,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
 		UsageProbeResponsesFallbackEnabled:  h.store.UsageProbeResponsesFallbackEnabled(),
+		ImportUsageProbeEnabled:             h.store.ImportUsageProbeEnabled(),
 		RecoveryProbeIntervalMinutes:        h.store.GetRecoveryProbeIntervalMinutes(),
 		LazyMode:                            h.store.GetLazyMode(),
 		CodexOAuthKeepaliveEnabled:          h.store.GetCodexOAuthKeepalive(),

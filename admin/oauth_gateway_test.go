@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -63,6 +64,7 @@ func newOAuthGatewayAdminFixture(t *testing.T) (*Handler, *gin.Engine, *oauthGat
 	t.Cleanup(func() { _ = tc.Close() })
 	store := auth.NewStore(db, tc, nil)
 	h := NewHandler(store, db, tc, nil, "synthetic-admin")
+	h.probeUsage = func(context.Context, *auth.Account) error { return nil }
 	state := &oauthGatewayMemoryStore{state: service.State{Version: 1, Jobs: []service.Job{}}}
 	app, err := service.New(state, oauthGatewayTarget{h}, false)
 	if err != nil {

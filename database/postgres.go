@@ -1396,6 +1396,7 @@ func (db *DB) migrate(ctx context.Context) error {
 				usage_probe_max_age_minutes INT DEFAULT 10,
 				usage_probe_concurrency INT DEFAULT 16,
 				usage_probe_responses_fallback_enabled BOOLEAN DEFAULT TRUE,
+				import_usage_probe_enabled BOOLEAN DEFAULT TRUE,
 				recovery_probe_interval_minutes INT DEFAULT 30,
 			scheduler_mode VARCHAR(20) DEFAULT 'round_robin',
 			response_cache_local_max_bytes BIGINT NOT NULL DEFAULT 67108864,
@@ -1485,6 +1486,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_max_age_minutes INT DEFAULT 10;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_concurrency INT DEFAULT 16;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_responses_fallback_enabled BOOLEAN DEFAULT TRUE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS import_usage_probe_enabled BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recovery_probe_interval_minutes INT DEFAULT 30;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS scheduler_mode VARCHAR(20) DEFAULT 'round_robin';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS affinity_mode VARCHAR(16) DEFAULT 'bounded';
@@ -2484,6 +2486,7 @@ type SystemSettings struct {
 	UsageProbeMaxAgeMinutes            int
 	UsageProbeConcurrency              int
 	UsageProbeResponsesFallbackEnabled bool
+	ImportUsageProbeEnabled            *bool // nil defaults to true
 	RecoveryProbeIntervalMinutes       int
 	SchedulerMode                      string
 	AffinityMode                       string // session 粘性模式: bounded / off / strict
@@ -2736,6 +2739,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 			       COALESCE(usage_probe_max_age_minutes, 10),
 			       COALESCE(usage_probe_concurrency, 16),
 			       COALESCE(usage_probe_responses_fallback_enabled, true),
+			       COALESCE(import_usage_probe_enabled, true),
 			       COALESCE(recovery_probe_interval_minutes, 30),
 		       COALESCE(scheduler_mode, 'round_robin'),
 		       COALESCE(affinity_mode, 'bounded'),
@@ -2844,7 +2848,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.AutoCleanUnauthorized, &s.AutoCleanRateLimited, &s.AdminSecret, &s.AutoCleanFullUsage,
 		&s.ProxyPoolEnabled, &s.FastSchedulerEnabled, &s.SchedulerEngine, &s.MaxRetries, &s.MaxRateLimitRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.LazyMode, &s.ModelMapping, &s.CodexModelMapping,
-		&s.BackgroundRefreshIntervalMinutes, &s.UsageProbeMaxAgeMinutes, &s.UsageProbeConcurrency, &s.UsageProbeResponsesFallbackEnabled, &s.RecoveryProbeIntervalMinutes,
+		&s.BackgroundRefreshIntervalMinutes, &s.UsageProbeMaxAgeMinutes, &s.UsageProbeConcurrency, &s.UsageProbeResponsesFallbackEnabled, &s.ImportUsageProbeEnabled, &s.RecoveryProbeIntervalMinutes,
 		&s.SchedulerMode,
 		&s.AffinityMode,
 		&s.SessionAffinitySpread,
@@ -3203,9 +3207,10 @@ func updateSystemSettingsWithExecer(ctx context.Context, execer systemSettingsEx
 					codex_oauth_keepalive_enabled,
 					codex_telemetry_timing_debug,
 					auto_reset_credits_on_exhaustion_enabled,
-					codex_ws_downstream_keepalive_slots
+					codex_ws_downstream_keepalive_slots,
+					import_usage_probe_enabled
 					)
-						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $130)
+						VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73, $74, $75, $76, $77, $78, $79, $80, $81, $82, $83, $84, $85, $86, $87, $88, $89, $90, $91, $92, $93, $94, $95, $96, $97, $98, $99, $100, $101, $102, $103, $104, $105, $106, $107, $108, $109, $110, $111, $112, $113, $114, $115, $116, $117, $118, $119, $120, $121, $122, $123, $124, $125, $126, $127, $130, $131)
 				ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -3235,6 +3240,7 @@ func updateSystemSettingsWithExecer(ctx context.Context, execer systemSettingsEx
 					usage_probe_max_age_minutes = EXCLUDED.usage_probe_max_age_minutes,
 					usage_probe_concurrency = EXCLUDED.usage_probe_concurrency,
 					usage_probe_responses_fallback_enabled = EXCLUDED.usage_probe_responses_fallback_enabled,
+					import_usage_probe_enabled = EXCLUDED.import_usage_probe_enabled,
 					recovery_probe_interval_minutes = EXCLUDED.recovery_probe_interval_minutes,
 				resin_url               = EXCLUDED.resin_url,
 				resin_platform_name     = EXCLUDED.resin_platform_name,
@@ -3389,7 +3395,8 @@ func updateSystemSettingsWithExecer(ctx context.Context, execer systemSettingsEx
 		s.CodexTelemetryTimingDebug,
 		s.AutoResetCreditsOnExhaustionEnabled,
 		s.PreservePromptFilterCustomPatterns,
-		s.PreservePromptFilterReviewAPIKey, NormalizeCodexWSDownstreamKeepaliveSlots(s.CodexWSDownstreamKeepaliveSlots))
+		s.PreservePromptFilterReviewAPIKey, NormalizeCodexWSDownstreamKeepaliveSlots(s.CodexWSDownstreamKeepaliveSlots),
+		s.ImportUsageProbeEnabled == nil || *s.ImportUsageProbeEnabled)
 	return err
 }
 

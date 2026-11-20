@@ -185,6 +185,7 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 		if err := t.h.store.LoadAccountByID(ctx, id); err != nil {
 			return accepted, service.LocalImportError("runtime_load_pending")
 		}
+		t.h.triggerImportedAccountUsageProbe(id, "oauth_gateway")
 	}
 	return accepted, nil
 }
