@@ -210,7 +210,7 @@ func (db *DB) intelligenceDueAccounts(ctx context.Context, q intelligenceQueryer
 			args = append(args, channel)
 		}
 	}
-	rows, err := q.QueryContext(ctx, `SELECT `+intelligenceAccountColumns+db.intelligenceChannelExpr()+db.intelligenceScopeColumns("a")+` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE `+db.intelligenceEligibleSQL()+filter+` AND `+db.intelligenceAutomaticSQL("a", "s")+` AND s.next_due_ms<=$1 AND NOT EXISTS(SELECT 1 FROM intelligence_check_runs r WHERE r.account_id=a.id AND r.status IN ('queued','running')) ORDER BY s.next_due_ms,a.id LIMIT $2`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT `+db.intelligenceAccountSelect()+` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE `+db.intelligenceEligibleSQL()+filter+` AND `+db.intelligenceAutomaticSQL("a", "s")+` AND s.next_due_ms<=$1 AND NOT EXISTS(SELECT 1 FROM intelligence_check_runs r WHERE r.account_id=a.id AND r.status IN ('queued','running')) ORDER BY s.next_due_ms,a.id LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -380,6 +380,7 @@ func (db *DB) ClaimIntelligenceCheck(ctx context.Context, owner string, now time
 			fresh, snapshotErr := intelligenceCheckSnapshot(policy, a, r.Source, r.CreatedAt)
 			if snapshotErr == nil {
 				fresh.ID, fresh.RecordOnly = r.ID, r.RecordOnly
+				fresh.RequireNormal = r.Source == "automatic" && rule.NormalOnly && a.OwnedAction == ""
 				r = fresh
 				if !r.RecordOnly {
 					snapshotErr = validateIntelligenceAccountSettings(ctx, tx, policy, a.Channel, a.OwnedAction)

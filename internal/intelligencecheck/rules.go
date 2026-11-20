@@ -15,6 +15,7 @@ type Rule struct {
 	GroupID          int64    `json:"group_id,omitempty"`
 	Plan             string   `json:"plan,omitempty"`
 	Automatic        bool     `json:"automatic"`
+	NormalOnly       bool     `json:"normal_only,omitempty"`
 	Model            string   `json:"model,omitempty"`
 	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
 	JudgeMode        string   `json:"judge_mode,omitempty"`

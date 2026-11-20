@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	ic "github.com/codex2api/internal/intelligencecheck"
+	"slices"
 	"strings"
 	"time"
 )
@@ -51,7 +52,8 @@ type IntelligenceCheckRunFilter struct {
 }
 type IntelligenceCheckAccount struct {
 	IntelligenceCheckScope
-	AutomaticEffective   bool       `json:"automatic_effective"`
+	AutomaticEffective   bool `json:"automatic_effective"`
+	normalAccount        bool
 	CredentialGeneration int64      `json:"-"`
 	ConfigError          string     `json:"config_error,omitempty"`
 	AccountID            int64      `json:"account_id"`
@@ -70,6 +72,7 @@ type IntelligenceCheckAccount struct {
 type IntelligenceCheckRun struct {
 	IntelligenceCheckScope
 	RecordOnly           bool        `json:"record_only,omitempty"`
+	RequireNormal        bool        `json:"require_normal,omitempty"`
 	CredentialGeneration int64       `json:"credential_generation,omitempty"`
 	ID                   int64       `json:"id"`
 	AccountID            int64       `json:"account_id"`
@@ -285,7 +288,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 		if _, err := tx.ExecContext(ctx, `UPDATE intelligence_check_settings SET revision=$1,config_json=$2,new_accounts_enabled=$3 WHERE id=1`, s.Revision, string(raw), s.NewAccountsEnabled); err != nil {
 			return err
 		}
-		if s.RulesOnly {
+		if s.RulesOnly || slices.ContainsFunc(s.Rules, func(r ic.Rule) bool { return r.NormalOnly }) {
 			if err := db.interruptIntelligenceOutsideScopeTx(ctx, tx, s.Retention, time.Now()); err != nil {
 				return err
 			}
@@ -421,11 +424,15 @@ func intelligencePage(offset, limit int) (int, int) {
 
 const intelligenceAccountColumns = `a.id,a.name,COALESCE(a.credential_generation,1), s.enabled,COALESCE(a.enabled,TRUE),a.status,s.status,s.quality_paused,s.manual_revision,s.next_due_ms,s.question_cursor,s.state_json,`
 
+func (db *DB) intelligenceAccountSelect() string {
+	return intelligenceAccountColumns + db.intelligenceChannelExpr() + db.intelligenceScopeColumns("a") + "," + db.intelligenceNormalAccountSQL("a")
+}
+
 func scanIntelligenceAccount(row interface{ Scan(...interface{}) error }) (IntelligenceCheckAccount, error) {
 	var a IntelligenceCheckAccount
 	var due int64
 	var raw, groups string
-	err := row.Scan(&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel, &a.Plan, &groups)
+	err := row.Scan(&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel, &a.Plan, &groups, &a.normalAccount)
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &a.State)
 	}
@@ -476,7 +483,7 @@ func (db *DB) ListIntelligenceCheckAccounts(ctx context.Context, f IntelligenceC
 	}
 	offset, limit := intelligencePage(f.Offset, f.Limit)
 	args = append(args, limit, offset)
-	rows, err := db.conn.QueryContext(ctx, `SELECT `+intelligenceAccountColumns+db.intelligenceChannelExpr()+db.intelligenceScopeColumns("a")+from+fmt.Sprintf(` ORDER BY a.id LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
+	rows, err := db.conn.QueryContext(ctx, `SELECT `+db.intelligenceAccountSelect()+from+fmt.Sprintf(` ORDER BY a.id LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -529,7 +536,7 @@ func (db *DB) intelligenceAccountTx(ctx context.Context, tx *sql.Tx, id int64) (
 }
 
 func (db *DB) intelligenceAccount(ctx context.Context, q intelligenceQueryRower, id int64, lock bool) (IntelligenceCheckAccount, error) {
-	query := `SELECT ` + intelligenceAccountColumns + db.intelligenceChannelExpr() + db.intelligenceScopeColumns("a") + ` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE a.id=$1 AND ` + db.intelligenceEligibleSQL()
+	query := `SELECT ` + db.intelligenceAccountSelect() + ` FROM accounts a JOIN intelligence_check_accounts s ON s.account_id=a.id WHERE a.id=$1 AND ` + db.intelligenceEligibleSQL()
 	if lock && !db.isSQLite() {
 		// Freeze persisted plan and credential generation through the state transition.
 		query += ` FOR NO KEY UPDATE OF a FOR UPDATE OF s`

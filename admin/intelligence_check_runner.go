@@ -111,6 +111,10 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 			result.Interrupted = true
 		}
 	}
+	if result.Error == "" && run.Source == "automatic" && run.RequireNormal && (account == nil || !account.IsAvailable()) {
+		result.Error = "账号当前不可调度，已跳过仅正常账号的自动检测"
+		result.Interrupted = true
+	}
 	if result.Error == "" {
 		result = h.executeIntelligenceCheck(ctx, account, run.Model, run.ReasoningEffort, run.Question.Prompt, run.RecordOnly)
 		if result.Error != "" && !result.Interrupted && !result.CredentialRejected {

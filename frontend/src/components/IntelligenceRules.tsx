@@ -62,6 +62,7 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
             <div className="min-w-0 flex-1 basis-44 [overflow-wrap:anywhere]">
               <h3 className="font-medium">{name}</h3>
               <p className="text-xs text-muted-foreground">{intelligenceChannels[rule.channel]}{rule.group_id ? ` · 分组：${groups.find(g => g.id === rule.group_id)?.name || `#${rule.group_id}`}` : ""}{rule.plan?.trim() ? ` · 套餐：${rule.plan.trim().toLowerCase()}` : ""} · {rule.automatic ? "允许自动检测" : "不参与新自动检测"}</p>
+              {rule.automatic && rule.normal_only && <p className="text-xs text-muted-foreground">仅检测正常账号</p>}
               <p className="mt-1 text-xs text-muted-foreground">{rule.action ? intelligenceActionOptions[rule.action] : "处置继承全局"}{rule.target_group_id ? ` → ${groups.find(g => g.id === rule.target_group_id)?.name || `#${rule.target_group_id}`}` : ""}</p>
             </div>
             <div className="flex gap-1">
@@ -81,6 +82,10 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
             <Field label="匹配分组"><Select aria-label="匹配分组" value={String(rule.group_id || "")} options={groupOptions(rule.group_id, "不限分组")} onValueChange={v => patch({ group_id: Number(v) || undefined })} /></Field>
             <Field label="匹配套餐码"><Input value={rule.plan ?? ""} placeholder="按套餐码精确匹配，如 plus" onChange={e => patch({ plan: e.target.value })} /></Field>
             <Field label="允许自动检测"><Switch aria-label="允许自动检测" checked={rule.automatic} onCheckedChange={automatic => patch({ automatic })} /></Field>
+            <Field label="仅检测正常账号">
+              <Switch aria-label="仅检测正常账号" checked={!!rule.normal_only} onCheckedChange={normal_only => patch({ normal_only })} />
+              <span className="text-xs text-muted-foreground">跳过异常或不可调度账号；不影响手动检测和已处置账号的恢复复检。</span>
+            </Field>
             <p className="col-span-full text-xs text-muted-foreground">以下参数留空时继承全局配置。</p>
             <Field label="检测模型"><Input value={rule.model ?? ""} placeholder="继承来源的检测模型" onChange={e => patch({ model: e.target.value })} /></Field>
             {rule.channel === "codex" && <Field label="推理强度"><Select aria-label="推理强度" value={rule.reasoning_effort ?? ""} options={[inherit, ...choices({ none: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max", ultra: "ultra" })]} onValueChange={v => patch({ reasoning_effort: v || undefined })} /></Field>}

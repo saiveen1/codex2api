@@ -184,6 +184,36 @@ func TestIntelligenceRunnerKeepsOtherUpstreamErrors(t *testing.T) {
 	}
 }
 
+func TestIntelligenceRunnerNormalOnlyRechecksRuntime(t *testing.T) {
+	f := newIntelligenceHoldFixture(t)
+	ctx := context.Background()
+	if err := f.db.UpdateCredentials(ctx, f.id, map[string]any{"plan_type": "team"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := f.db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Rules = []ic.Rule{{ID: "team", Name: "Team", Channel: "codex", Plan: "team", Automatic: true, NormalOnly: true}}
+	if _, err := f.db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if n, err := f.db.EnqueueDueIntelligenceChecks(ctx, now, 1); n != 1 || err != nil {
+		t.Fatal(n, err)
+	}
+	run, err := f.db.ClaimIntelligenceCheck(ctx, "worker", now, time.Minute)
+	if err != nil || run == nil || !run.RequireNormal {
+		t.Fatal(run, err)
+	}
+	atomic.StoreInt32(&f.account.DispatchPaused, 1)
+	f.h.runIntelligenceCheck(ctx, *run, f.account)
+	runs := f.runs()
+	if f.requests.Load() != 0 || len(runs) != 1 || runs[0].Status != "interrupted" || !strings.Contains(runs[0].Error, "不可调度") {
+		t.Fatalf("unexpected runs=%+v/outbound=%d", runs, f.requests.Load())
+	}
+}
+
 // An explicit manual check is still sent to a rate-limited account.
 func TestIntelligenceRunnerSendsManualCheckToRateLimitedAccount(t *testing.T) {
 	f := newIntelligenceHoldFixture(t)

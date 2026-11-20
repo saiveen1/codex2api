@@ -195,3 +195,76 @@ func TestIntelligenceCheckNarrowScopeClearsQueuedFallback(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+func TestIntelligenceCheckNormalOnlyRule(t *testing.T) {
+	db := intelligenceDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	bad, unauthorized, healthy := intelligenceAccount(t, db), intelligenceAccount(t, db), intelligenceAccount(t, db)
+	group, err := db.CreateAccountGroup(ctx, "team", "", "", 0, 0, sql.NullInt64{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{bad, unauthorized, healthy} {
+		if err := db.SetAccountGroups(ctx, id, []int64{group}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET status='error' WHERE id=$1`, bad); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetCooldown(ctx, unauthorized, "unauthorized", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Enabled = true
+	s.Rules = []ic.Rule{{ID: "team", Name: "Team", Channel: "codex", GroupID: group, Automatic: true, Action: "pause", DegradeThreshold: 1}}
+	s, err = db.SaveIntelligenceCheckSettings(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 2); n != 2 || err != nil {
+		t.Fatal(n, err)
+	}
+	s.Rules[0].NormalOnly = true
+	if _, err = db.SaveIntelligenceCheckSettings(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{bad, unauthorized} {
+		runs, _, err := db.ListIntelligenceCheckRuns(ctx, IntelligenceCheckRunFilter{AccountID: id})
+		if err != nil || len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].StartedAt != nil {
+			t.Fatal(runs, err)
+		}
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 1); n != 1 || err != nil {
+		t.Fatal(n, err)
+	}
+	run, err := db.ClaimIntelligenceCheck(ctx, "worker", now, time.Minute)
+	if err != nil || run == nil || run.AccountID != healthy || !run.RequireNormal {
+		t.Fatal(run, err)
+	}
+	if ok, err := db.FinishIntelligenceCheck(ctx, run.ID, "worker", ic.Observation{Complete: true, Output: "wrong"}, now.Add(time.Second)); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET status='error' WHERE id=$1`, healthy); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(10 * time.Minute)
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 1); n != 1 || err != nil {
+		t.Fatal(n, err)
+	}
+	run, err = db.ClaimIntelligenceCheck(ctx, "worker", now, time.Minute)
+	if err != nil || run == nil || run.AccountID != healthy || run.RequireNormal {
+		t.Fatal(run, err)
+	}
+	if _, err := db.EnqueueIntelligenceChecks(ctx, []int64{bad}, now); err != nil {
+		t.Fatal(err)
+	}
+	manual, err := db.ClaimIntelligenceCheck(ctx, "manual", now, time.Minute)
+	if err != nil || manual == nil || manual.AccountID != bad || manual.RequireNormal {
+		t.Fatal(manual, err)
+	}
+}

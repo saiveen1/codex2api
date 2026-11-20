@@ -467,6 +467,7 @@ test('rules require a matcher and a same-source target, then save priority and o
  await rules.getByLabel('规则名称').fill('套餐规则')
  await rules.getByLabel('匹配套餐码').fill(' PLUS ')
  await rules.getByRole('switch',{name:'允许自动检测',exact:true}).click()
+ await rules.getByRole('switch',{name:'仅检测正常账号',exact:true}).click()
  await selectOption(page,'处置策略','禁用业务调度并转移分组',rules)
  await rules.getByText('转移分组需要选择目标分组。',{exact:true}).waitFor()
  await selectOption(page,'规则目标分组','隔离分组 #1',rules)
@@ -483,7 +484,7 @@ test('rules require a matcher and a same-source target, then save priority and o
  const saved = JSON.parse(await page.evaluate(() => JSON.stringify(window.__config.rules)))
  assert.deepEqual(saved.map(({id,...rule})=>rule),[
   {name:'组合规则',channel:'codex',automatic:true,group_id:1,plan:'pro'},
-  {name:'套餐规则',channel:'codex',automatic:false,plan:'plus',action:'pause_and_switch_group',target_group_id:1,question_ids:['candy'],timeout_seconds:90},
+  {name:'套餐规则',channel:'codex',automatic:false,normal_only:true,plan:'plus',action:'pause_and_switch_group',target_group_id:1,question_ids:['candy'],timeout_seconds:90},
  ])
  await rules.getByRole('button',{name:'删除 组合规则'}).click()
  await page.getByRole('button',{name:'保存配置',exact:true}).click()

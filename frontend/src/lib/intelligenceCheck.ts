@@ -23,6 +23,7 @@ export interface IntelligenceRule {
   name: string;
   channel: IntelligenceChannel;
   automatic: boolean;
+  normal_only?: boolean;
   group_id?: number;
   plan?: string;
   model?: string;

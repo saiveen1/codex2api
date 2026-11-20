@@ -33,7 +33,18 @@ func (a IntelligenceCheckAccount) resolve(s ic.Settings) (ic.Settings, ic.Rule) 
 }
 
 func intelligenceRuleAllowsAutomatic(s ic.Settings, a IntelligenceCheckAccount, r ic.Rule) bool {
-	return a.OwnedAction != "" || r.Automatic || (!s.RulesOnly && r.ID == "")
+	return a.OwnedAction != "" || (r.Automatic && (!r.NormalOnly || a.normalAccount)) || (!s.RulesOnly && r.ID == "")
+}
+
+// Keep hard account failures out of the queue; the runner also checks live
+// dispatch state, including quota and credential availability, before sending.
+func (db *DB) intelligenceNormalAccountSQL(account string) string {
+	until := account + `.cooldown_until`
+	expired := until + `<=CURRENT_TIMESTAMP`
+	if db.isSQLite() {
+		expired = `julianday(` + until + `)<=julianday('now')`
+	}
+	return `(` + account + `.status='active' AND (COALESCE(` + account + `.cooldown_reason,'') NOT IN ('unauthorized','overload_paused') OR COALESCE(` + expired + `,FALSE)))`
 }
 
 func (db *DB) intelligencePlanSQL(account string) string {
@@ -91,7 +102,8 @@ func (db *DB) intelligenceRuleSQL(account, state, config string) string {
 func (db *DB) intelligenceRuleAutomaticSQL(account, state, config string) string {
 	rule := db.intelligenceRuleSQL(account, state, config)
 	baseAllowed := `NOT COALESCE(` + db.intelligenceFieldSQL(config+`.config_json`, "rules_only", "boolean") + `,FALSE)`
-	return `(COALESCE(` + db.intelligenceFieldSQL(rule, "automatic", "boolean") + `,` + baseAllowed + `) OR COALESCE(` + db.intelligenceStateActionExpr(state) + `,'')<>'')`
+	normalOnly := `COALESCE(` + db.intelligenceFieldSQL(rule, "normal_only", "boolean") + `,FALSE)`
+	return `((COALESCE(` + db.intelligenceFieldSQL(rule, "automatic", "boolean") + `,` + baseAllowed + `) AND (NOT ` + normalOnly + ` OR ` + db.intelligenceNormalAccountSQL(account) + `)) OR COALESCE(` + db.intelligenceStateActionExpr(state) + `,'')<>'')`
 }
 
 func (db *DB) validateIntelligenceRules(ctx context.Context, q intelligenceQueryRower, s ic.Settings) error {
