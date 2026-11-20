@@ -95,7 +95,9 @@ func (s *Store) setClaudePlanType(ctx context.Context, acc *Account, plan string
 	}
 	acc.mu.Lock()
 	acc.PlanType = plan
+	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
+	s.invalidateRoutingSchedulers()
 	s.fastSchedulerUpdate(acc)
 	return nil
 }

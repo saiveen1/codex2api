@@ -207,7 +207,9 @@ func (s *Store) refreshClaudeAccount(ctx context.Context, acc *Account, forceRef
 	if strings.TrimSpace(td.AccountUUID) != "" {
 		acc.AccountID = td.AccountUUID
 	}
-	if plan := strings.TrimSpace(td.PlanType); plan != "" {
+	plan := strings.TrimSpace(td.PlanType)
+	planChanged := plan != "" && acc.PlanType != plan
+	if planChanged {
 		acc.PlanType = plan
 	}
 	unauthorized := strings.EqualFold(strings.TrimSpace(acc.CooldownReason), "unauthorized")
@@ -224,6 +226,9 @@ func (s *Store) refreshClaudeAccount(ctx context.Context, acc *Account, forceRef
 	acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	acc.mu.Unlock()
 
+	if planChanged {
+		s.invalidateRoutingSchedulers()
+	}
 	s.fastSchedulerUpdate(acc)
 	if !preserveCooldown && s.db != nil {
 		_ = s.db.ClearError(ctx, dbID)

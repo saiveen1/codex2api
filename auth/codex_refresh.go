@@ -202,6 +202,7 @@ func (s *Store) refreshCodexAccount(ctx context.Context, acc *Account, force boo
 	} else {
 		applyCodexCredentialValues(acc, updates, generation)
 		s.finishCodexRefresh(ctx, acc, warning)
+		s.invalidateRoutingSchedulers()
 		return nil
 	}
 	// Reload durable values rather than publishing a stale response over a

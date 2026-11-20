@@ -9,7 +9,8 @@ import CodexClientVersionsPanel from '../components/CodexClientVersionsPanel'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useToast } from '../hooks/useToast'
-import type { AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexClientVersionSyncResult, CodexClientVersionTarget, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, KiroSettings, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
+import type { AccountDefaultsSettings, AccountDefaultsSettingsResponse, AntigravityOAuthClientSetting, AntigravitySettingsResponse, ChannelTestSettings, CodexClientVersionSyncResult, CodexClientVersionTarget, CodexUserAgentCatalog, CodexUserAgentPreview, HealthResponse, KiroSettings, ModelInfo, SiteBranding, SystemSettings, UpstreamChannel } from '../types'
+import { isValidTimezone } from '../lib/displayTimezone'
 import { ANTIGRAVITY_DEFAULT_MODELS, isAntigravityDisabledModel } from '../lib/antigravityModels'
 import { countPayloadRules, PAYLOAD_RULE_GROUPS } from './PayloadRules'
 import { getErrorMessage } from '../utils/error'
@@ -2404,6 +2405,228 @@ const VISIBLE_CHANNEL_LABELS: Record<UpstreamChannel, string> = {
   antigravity: 'Antigravity',
   grok: 'Grok',
   kiro: 'Kiro',
+}
+
+const CODEX_ACCOUNT_DEFAULT_PLANS = new Map([
+  ['free', 'Free'], ['plus', 'Plus'], ['pro', 'Pro'], ['prolite', 'ProLite'], ['promax', 'ProMax'],
+  ['team', 'Team'], ['team5x', 'Team 5x'], ['business', 'Business'],
+  ['enterprise', 'Enterprise'], ['edu', 'Edu'], ['k12', 'K12'],
+])
+
+const ACCOUNT_DEFAULT_PLATFORM_OPTIONS = ALL_VISIBLE_CHANNEL_OPTIONS.map((value) => ({ value, label: VISIBLE_CHANNEL_LABELS[value] }))
+
+type AccountDefaultRuleDraft = {
+  id: number
+  channel: string
+  plan: string
+  concurrency: string
+  customPlan?: boolean
+}
+
+type AccountDefaultsDraft = Omit<AccountDefaultsSettingsResponse, 'concurrency_rules'> & {
+  concurrency_rules: AccountDefaultRuleDraft[]
+}
+
+function toAccountDefaultsDraft(response: AccountDefaultsSettingsResponse): AccountDefaultsDraft {
+  return {
+    ...response,
+    concurrency_rules: (response.concurrency_rules ?? []).map((rule, id) => ({ ...rule, id, concurrency: String(rule.concurrency) })),
+  }
+}
+
+async function loadAccountDefaultsDraft() {
+  return toAccountDefaultsDraft(await api.getAccountDefaults())
+}
+
+function accountDefaultPlanOptions(channel: string, runtimePlans: string[], currentPlan: string) {
+  const knownPlans = channel === 'codex' ? CODEX_ACCOUNT_DEFAULT_PLANS : undefined
+  return Array.from(new Set([...knownPlans?.keys() ?? [], ...runtimePlans, currentPlan]))
+    .filter(Boolean)
+    .map((plan) => ({ value: `plan:${plan}`, label: knownPlans?.get(plan) ?? plan }))
+}
+
+function accountDefaultsPayload(draft: AccountDefaultsDraft) {
+  const default_timezone = draft.default_timezone.trim()
+  if (default_timezone && (/^[+-]/.test(default_timezone) || !isValidTimezone(default_timezone))) {
+    return { error: 'invalidTimezone' } as const
+  }
+  const seen = new Set<string>()
+  const concurrency_rules: AccountDefaultsSettings['concurrency_rules'] = []
+  for (const [i, rule] of draft.concurrency_rules.entries()) {
+    const { channel } = rule
+    const plan = rule.plan.trim()
+    const concurrency = Number(rule.concurrency)
+    const row = i + 1
+    if (!ACCOUNT_DEFAULT_PLATFORM_OPTIONS.some(({ value }) => value === channel) || !plan || !Number.isSafeInteger(concurrency) || concurrency < 1) {
+      return { error: 'invalidRule', row } as const
+    }
+    const key = `${channel}/${plan.toLowerCase()}`
+    if (seen.has(key)) return { error: 'duplicateRule', row } as const
+    seen.add(key)
+    concurrency_rules.push({ channel, plan, concurrency })
+  }
+  return { payload: { concurrency_rules, default_timezone, use_fixed_proxy_timezone: draft.use_fixed_proxy_timezone } }
+}
+
+function AccountDefaultsCard() {
+  const { t } = useTranslation()
+  const { showToast } = useToast()
+  const { data: draft, setData, loading, error, reload } = useDataLoader<AccountDefaultsDraft | null>({ initialData: null, load: loadAccountDefaultsDraft })
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const timezoneOrder = t('settings.accountDefaults.timezoneOrder')
+
+  const edit = (update: (current: AccountDefaultsDraft) => AccountDefaultsDraft) => {
+    if (saving) return
+    setSaveError('')
+    setData((current) => current && update(current))
+  }
+  const editRules = (update: (rules: AccountDefaultRuleDraft[]) => AccountDefaultRuleDraft[]) => {
+    edit((current) => ({ ...current, concurrency_rules: update(current.concurrency_rules) }))
+  }
+  const editRule = (id: number, patch: Partial<AccountDefaultRuleDraft>) => {
+    editRules((rules) => rules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule))
+  }
+
+  const save = async () => {
+    if (!draft || saving) return
+    const result = accountDefaultsPayload(draft)
+    if (!result.payload) {
+      setSaveError(t(`settings.accountDefaults.${result.error}`, { row: result.row }))
+      return
+    }
+    setSaving(true)
+    setSaveError('')
+    try {
+      setData(toAccountDefaultsDraft(await api.updateAccountDefaults(result.payload)))
+      showToast(t('settings.accountDefaults.saved'), 'success')
+    } catch (err) {
+      const message = t('settings.accountDefaults.saveFailed', { error: getErrorMessage(err) })
+      setSaveError(message)
+      showToast(message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <SettingsCard
+      title={t('settings.accountDefaults.title')}
+      description={t('settings.accountDefaults.description')}
+      icon={<Users className="size-4" />}
+      channels={ALL_UPSTREAM_CHANNELS}
+      footer={draft ? (
+        <div className="space-y-2">
+          {saveError && <p role="alert" className="break-words text-xs text-destructive">{saveError}</p>}
+          <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
+            {saving ? t('common.saving') : t('common.save')}
+          </Button>
+        </div>
+      ) : undefined}
+    >
+      {loading ? (
+        <p role="status" className="text-xs text-muted-foreground">{t('common.loading')}</p>
+      ) : error ? (
+        <div className="space-y-2">
+          <p role="alert" className="break-words text-xs text-destructive">{t('settings.accountDefaults.loadFailed', { error })}</p>
+          <Button type="button" size="sm" variant="outline" onClick={() => void reload()}>{t('common.retry')}</Button>
+        </div>
+      ) : draft ? (
+        <div className="space-y-3" aria-busy={saving}>
+          {draft.concurrency_rules.map((rule, i) => {
+            const planOptions = accountDefaultPlanOptions(rule.channel, draft.plan_choices?.[rule.channel] ?? [], rule.customPlan ? '' : rule.plan)
+            return (
+              <div key={rule.id} role="group" aria-label={t('settings.accountDefaults.rule', { row: i + 1 })} className="grid items-start gap-2 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,8rem)_auto]">
+                <SettingField label={t('settings.accountDefaults.platform')}>
+                  <Select
+                    aria-label={t('settings.accountDefaults.platform')}
+                    value={rule.channel}
+                    options={ACCOUNT_DEFAULT_PLATFORM_OPTIONS}
+                    disabled={saving}
+                    onValueChange={(channel) => { if (channel !== rule.channel) editRule(rule.id, { channel, plan: '', customPlan: false }) }}
+                  />
+                </SettingField>
+                <SettingField label={t('settings.accountDefaults.plan')}>
+                  <div className="space-y-2">
+                    <Select
+                      aria-label={t('settings.accountDefaults.plan')}
+                      placeholder={t('settings.accountDefaults.choosePlan')}
+                      value={rule.customPlan ? 'custom' : `plan:${rule.plan}`}
+                      options={[...planOptions, { value: 'custom', label: t('settings.accountDefaults.exactPlan') }]}
+                      disabled={saving}
+                      onValueChange={(value) => value === 'custom'
+                        ? editRule(rule.id, { customPlan: true })
+                        : editRule(rule.id, { plan: value.slice('plan:'.length), customPlan: false })}
+                    />
+                    {rule.customPlan && (
+                      <Input
+                        aria-label={t('settings.accountDefaults.exactPlan')}
+                        placeholder={t('settings.accountDefaults.exactPlan')}
+                        value={rule.plan}
+                        disabled={saving}
+                        onChange={(event) => editRule(rule.id, { plan: event.target.value })}
+                      />
+                    )}
+                  </div>
+                </SettingField>
+                <SettingField label={t('settings.accountDefaults.concurrency')}>
+                  <Input
+                    aria-label={t('settings.accountDefaults.concurrency')}
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="50"
+                    value={rule.concurrency}
+                    disabled={saving}
+                    onChange={(event) => editRule(rule.id, { concurrency: event.target.value })}
+                  />
+                </SettingField>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="justify-self-end sm:mt-[26px]"
+                  title={t('settings.accountDefaults.removeRule', { row: i + 1 })}
+                  aria-label={t('settings.accountDefaults.removeRule', { row: i + 1 })}
+                  disabled={saving}
+                  onClick={() => editRules((rules) => rules.filter(({ id }) => id !== rule.id))}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+            )
+          })}
+          <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => editRules((rules) => [
+            ...rules,
+            { id: (rules[rules.length - 1]?.id ?? -1) + 1, channel: 'codex', plan: '', concurrency: '' },
+          ])}>
+            <Plus className="size-4" aria-hidden="true" />{t('settings.accountDefaults.addRule')}
+          </Button>
+          <div className="grid gap-3 border-t border-border/60 pt-3 sm:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)]">
+            <SettingField label={t('settings.accountDefaults.timezone')} description={t('settings.accountDefaults.timezoneHint')}>
+              <Input
+                aria-label={t('settings.accountDefaults.timezone')}
+                aria-description={t('settings.accountDefaults.timezoneHint')}
+                placeholder="Asia/Shanghai"
+                value={draft.default_timezone}
+                disabled={saving}
+                onChange={(event) => edit((current) => ({ ...current, default_timezone: event.target.value }))}
+              />
+            </SettingField>
+            <SettingField label={t('settings.accountDefaults.fixedProxyTimezone')} description={timezoneOrder} layout="row">
+              <Switch
+                aria-label={t('settings.accountDefaults.fixedProxyTimezone')}
+                aria-description={timezoneOrder}
+                checked={draft.use_fixed_proxy_timezone}
+                disabled={saving}
+                onCheckedChange={(checked) => edit((current) => ({ ...current, use_fixed_proxy_timezone: checked }))}
+              />
+            </SettingField>
+          </div>
+        </div>
+      ) : null}
+    </SettingsCard>
+  )
 }
 
 // 供应商显示选择器：一排可多选的胶囊，点一下即保存；兜底渠道锁定在选中态。
@@ -6062,6 +6285,8 @@ export default function Settings() {
                     </SettingField>
                   </div>
                 </SettingsCard>
+
+                <AccountDefaultsCard />
 
                   <SettingsCard
                     title={t('settings.continuousRetryTitle')}

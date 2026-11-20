@@ -487,12 +487,12 @@ func TestProbeProxyIPv4SuccessDoesNotFallback(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","query":"1.2.3.4","country":"US","regionName":"CA","city":"LA","isp":"Example"}`))
+		_, _ = w.Write([]byte(`{"status":"success","query":"1.2.3.4","country":"US","regionName":"CA","city":"LA","isp":"Example","timezone":"America/Los_Angeles"}`))
 	}))
 	t.Cleanup(proxyServer.Close)
 
 	result := probeProxy(context.Background(), proxyServer.URL, "en")
-	if !result.Success || result.IP != "1.2.3.4" || result.Location != "US·CA·LA" {
+	if !result.Success || result.IP != "1.2.3.4" || result.Location != "US·CA·LA" || result.Timezone != "America/Los_Angeles" {
 		t.Fatalf("probe result = %#v, want IPv4 success", result)
 	}
 	if otherHits.Load() != 0 {
@@ -511,11 +511,11 @@ func TestProbeProxyFallsBackToIPv6Echo(t *testing.T) {
 	oldEcho := proxyProbeIPv6EchoURLsFn
 	oldGeo := proxyProbeLookupGeoFn
 	proxyProbeIPv6EchoURLsFn = func() []string { return []string{echoURL} }
-	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string) {
+	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string, string) {
 		if ip != "2605:1234:5678::1" || lang != "zh-CN" {
 			t.Fatalf("geo lookup ip=%q lang=%q", ip, lang)
 		}
-		return "美国", "新泽西", "纽瓦克", "Example ISP"
+		return "美国", "新泽西", "纽瓦克", "Example ISP", "America/New_York"
 	}
 	t.Cleanup(func() {
 		proxyProbeIPv6EchoURLsFn = oldEcho
@@ -543,7 +543,7 @@ func TestProbeProxyFallsBackToIPv6Echo(t *testing.T) {
 	if !result.Success || !result.Conclusive || result.IP != "2605:1234:5678::1" {
 		t.Fatalf("probe result = %#v, want IPv6 fallback success", result)
 	}
-	if result.Location != "美国·新泽西·纽瓦克" || result.ISP != "Example ISP" {
+	if result.Location != "美国·新泽西·纽瓦克" || result.ISP != "Example ISP" || result.Timezone != "America/New_York" {
 		t.Fatalf("probe result = %#v, want gateway geo fields", result)
 	}
 }
@@ -559,11 +559,11 @@ func TestProbeProxyHTTPBadGatewayFallsBackToIPv6Echo(t *testing.T) {
 	oldEcho := proxyProbeIPv6EchoURLsFn
 	oldGeo := proxyProbeLookupGeoFn
 	proxyProbeIPv6EchoURLsFn = func() []string { return []string{echoURL} }
-	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string) {
+	proxyProbeLookupGeoFn = func(_ context.Context, ip, lang string) (string, string, string, string, string) {
 		if ip != "2605:1234:5678::1" || lang != "zh-CN" {
 			t.Fatalf("geo lookup ip=%q lang=%q", ip, lang)
 		}
-		return "美国", "加利福尼亚", "圣何塞", "Oracle Corporation"
+		return "美国", "加利福尼亚", "圣何塞", "Oracle Corporation", "America/Los_Angeles"
 	}
 	t.Cleanup(func() {
 		proxyProbeIPv6EchoURLsFn = oldEcho

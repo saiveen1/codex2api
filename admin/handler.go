@@ -1357,6 +1357,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.PUT("/settings/visible-channels", h.UpdateVisibleChannelsSettings)
 	api.GET("/settings/channel-tests", h.GetChannelTestSettings)
 	api.PUT("/settings/channel-tests", h.UpdateChannelTestSettings)
+	api.GET("/settings/account-defaults", h.GetAccountDefaults)
+	api.PUT("/settings/account-defaults", h.UpdateAccountDefaults)
 	api.GET("/settings/antigravity", h.GetAntigravitySettings)
 	api.PUT("/settings/antigravity", h.UpdateAntigravitySettings)
 	api.GET("/settings/kiro", h.GetKiroSettings)
@@ -13848,13 +13850,13 @@ func (h *Handler) CleanErrorProxies(c *gin.Context) {
 	})
 }
 
-func (h *Handler) persistProxyTestResult(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int) error {
+func (h *Handler) persistProxyTestResult(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int, timezone string) error {
 	if id <= 0 {
 		return nil
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err := h.db.UpdateProxyTestResult(saveCtx, id, expectedURL, status, ip, location, latencyMs); err != nil {
+	if err := h.db.UpdateProxyTestResultWithTimezone(saveCtx, id, expectedURL, status, ip, location, latencyMs, timezone); err != nil {
 		return err
 	}
 	if status == database.ProxyTestStatusError {
@@ -13930,6 +13932,7 @@ func (h *Handler) TestProxy(c *gin.Context) {
 			result.IP,
 			result.Location,
 			result.LatencyMs,
+			result.Timezone,
 		); err != nil {
 			respondProxyTestSaveError(c, err, result.Error)
 			return

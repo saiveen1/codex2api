@@ -26,7 +26,7 @@ const (
 	proxyBatchTestMaxIDs      = 100
 	proxyBatchTestMaxBody     = 64 << 10
 	proxyProbeMaxBody         = 1 << 20
-	proxyProbeIPAPIFields     = "status,message,country,regionName,city,isp,query"
+	proxyProbeIPAPIFields     = "status,message,country,regionName,city,isp,query,timezone"
 )
 
 var (
@@ -44,6 +44,7 @@ type proxyProbeResult struct {
 	Region     string `json:"region,omitempty"`
 	City       string `json:"city,omitempty"`
 	ISP        string `json:"isp,omitempty"`
+	Timezone   string `json:"timezone,omitempty"`
 	LatencyMs  int    `json:"latency_ms,omitempty"`
 	Location   string `json:"location,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -171,11 +172,12 @@ func probeProxyWithTimeout(
 		return primary
 	}
 
-	country, region, city, isp := proxyProbeLookupGeoFn(ctx, ipv6Result.IP, lang)
+	country, region, city, isp, timezone := proxyProbeLookupGeoFn(ctx, ipv6Result.IP, lang)
 	ipv6Result.Country = country
 	ipv6Result.Region = region
 	ipv6Result.City = city
 	ipv6Result.ISP = isp
+	ipv6Result.Timezone = timezone
 	ipv6Result.Location = joinProxyProbeLocation(country, region, city)
 	return ipv6Result
 }
@@ -294,6 +296,7 @@ func parseIPAPIProbeBody(body []byte, latencyMs int) proxyProbeResult {
 		Region:     region,
 		City:       city,
 		ISP:        isp,
+		Timezone:   auth.NormalizeAccountTimezone(result.Get("timezone").String()),
 		LatencyMs:  latencyMs,
 		Location:   joinProxyProbeLocation(country, region, city),
 	}
@@ -397,17 +400,17 @@ func proxyProbeErrorLooksLikeTargetUnreachable(message string) bool {
 	return false
 }
 
-func lookupProxyExitGeo(ctx context.Context, ip, lang string) (country, region, city, isp string) {
+func lookupProxyExitGeo(ctx context.Context, ip, lang string) (country, region, city, isp, timezone string) {
 	if net.ParseIP(ip) == nil {
-		return "", "", "", ""
+		return "", "", "", "", ""
 	}
-	if country, region, city, isp, ok := fetchIPAPIGeo(ctx, ip, lang); ok {
-		return country, region, city, isp
+	if country, region, city, isp, timezone, ok := fetchIPAPIGeo(ctx, ip, lang); ok {
+		return country, region, city, isp, timezone
 	}
 	return fetchIPWhoisGeo(ctx, ip)
 }
 
-func fetchIPAPIGeo(ctx context.Context, ip, lang string) (country, region, city, isp string, ok bool) {
+func fetchIPAPIGeo(ctx context.Context, ip, lang string) (country, region, city, isp, timezone string, ok bool) {
 	probeURL := fmt.Sprintf(
 		"http://ip-api.com/json/%s?lang=%s&fields=%s",
 		url.PathEscape(ip),
@@ -416,27 +419,28 @@ func fetchIPAPIGeo(ctx context.Context, ip, lang string) (country, region, city,
 	)
 	body, err := fetchProxyProbeGeoBody(ctx, probeURL)
 	if err != nil || !gjson.ValidBytes(body) {
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	result := gjson.ParseBytes(body)
 	if result.Get("status").String() != "success" {
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	country, region, city, isp = parseIPAPIGeoFields(result)
-	return country, region, city, isp, true
+	return country, region, city, isp, auth.NormalizeAccountTimezone(result.Get("timezone").String()), true
 }
 
-func fetchIPWhoisGeo(ctx context.Context, ip string) (country, region, city, isp string) {
+func fetchIPWhoisGeo(ctx context.Context, ip string) (country, region, city, isp, timezone string) {
 	probeURL := "https://ipwho.is/" + url.PathEscape(ip)
 	body, err := fetchProxyProbeGeoBody(ctx, probeURL)
 	if err != nil || !gjson.ValidBytes(body) {
-		return "", "", "", ""
+		return "", "", "", "", ""
 	}
 	result := gjson.ParseBytes(body)
 	if !result.Get("success").Bool() {
-		return "", "", "", ""
+		return "", "", "", "", ""
 	}
-	return parseIPWhoisGeoFields(result)
+	country, region, city, isp = parseIPWhoisGeoFields(result)
+	return country, region, city, isp, auth.NormalizeAccountTimezone(result.Get("timezone.id").String())
 }
 
 func fetchProxyProbeGeoBody(ctx context.Context, probeURL string) ([]byte, error) {
@@ -523,7 +527,7 @@ func (h *Handler) saveProxyTestResult(ctx context.Context, id int64, expectedURL
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err := h.db.UpdateProxyTestResult(
+	if err := h.db.UpdateProxyTestResultWithTimezone(
 		saveCtx,
 		id,
 		expectedURL,
@@ -531,6 +535,7 @@ func (h *Handler) saveProxyTestResult(ctx context.Context, id int64, expectedURL
 		result.IP,
 		result.Location,
 		result.LatencyMs,
+		result.Timezone,
 	); err != nil {
 		return err
 	}

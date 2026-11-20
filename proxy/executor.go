@@ -572,7 +572,7 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	headers = PrepareCodexFingerprintHeaders(account, headers, requestBody)
 	requestBody = ApplyCodexFingerprintToBody(requestBody, account, headers)
 	// 账号绑定时区：改写 environment_context 的时区/日期，与指纹收敛一样在分叉前统一处理。
-	requestBody = ApplyCodexTimezoneToBody(requestBody, account, time.Now())
+	requestBody = ApplyCodexTimezoneToBody(requestBody, account, time.Now(), proxyOverride)
 	// Codex multi-agent v2 兼容层：仅在调用方显式安装状态、部署方开启开关、
 	// 且下游确实是 Codex 客户端时改写 collaboration 工具 schema。冲突、无效
 	// JSON 或结构超限的请求保持原生路径，绝不猜测任务正文。
@@ -1170,7 +1170,7 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 	// 与下方 applyCodexRequestHeaders 取同一份下游头，两处推导结果才一致。
 	headers = PrepareCodexFingerprintHeaders(account, headers, requestBody)
 	requestBody = ApplyCodexFingerprintToBody(requestBody, account, headers)
-	requestBody = ApplyCodexTimezoneToBody(requestBody, account, time.Now())
+	requestBody = ApplyCodexTimezoneToBody(requestBody, account, time.Now(), proxyURL)
 	existingCacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
 	cacheKey := existingCacheKey
 	if sessionID != "" {

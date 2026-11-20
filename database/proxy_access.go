@@ -16,7 +16,7 @@ var (
 	ErrProxyAccessDenied   = errors.New("proxy is exclusive to other accounts")
 )
 
-const proxySelectColumns = `id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), exclusive, allowed_account_ids`
+const proxySelectColumns = `id, url, label, enabled, created_at, COALESCE(test_ip,''), COALESCE(test_location,''), COALESCE(test_timezone,''), COALESCE(test_latency_ms,0), COALESCE(test_status,'untested'), exclusive, allowed_account_ids`
 
 type proxyAccessScanner interface {
 	Scan(...any) error
@@ -26,7 +26,7 @@ func scanProxyAccessRow(scanner proxyAccessScanner) (*ProxyRow, error) {
 	p := &ProxyRow{AllowedAccountIDs: []int64{}}
 	var createdAt any
 	var allowed string
-	if err := scanner.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAt, &p.TestIP, &p.TestLocation, &p.TestLatencyMs, &p.TestStatus, &p.Exclusive, &allowed); err != nil {
+	if err := scanner.Scan(&p.ID, &p.URL, &p.Label, &p.Enabled, &createdAt, &p.TestIP, &p.TestLocation, &p.TestTimezone, &p.TestLatencyMs, &p.TestStatus, &p.Exclusive, &allowed); err != nil {
 		return nil, err
 	}
 	var err error

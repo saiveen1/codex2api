@@ -1379,6 +1379,7 @@ func (db *DB) migrate(ctx context.Context) error {
 				invite_guide_config TEXT DEFAULT '{}',
 				visible_channels_config TEXT DEFAULT '{}',
 				channel_test_config TEXT DEFAULT '{}',
+				account_defaults_config TEXT DEFAULT '{}',
 				antigravity_config TEXT DEFAULT '{}',
 				kiro_config TEXT DEFAULT '{}',
 				max_concurrency    INT DEFAULT 2,
@@ -1456,6 +1457,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS invite_guide_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS visible_channels_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS channel_test_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS account_defaults_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS antigravity_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS kiro_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
@@ -1735,6 +1737,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	);
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_ip VARCHAR(100) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_location VARCHAR(255) DEFAULT '';
+	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_timezone TEXT DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_latency_ms INT DEFAULT 0;
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_status VARCHAR(20) NOT NULL DEFAULT 'untested';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS exclusive BOOLEAN NOT NULL DEFAULT FALSE;
@@ -3722,6 +3725,7 @@ type ProxyRow struct {
 	CreatedAt         time.Time `json:"created_at"`
 	TestIP            string    `json:"test_ip"`
 	TestLocation      string    `json:"test_location"`
+	TestTimezone      string    `json:"test_timezone,omitempty"`
 	TestLatencyMs     int       `json:"test_latency_ms"`
 	TestStatus        string    `json:"test_status"`
 	// BoundCount 是绑定到该代理的账号数,由列表接口按 proxy_url 聚合填充,
@@ -3987,6 +3991,7 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 			fmt.Sprintf("test_status = CASE WHEN url <> %s THEN 'untested' ELSE test_status END", urlPlaceholder),
 			fmt.Sprintf("test_ip = CASE WHEN url <> %s THEN '' ELSE test_ip END", urlPlaceholder),
 			fmt.Sprintf("test_location = CASE WHEN url <> %s THEN '' ELSE test_location END", urlPlaceholder),
+			fmt.Sprintf("test_timezone = CASE WHEN url <> %s THEN '' ELSE test_timezone END", urlPlaceholder),
 			fmt.Sprintf("test_latency_ms = CASE WHEN url <> %s THEN 0 ELSE test_latency_ms END", urlPlaceholder),
 			fmt.Sprintf("url = %s", urlPlaceholder),
 		)
@@ -4017,6 +4022,10 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 
 // UpdateProxyTestResult 仅在代理 URL 与测试目标仍一致时更新测试结果。
 func (db *DB) UpdateProxyTestResult(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int) error {
+	return db.UpdateProxyTestResultWithTimezone(ctx, id, expectedURL, status, ip, location, latencyMs, "")
+}
+
+func (db *DB) UpdateProxyTestResultWithTimezone(ctx context.Context, id int64, expectedURL, status, ip, location string, latencyMs int, timezone string) error {
 	switch status {
 	case ProxyTestStatusUntested, ProxyTestStatusSuccess, ProxyTestStatusError:
 	default:
@@ -4025,11 +4034,13 @@ func (db *DB) UpdateProxyTestResult(ctx context.Context, id int64, expectedURL, 
 	if status != ProxyTestStatusSuccess {
 		ip = ""
 		location = ""
+		timezone = ""
 		latencyMs = 0
 	}
 	res, err := db.conn.ExecContext(ctx,
-		`UPDATE proxies SET test_status = $1, test_ip = $2, test_location = $3, test_latency_ms = $4 WHERE id = $5 AND url = $6`,
-		status, ip, location, latencyMs, id, expectedURL)
+		`UPDATE proxies SET test_status = $1, test_ip = $2, test_location = $3, test_latency_ms = $4,
+		 test_timezone = CASE WHEN $1 = 'success' AND $7 = '' AND test_ip = $2 THEN test_timezone ELSE $7 END
+		 WHERE id = $5 AND url = $6`, status, ip, location, latencyMs, id, expectedURL, timezone)
 	if err != nil {
 		return err
 	}

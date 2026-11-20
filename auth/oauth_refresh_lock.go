@@ -399,8 +399,11 @@ func (s *Store) reloadOAuthCredentialsAfterLock(
 	if email := strings.TrimSpace(row.GetCredential("email")); email != "" {
 		acc.Email = email
 	}
-	if planType := strings.TrimSpace(row.GetCredential("plan_type")); planType != "" {
+	planType := strings.TrimSpace(row.GetCredential("plan_type"))
+	planChanged := planType != "" && acc.PlanType != planType
+	if planChanged {
 		acc.PlanType = planType
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	// Kiro 的 client 注册（IdC client_id / secret、token 端点）随 RT 一起换发，必须与库里的 RT 同步。
 	if acc.isKiroLocked() {
@@ -409,6 +412,10 @@ func (s *Store) reloadOAuthCredentialsAfterLock(
 	effectiveAccessToken := acc.AccessToken
 	effectiveExpiresAt := acc.ExpiresAt
 	acc.mu.Unlock()
+	if planChanged {
+		s.invalidateRoutingSchedulers()
+		s.fastSchedulerUpdate(acc)
+	}
 
 	usable = effectiveAccessToken != "" &&
 		(effectiveExpiresAt.IsZero() || time.Until(effectiveExpiresAt) > 5*time.Minute)

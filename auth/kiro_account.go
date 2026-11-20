@@ -443,17 +443,25 @@ func (s *Store) ApplyKiroAccountRow(row *database.AccountRow) bool {
 		return false
 	}
 	acc.mu.Lock()
-	defer acc.mu.Unlock()
 	if !acc.isKiroLocked() {
+		acc.mu.Unlock()
 		return false
 	}
 	metadata := KiroCredentialFromRow(row)
 	acc.Kiro.UsageResetAt = metadata.UsageResetAt
 	acc.Kiro.ImageModels = metadata.ImageModels
-	if plan := strings.TrimSpace(row.GetCredential("plan_type")); plan != "" {
+	plan := strings.TrimSpace(row.GetCredential("plan_type"))
+	planChanged := plan != "" && acc.PlanType != plan
+	if planChanged {
 		acc.PlanType = plan
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	}
 	acc.Models = normalizeModelList(row.GetCredentialStringSlice("models"))
+	acc.mu.Unlock()
+	if planChanged {
+		s.invalidateRoutingSchedulers()
+		s.fastSchedulerUpdate(acc)
+	}
 	return true
 }
 

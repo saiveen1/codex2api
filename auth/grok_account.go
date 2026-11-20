@@ -1608,9 +1608,16 @@ func (s *Store) reloadGrokCredentialsAfterFamilyLease(ctx context.Context, acc *
 		previousPlanType != acc.PlanType ||
 		!previousExpiresAt.Equal(acc.ExpiresAt)
 	usable = acc.AccessToken != "" && (acc.ExpiresAt.IsZero() || time.Until(acc.ExpiresAt) > 5*time.Minute)
+	concurrencyKeyChanged := previousPlanType != acc.PlanType || previousUpstreamType != acc.UpstreamType || previousAPIKey != acc.APIKey
+	if concurrencyKeyChanged {
+		acc.recomputeSchedulerLocked(s.maxConcurrency.Load())
+	}
 	acc.mu.Unlock()
 	if changed {
 		s.invalidateRoutingSchedulers()
+	}
+	if concurrencyKeyChanged {
+		s.fastSchedulerUpdate(acc)
 	}
 	_ = expectedGeneration // retained for call-site compatibility and audit logs.
 	return changed, usable, nil

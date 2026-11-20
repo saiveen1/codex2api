@@ -190,6 +190,10 @@ type Account struct {
 	// entitlement tier ids (free/pro/ultra/standard, "api" for API keys).
 	// PlanType keeps Google's display name ("Google AI Pro") for the UI.
 	AntigravityPlanKey string
+
+	storedConcurrencyPlan string // Used for rules when the scheduler has not yet learned PlanType.
+	concurrencyStore      *Store // Supplies rules without attaching proxy policy to transient accounts.
+
 	// AntigravityHardBlocked is a durable runtime fence restored from Google's
 	// authoritative permission/quota snapshots or a permanent OAuth refresh
 	// failure. It is kept separate from administrative DispatchPaused so a
@@ -1322,6 +1326,9 @@ func (a *Account) effectiveBaseConcurrencyLocked(storeBaseLimit int64) int64 {
 	}
 	if a.groupBaseConcurrency > 0 {
 		return a.groupBaseConcurrency
+	}
+	if planDefault := a.accountConcurrencyDefaultLocked(); planDefault > 0 {
+		return planDefault
 	}
 	// Claude 账号:无账号级/分组覆盖时回退到全局「并发会话窗口数」默认。
 	if a.claudeSessionWindow > 0 {
@@ -3986,6 +3993,9 @@ func (a *Account) GetLastUsedAt() time.Time {
 // Store 多账号管理器（数据库 + Token 缓存）
 type Store struct {
 	proxyAuditLabels                   map[string]ProxyAuditLabel
+	fixedProxyTimezones                map[string]string
+	accountDefaultTimezone             string
+	useFixedProxyTimezone              bool
 	mu                                 sync.RWMutex
 	accountMutationMu                  sync.Mutex // serializes account-set and scheduler mutations without nesting their locks
 	accounts                           []*Account
@@ -4177,6 +4187,7 @@ type Store struct {
 	smartPacingWindows            string   // protected by mu, "5h,7d" / "5h" / "7d"
 	groupAutoPauseThresholds      sync.Map // int64 -> [2]float64 {5h, 7d}
 	groupBaseConcurrencyOverrides sync.Map // int64 -> int64; missing means inherit global
+	accountConcurrencyDefaults    atomic.Pointer[map[accountConcurrencyKey]int64]
 	groupForceFast                sync.Map // int64 -> struct{}; only enabled groups
 	groupNames                    sync.Map // int64 -> string; 组 ID→名，供 payload 规则按组名匹配
 	groupProxyURLs                sync.Map // int64 -> []string; 组级代理列表(issue #479),missing = 未设置
@@ -5824,6 +5835,7 @@ func (s *Store) ReloadProxyPool() error {
 	s.proxyPool = publicURLs
 	s.proxyPoolSet = buildProxyPoolSet(enabledURLs)
 	s.managedProxySet = managedSet
+	s.reloadFixedProxyTimezonesLocked(auditRows)
 	s.proxyAuditLabels = make(map[string]ProxyAuditLabel, len(auditRows))
 	for _, row := range auditRows {
 		if row != nil {
@@ -5894,6 +5906,7 @@ func (s *Store) RemoveProxyURLs(proxyURLs []string) {
 	s.proxyPool = filtered
 	for proxyURL := range removeSet {
 		delete(s.proxyPoolSet, proxyURL)
+		delete(s.fixedProxyTimezones, proxyURL)
 		if s.proxyIsExclusiveLocked(proxyURL) {
 			s.exclusiveProxyAccounts[proxyURL] = []int64{} // Retired exclusive URLs must not become custom exits.
 		}
@@ -6609,6 +6622,10 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		account.RestoreModelCooldown(cooldown.Model, cooldown.Reason, cooldown.ResetAt, cooldown.UpdatedAt)
 	}
 	account.mu.Lock()
+	account.concurrencyStore = s
+	if account.PlanType == "" && !isGrokAccount {
+		account.storedConcurrencyPlan = row.GetCredential("plan_type")
+	}
 	account.recomputeSchedulerLocked(s.maxConcurrency.Load())
 	account.mu.Unlock()
 	if s.db != nil {
@@ -10002,6 +10019,7 @@ func (s *Store) AddAccounts(accounts []*Account) {
 		acc.mu.Lock()
 		acc.grokRuntimeSink = s
 		acc.proxyStore = s
+		acc.concurrencyStore = s
 		acc.recomputeEffectiveIgnoreUsageLimitStatus(ignoreUsageLimit)
 		acc.recomputeEffectiveGroupBaseConcurrency(s)
 		acc.recomputeSchedulerLocked(maxConcurrency)

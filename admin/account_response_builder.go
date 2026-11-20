@@ -319,6 +319,9 @@ func (h *Handler) buildAccountResponse(
 		resp.DispatchCountLimit = accountDispatchCountLimit(row)
 	}
 	resp.SchedulerPriority = accountSchedulerPriority(row)
+	if runtimeAccount == nil {
+		resp.BaseConcurrencyEffective = h.store.AccountRowBaseConcurrency(row)
+	}
 
 	now := time.Now()
 	if runtimeAccount != nil {

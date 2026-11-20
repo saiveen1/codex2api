@@ -59,10 +59,13 @@ func loadLocationCached(name string) *time.Location {
 	return loc
 }
 
-// ApplyCodexTimezoneToBody 按账号绑定时区改写请求体 input 里所有 environment_context
-// 文本。账号未绑定时区、或请求体不含 environment_context 时原样返回。
-func ApplyCodexTimezoneToBody(body []byte, account *auth.Account, now time.Time) []byte {
-	timezone := account.EffectiveCodexTimezone()
+// ApplyCodexTimezoneToBody applies the effective timezone to existing environment_context text.
+func ApplyCodexTimezoneToBody(body []byte, account *auth.Account, now time.Time, proxyOverrides ...string) []byte {
+	proxyOverride := ""
+	if len(proxyOverrides) > 0 {
+		proxyOverride = proxyOverrides[0]
+	}
+	timezone := account.EffectiveCodexContextTimezone(proxyOverride)
 	if timezone == "" || len(body) == 0 {
 		return body
 	}

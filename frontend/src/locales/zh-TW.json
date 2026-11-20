@@ -858,6 +858,28 @@
       "kiro": "Kiro",
       "kiroDesc": "Kiro 上游網域、本地用量模擬與連通性測試"
     },
+    "accountDefaults": {
+      "title": "帳號預設值",
+      "description": "依平台和方案設定帳號的預設並行數。移除規則後，該組合會恢復繼承預設設定。",
+      "platform": "平台",
+      "plan": "方案",
+      "choosePlan": "選擇方案",
+      "exactPlan": "輸入確切的方案識別碼",
+      "concurrency": "並行數",
+      "rule": "並行規則 {{row}}",
+      "addRule": "新增並行規則",
+      "removeRule": "移除並行規則 {{row}}",
+      "timezone": "統一帳號時區",
+      "timezoneHint": "輸入 IANA 時區（例如 Asia/Shanghai），留空則不設定統一時區。",
+      "fixedProxyTimezone": "使用固定代理偵測到的時區",
+      "timezoneOrder": "僅適用於已支援帳號時區的功能。優先順序：帳號明確指定的時區 → 綁定的固定代理最近一次偵測到的有效時區（開啟時使用，不含動態代理）→ 統一帳號時區 → 原有行為。",
+      "invalidTimezone": "請輸入有效的 IANA 時區，或留空。",
+      "invalidRule": "規則 {{row}}：請選擇平台、指定方案，並輸入正整數並行數。",
+      "duplicateRule": "規則 {{row}}：此平台和方案的組合已有規則。",
+      "loadFailed": "無法載入帳號預設值：{{error}}",
+      "saveFailed": "無法儲存帳號預設值：{{error}}",
+      "saved": "帳號預設值已儲存"
+    },
     "channelTest": {
       "kiroDesc": "Kiro 帳號頁「測試連線」與批次測試預設使用的探測模型與測活內容。模型留空時依帳號目錄自動選擇（優先 haiku）。"
     },

@@ -159,6 +159,8 @@ import type {
   VisibleChannelsSettings,
   ChannelTestSettings,
   ChannelTestSettingsResponse,
+  AccountDefaultsSettings,
+  AccountDefaultsSettingsResponse,
   AntigravitySettingsResponse,
   KiroSettings,
   KiroImportResponse,
@@ -1166,6 +1168,12 @@ export const api = {
     request<VisibleChannelsSettings>('/settings/visible-channels', {
       method: 'PUT',
       body: JSON.stringify({ channels }),
+    }),
+  getAccountDefaults: () => request<AccountDefaultsSettingsResponse>('/settings/account-defaults'),
+  updateAccountDefaults: ({ concurrency_rules, default_timezone, use_fixed_proxy_timezone }: AccountDefaultsSettings) =>
+    request<AccountDefaultsSettingsResponse>('/settings/account-defaults', {
+      method: 'PUT',
+      body: JSON.stringify({ concurrency_rules, default_timezone, use_fixed_proxy_timezone }),
     }),
   getAntigravitySettings: () => request<AntigravitySettingsResponse>('/settings/antigravity'),
   updateAntigravitySettings: (patch: {

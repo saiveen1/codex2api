@@ -3,6 +3,8 @@ package auth
 import (
 	"strings"
 	"time"
+
+	"github.com/codex2api/database"
 )
 
 // AccountTimezoneCredentialKey 是账号绑定时区在 credentials 中的存储键。Claude 账号
@@ -35,6 +37,53 @@ func (a *Account) EffectiveCodexTimezone() string {
 		return ""
 	}
 	return strings.TrimSpace(a.Timezone)
+}
+
+// SetAccountTimezoneDefaults changes the inherited context timezone without editing accounts.
+func (s *Store) SetAccountTimezoneDefaults(timezone string, useFixedProxy bool) {
+	timezone = NormalizeAccountTimezone(timezone)
+	s.mu.Lock()
+	s.accountDefaultTimezone = timezone
+	s.useFixedProxyTimezone = useFixedProxy
+	s.mu.Unlock()
+}
+
+func (s *Store) reloadFixedProxyTimezonesLocked(rows []*database.ProxyRow) {
+	s.fixedProxyTimezones = make(map[string]string)
+	for _, row := range rows {
+		if row == nil || !row.Enabled || row.TestStatus != database.ProxyTestStatusSuccess {
+			continue
+		}
+		if timezone := NormalizeAccountTimezone(row.TestTimezone); timezone != "" {
+			s.fixedProxyTimezones[proxyRowURL(row)] = timezone
+		}
+	}
+}
+
+// EffectiveCodexContextTimezone supplies the environment context, not device attestation.
+func (a *Account) EffectiveCodexContextTimezone(proxyOverride string) string {
+	if a == nil {
+		return ""
+	}
+	a.mu.RLock()
+	if a.isRelayStyleLocked() {
+		a.mu.RUnlock()
+		return ""
+	}
+	explicit, s, id, pin := strings.TrimSpace(a.Timezone), a.proxyStore, a.DBID, strings.TrimSpace(a.ProxyURL)
+	a.mu.RUnlock()
+	if explicit != "" || s == nil {
+		return explicit
+	}
+	proxyOverride = strings.TrimSpace(proxyOverride)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.useFixedProxyTimezone && pin != "" && (proxyOverride == "" || proxyOverride == pin) && !ResinEgressEnabled() && s.proxyAllowedForAccountLocked(id, pin) {
+		if timezone := s.fixedProxyTimezones[pin]; timezone != "" {
+			return timezone
+		}
+	}
+	return s.accountDefaultTimezone
 }
 
 // ApplyAccountTimezone 把管理端改动的绑定时区同步到运行时账号，

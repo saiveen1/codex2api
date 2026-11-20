@@ -407,6 +407,12 @@ func main() {
 	store.SetSchedulerWaitLimits(cfg.SchedulerMaxWaiters, cfg.SchedulerMaxWaitersPerKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	if accountDefaults, err := db.LoadAccountDefaultsConfig(ctx); err != nil {
+		log.Printf("读取账号默认值失败，保留原有并发与时区行为: %v", err)
+	} else {
+		store.SetAccountTimezoneDefaults(accountDefaults.DefaultTimezone, accountDefaults.UseFixedProxyTimezone)
+		store.SetAccountConcurrencyDefaults(accountDefaults.ConcurrencyRules)
+	}
 	if err := store.Init(ctx); err != nil {
 		cancel()
 		log.Fatalf("账号初始化失败: %v", err)

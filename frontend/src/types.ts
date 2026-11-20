@@ -108,6 +108,16 @@ export interface ChannelTestSettingsResponse {
   model_choices?: Partial<Record<'antigravity' | 'claude' | 'kiro', string[]>>
 }
 
+export interface AccountDefaultsSettings {
+  concurrency_rules: { channel: string; plan: string; concurrency: number }[]
+  default_timezone: string
+  use_fixed_proxy_timezone: boolean
+}
+
+export interface AccountDefaultsSettingsResponse extends AccountDefaultsSettings {
+  plan_choices: Record<string, string[]>
+}
+
 export interface KiroSettings {
   api_domain: 'amazonaws' | 'kiro'
   cache_simulation: boolean
