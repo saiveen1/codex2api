@@ -36,6 +36,10 @@ func intelligenceRuleAllowsAutomatic(s ic.Settings, a IntelligenceCheckAccount, 
 	return a.OwnedAction != "" || (r.Automatic && (!r.NormalOnly || a.normalAccount)) || (!s.RulesOnly && r.ID == "")
 }
 
+func (a IntelligenceCheckAccount) requiresNormal(rule ic.Rule) bool {
+	return rule.NormalOnly && a.OwnedAction == ""
+}
+
 // Keep hard account failures out of the queue; the runner also checks live
 // dispatch state, including quota and credential availability, before sending.
 func (db *DB) intelligenceNormalAccountSQL(account string) string {

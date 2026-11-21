@@ -181,10 +181,11 @@ func (db *DB) SubmitIntelligenceChecks(ctx context.Context, ids []int64, now tim
 	return out, skipped, err
 }
 
-// IntelligenceCheckHold reports whether an account's automatic check should
-// wait because the upstream would reject it for rate-limit or quota reasons.
-// until is the expected recovery time, zero when unknown.
-type IntelligenceCheckHold func(accountID int64, model string) (until time.Time, held bool)
+// IntelligenceCheckPreflight checks live state outside the queue transaction.
+type IntelligenceCheckPreflight struct {
+	QuotaHold   func(accountID int64, model string) (until time.Time, held bool)
+	IsAvailable func(accountID int64) bool
+}
 
 type intelligenceQueryer interface {
 	intelligenceQueryRower
@@ -247,21 +248,24 @@ func (db *DB) intelligenceHoldTx(ctx context.Context, tx *sql.Tx, s ic.Settings,
 	return err
 }
 
-// EnqueueDueIntelligenceChecks queues due automatic checks. With hold, accounts
-// it reports as rate limited or out of quota are postponed instead of queued.
-func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, limit int, hold ...IntelligenceCheckHold) (int, error) {
+// EnqueueDueIntelligenceChecks queues due automatic checks and postpones
+// candidates known to be blocked by the optional runtime preflight.
+func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, limit int, checks ...IntelligenceCheckPreflight) (int, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	// hold reads runtime account state, so it runs before the write transaction
-	// rather than under database locks. An account that becomes due in between
-	// is simply queued; the runner checks again before sending.
+	// Do not take runtime account locks inside the write transaction.
+	var preflight IntelligenceCheckPreflight
+	if len(checks) > 0 {
+		preflight = checks[0]
+	}
 	type holdResult struct {
 		until time.Time
 		model string
 	}
 	held := map[int64]holdResult{}
-	if len(hold) > 0 && hold[0] != nil {
+	available := map[int64]bool{}
+	if preflight.QuotaHold != nil || preflight.IsAvailable != nil {
 		s, err := db.GetIntelligenceCheckSettings(ctx)
 		if err != nil {
 			return 0, err
@@ -274,10 +278,16 @@ func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, l
 			return 0, err
 		}
 		for _, a := range due {
-			policy, _ := a.resolve(s)
+			policy, rule := a.resolve(s)
 			model, _ := policy.ModelForChannel(a.Channel)
-			if until, ok := hold[0](a.AccountID, model); ok {
-				held[a.AccountID] = holdResult{until, model}
+			if preflight.QuotaHold != nil {
+				if until, ok := preflight.QuotaHold(a.AccountID, model); ok {
+					held[a.AccountID] = holdResult{until, model}
+					continue
+				}
+			}
+			if preflight.IsAvailable != nil && a.requiresNormal(rule) {
+				available[a.AccountID] = preflight.IsAvailable(a.AccountID)
 			}
 		}
 	}
@@ -313,6 +323,21 @@ func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, l
 					return err
 				}
 				continue
+			}
+			if preflight.IsAvailable != nil && a.requiresNormal(rule) {
+				ok, checked := available[a.AccountID]
+				if !checked {
+					// The due window or policy changed; check it on the next pass.
+					continue
+				}
+				if !ok {
+					// Move it out of the bounded window without grading it.
+					delay := min(time.Duration(policy.RetrySeconds)*time.Second, 15*time.Second)
+					if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET next_due_ms=$1 WHERE account_id=$2`, now.Add(delay).UnixMilli(), a.AccountID); err != nil {
+						return err
+					}
+					continue
+				}
 			}
 			if _, err = db.intelligenceEnqueueTx(ctx, tx, policy, a, "automatic", false, now); err != nil {
 				return err
@@ -380,7 +405,7 @@ func (db *DB) ClaimIntelligenceCheck(ctx context.Context, owner string, now time
 			fresh, snapshotErr := intelligenceCheckSnapshot(policy, a, r.Source, r.CreatedAt)
 			if snapshotErr == nil {
 				fresh.ID, fresh.RecordOnly = r.ID, r.RecordOnly
-				fresh.RequireNormal = r.Source == "automatic" && rule.NormalOnly && a.OwnedAction == ""
+				fresh.RequireNormal = r.Source == "automatic" && a.requiresNormal(rule)
 				r = fresh
 				if !r.RecordOnly {
 					snapshotErr = validateIntelligenceAccountSettings(ctx, tx, policy, a.Channel, a.OwnedAction)

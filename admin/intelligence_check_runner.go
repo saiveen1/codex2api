@@ -49,10 +49,15 @@ func (h *Handler) intelligenceTick(ctx context.Context) error {
 	if _, err := h.db.ExpireIntelligenceCheckLeases(opCtx, time.Now()); err != nil {
 		return err
 	}
-	hold := func(id int64, model string) (time.Time, bool) {
-		return h.intelligenceQuotaHold(h.store.FindByID(id), model)
+	preflight := database.IntelligenceCheckPreflight{
+		QuotaHold: func(id int64, model string) (time.Time, bool) {
+			return h.intelligenceQuotaHold(h.store.FindByID(id), model)
+		},
+		IsAvailable: func(id int64) bool {
+			return intelligenceAccountAvailable(h.store.FindByID(id))
+		},
 	}
-	if _, err := h.db.EnqueueDueIntelligenceChecks(opCtx, time.Now(), 100, hold); err != nil {
+	if _, err := h.db.EnqueueDueIntelligenceChecks(opCtx, time.Now(), 100, preflight); err != nil {
 		return err
 	}
 	for i := 0; i < 100 && ctx.Err() == nil; i++ {
@@ -93,6 +98,10 @@ func (h *Handler) intelligenceQuotaHold(account *auth.Account, model string) (ti
 	return account.IntelligenceCheckQuotaHold(model, proxy.DispatchPolicyForModel(model), time.Now())
 }
 
+func intelligenceAccountAvailable(account *auth.Account) bool {
+	return account != nil && account.IsAvailable()
+}
+
 func (h *Handler) runIntelligenceCheck(parent context.Context, run database.IntelligenceCheckRun, account *auth.Account) {
 	ctx, cancel := context.WithTimeout(parent, time.Duration(run.Settings.TimeoutSeconds)*time.Second)
 	result := intelligenceExecution{}
@@ -111,7 +120,7 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 			result.Interrupted = true
 		}
 	}
-	if result.Error == "" && run.Source == "automatic" && run.RequireNormal && (account == nil || !account.IsAvailable()) {
+	if result.Error == "" && run.Source == "automatic" && run.RequireNormal && !intelligenceAccountAvailable(account) {
 		result.Error = "账号当前不可调度，已跳过仅正常账号的自动检测"
 		result.Interrupted = true
 	}

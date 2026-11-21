@@ -43,7 +43,8 @@ func TestIntelligenceCheckQuotaHoldPostponesAutomaticChecks(t *testing.T) {
 		}
 		return limitedUntil, id == limited
 	}
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 10, hold); err != nil || n != 1 {
+	preflight := IntelligenceCheckPreflight{QuotaHold: hold}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 10, preflight); err != nil || n != 1 {
 		t.Fatal("limited account was queued", n, err)
 	}
 	if len(asked) != 2 || asked[0] != s.GPTModel {
@@ -77,13 +78,13 @@ func TestIntelligenceCheckQuotaHoldPostponesAutomaticChecks(t *testing.T) {
 	}
 
 	// Not due again before the interval elapses.
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now.Add(time.Minute), 10, hold); err != nil || n != 0 {
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now.Add(time.Minute), 10, preflight); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
 	// A reset closer than the interval is the next deadline.
 	later := now.Add(300 * time.Second)
 	limitedUntil = later.Add(30 * time.Second)
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, later, 10, hold); err != nil || n != 0 {
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, later, 10, preflight); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
 	if state = intelligenceHoldState(t, db, limited); !state.NextDueAt.Equal(limitedUntil) {
@@ -91,7 +92,7 @@ func TestIntelligenceCheckQuotaHoldPostponesAutomaticChecks(t *testing.T) {
 	}
 	// An unknown recovery time falls back to the interval.
 	later, limitedUntil = limitedUntil, time.Time{}
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, later, 10, hold); err != nil || n != 0 {
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, later, 10, preflight); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
 	if state = intelligenceHoldState(t, db, limited); !state.NextDueAt.Equal(later.Add(300 * time.Second)) {
@@ -112,8 +113,8 @@ func TestIntelligenceCheckQuotaHoldPostponesAutomaticChecks(t *testing.T) {
 
 	// Once the quota recovers the check resumes and its result replaces the wait.
 	recovered := later.Add(time.Hour)
-	released := func(int64, string) (time.Time, bool) { return time.Time{}, false }
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, recovered, 10, released); err != nil || n != 1 {
+	preflight.QuotaHold = func(int64, string) (time.Time, bool) { return time.Time{}, false }
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, recovered, 10, preflight); err != nil || n != 1 {
 		t.Fatal("recovered account was not queued", n, err)
 	}
 	run, err = db.ClaimIntelligenceCheck(ctx, "worker", recovered, time.Minute)
@@ -140,7 +141,7 @@ func TestIntelligenceCheckQuotaHoldBarFollowsAutomaticChecks(t *testing.T) {
 	}
 	id := intelligenceAccount(t, db)
 	held := func(int64, string) (time.Time, bool) { return time.Time{}, true }
-	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 10, held); err != nil || n != 0 {
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 10, IntelligenceCheckPreflight{QuotaHold: held}); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
 	phase := func() string {

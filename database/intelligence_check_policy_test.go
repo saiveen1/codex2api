@@ -268,3 +268,50 @@ func TestIntelligenceCheckNormalOnlyRule(t *testing.T) {
 		t.Fatal(manual, err)
 	}
 }
+
+func TestIntelligenceCheckPreflightDefersWithoutBlockingGroup(t *testing.T) {
+	db := intelligenceDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	blocked, ready := intelligenceAccount(t, db), intelligenceAccount(t, db)
+	group, err := db.CreateAccountGroup(ctx, "group", "", "", 0, 0, sql.NullInt64{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Enabled, s.RulesOnly = true, true
+	s.Rules = []ic.Rule{{ID: "group", Name: "Group", Channel: "codex", GroupID: group, Automatic: true, NormalOnly: true}}
+	if _, err := db.SaveIntelligenceCheckSettings(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	preflight := IntelligenceCheckPreflight{IsAvailable: func(id int64) bool { return id != blocked }}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 1, preflight); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	if err := db.BatchSetAccountGroups(ctx, []int64{blocked, ready}, []int64{group}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 1, preflight); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	state := intelligenceHoldState(t, db, blocked)
+	if state.NextDueAt == nil || !state.NextDueAt.Equal(now.Add(15*time.Second)) || state.Status != "unknown" {
+		t.Fatalf("unavailable account was not deferred: %+v", state)
+	}
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, now, 1, preflight); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	if run, err := db.ClaimIntelligenceCheck(ctx, "ready", now, time.Minute); err != nil || run == nil || run.AccountID != ready || !run.RequireNormal {
+		t.Fatal(run, err)
+	}
+	preflight.IsAvailable = func(int64) bool { return true }
+	if n, err := db.EnqueueDueIntelligenceChecks(ctx, *state.NextDueAt, 1, preflight); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	if run, err := db.ClaimIntelligenceCheck(ctx, "recovered", *state.NextDueAt, time.Minute); err != nil || run == nil || run.AccountID != blocked {
+		t.Fatal(run, err)
+	}
+}

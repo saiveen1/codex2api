@@ -39,7 +39,7 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 	}
 	s.Enabled = true
 	s.Rules = []ic.Rule{
-		{ID: "specific", Name: "Pro isolation", Channel: "codex", GroupID: main, Plan: " PRO ", Automatic: true, Model: "gpt-6-sol", IntervalSeconds: 10, DegradeThreshold: 1, Action: "switch_group", TargetGroupID: isolation},
+		{ID: "specific", Name: "Pro isolation", Channel: "codex", GroupID: main, Plan: " PRO ", Automatic: true, NormalOnly: true, Model: "gpt-6-sol", IntervalSeconds: 10, DegradeThreshold: 1, Action: "switch_group", TargetGroupID: isolation},
 		{ID: "rest", Name: "Disable other active accounts", Channel: "codex", GroupID: main},
 		{ID: "quarantine", Name: "Exclude actual isolation group", Channel: "codex", GroupID: isolation},
 	}
@@ -52,14 +52,24 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 	}
 	for step, output := range []string{"incorrect", "21"} {
 		at := now.Add(time.Duration(step) * 20 * time.Second)
-		checkedModel := ""
-		queued, err := db.EnqueueDueIntelligenceChecks(ctx, at, 1, func(_ int64, model string) (time.Time, bool) { checkedModel = model; return time.Time{}, false })
-		if err != nil || queued != 1 || checkedModel != "gpt-6-sol" {
-			t.Fatalf("queue step %d: %d %q %v", step, queued, checkedModel, err)
+		checkedModel, availabilityChecks := "", 0
+		preflight := IntelligenceCheckPreflight{
+			QuotaHold: func(_ int64, model string) (time.Time, bool) { checkedModel = model; return time.Time{}, false },
+			IsAvailable: func(int64) bool {
+				availabilityChecks++
+				return step == 0
+			},
+		}
+		queued, err := db.EnqueueDueIntelligenceChecks(ctx, at, 1, preflight)
+		if err != nil || queued != 1 || checkedModel != "gpt-6-sol" || availabilityChecks != 1-step {
+			t.Fatalf("queue step %d: %d %q availability checks=%d err=%v", step, queued, checkedModel, availabilityChecks, err)
 		}
 		run, err := db.ClaimIntelligenceCheck(ctx, "worker", at, time.Minute)
 		if err != nil || run == nil || run.AccountID != pro || run.RuleID != "specific" || run.Model != "gpt-6-sol" || run.Plan != "pro" {
 			t.Fatalf("claim step %d: %+v %v", step, run, err)
+		}
+		if run.RequireNormal != (step == 0) {
+			t.Fatalf("unexpected normal-only requirement at step %d: %+v", step, run)
 		}
 		wantSnapshot, wantAfter := main, isolation
 		if step == 1 {

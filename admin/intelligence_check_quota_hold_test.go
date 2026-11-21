@@ -184,6 +184,35 @@ func TestIntelligenceRunnerKeepsOtherUpstreamErrors(t *testing.T) {
 	}
 }
 
+func TestIntelligenceRunnerNormalOnlySkipsBeforeQueue(t *testing.T) {
+	f := newIntelligenceHoldFixture(t)
+	ctx := context.Background()
+	if err := f.db.UpdateCredentials(ctx, f.id, map[string]any{"plan_type": "team"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := f.db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Rules = []ic.Rule{{ID: "normal", Name: "Normal", Channel: "codex", Plan: "team", Automatic: true, NormalOnly: true}}
+	if _, err := f.db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	atomic.StoreInt32(&f.account.DispatchPaused, 1)
+	f.tick()
+	if runs := f.runs(); len(runs) != 0 || f.requests.Load() != 0 {
+		t.Fatalf("unavailable account left runs=%+v or requests=%d", runs, f.requests.Load())
+	}
+	if state := f.state(); state.Status != "unknown" || state.QuestionCursor != 0 || state.DegradeStreak != 0 {
+		t.Fatalf("skip changed the detection result: %+v", state)
+	}
+	atomic.StoreInt32(&f.account.DispatchPaused, 0)
+	f.tick()
+	if runs := f.runs(); len(runs) != 1 || runs[0].Status != "normal" || f.requests.Load() != 1 {
+		t.Fatalf("recovered account was not checked: runs=%+v requests=%d", runs, f.requests.Load())
+	}
+}
+
 func TestIntelligenceRunnerNormalOnlyRechecksRuntime(t *testing.T) {
 	f := newIntelligenceHoldFixture(t)
 	ctx := context.Background()
