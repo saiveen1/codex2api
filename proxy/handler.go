@@ -4381,6 +4381,8 @@ func (h *Handler) Responses(c *gin.Context) {
 		accountFilter = compactionDomainFilter(compactionAffinity.CompatibilityDomain, accountFilter)
 		c.Request = c.Request.WithContext(withCompactionAffinity(c.Request.Context(), compactionAffinity))
 	}
+	var filterEvidence dispatchFilterEvidence
+	accountFilter = filterEvidence.wrap(accountFilter)
 	// scope 并发位在选中账号后才能占，请求退出时统一释放（issue #439 v2）。
 	defer h.ReleaseAPIKeyScopeConcurrency(c)
 	stopRetryDeadline := installContinuousRetryHTTPDeadline(c, continuousRetryPolicy, continuousRetryProtocolResponses)
@@ -4469,17 +4471,36 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 		}
 		if account == nil {
+			terminal := func(reason string, status int, inspect bool) {
+				report := auth.DispatchDiagnostic{Partial: true}
+				if inspect && pin == nil && !turnContinuationPinned && !compactionAffinity.Known && !continuationUnavailable {
+					modelFilter := accountFilterForResponsesModelWithGate(logModel, effectiveModel, allowCodexAccounts, ignoreModelRateLimits)
+					if nativeRemoteCompactionV2 {
+						modelFilter = accountFilterForInlineCompactionModelWithGate(logModel, effectiveModel, allowCodexAccounts, ignoreModelRateLimits)
+					}
+					opts := selectionOpts
+					opts.Model = effectiveModel
+					report = h.store.InspectDispatch(apiKeyID, retryExclusions.ForSelection(), filterEvidence.blocked, modelFilter, opts)
+				}
+				recordDispatchDecision(c, reason, status, logModel, effectiveModel, isStream, report)
+			}
 			if pin != nil {
+				status, _, _, _ := pin.failureResponse()
+				terminal("pinned_account_unavailable", status, false)
 				pin.writeFailure(c, continuousRetryProtocolResponses, isStream)
 				return
 			}
 			if writeSchedulerQueueError(c, selectionErr, continuousRetryProtocolResponses) {
+				if reason, status := schedulerDecision(selectionErr); reason != "" {
+					terminal(reason, status, false)
+				}
 				return
 			}
 			if !claimContinuousRetryTerminal(c, continuousRetryProtocolResponses) {
 				return
 			}
 			if lastStatusCode > 0 && len(lastBody) > 0 {
+				terminal("upstream_pool_exhausted", lastStatusCode, true)
 				if lastRetryAfter != "" {
 					c.Header("Retry-After", lastRetryAfter)
 				}
@@ -4490,6 +4511,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if compactionAffinity.Known {
+				terminal("response_context_unavailable", http.StatusServiceUnavailable, false)
 				if isStream && writeCommittedResponsesRetryError(c, "No account is available for the upstream that created this compaction state") {
 					return
 				}
@@ -4498,6 +4520,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 			// 候选被 scope 预算剔空时给出真实原因，而不是含糊的「无可用账号」。
 			if msg := scopeBudgetExhaustedMessage(c); msg != "" {
+				terminal("scope_budget", http.StatusTooManyRequests, true)
 				if isStream && writeCommittedResponsesRetryError(c, msg) {
 					return
 				}
@@ -4505,6 +4528,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if limited := h.store.UsageLimitedCandidateSummary(apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy); limited.Found {
+				terminal("quota_exhausted", http.StatusTooManyRequests, true)
 				// 瞬时 throttle 与额度耗尽要给下游不同信号：前者带 Retry-After 让它秒级
 				// 退避后重试同一上游，后者才值得 failover/标记账号。
 				msg := usageLimitedPoolMessages(limited)
@@ -4518,6 +4542,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if continuationUnavailable && !relayContinuationAttempted {
+				terminal("response_context_unavailable", continuationStatus, false)
 				if isStream && writeCommittedResponsesRetryError(c, "Previous response context is unavailable") {
 					return
 				}
@@ -4525,6 +4550,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if h.accountPoolConcurrencySaturated(apiKeyID, retryExclusions.ForSelection(), accountFilter, dispatchPolicy) {
+				terminal("concurrency_saturated", http.StatusServiceUnavailable, true)
 				setConcurrencySaturatedRetryAfter(c)
 				if isStream && writeCommittedResponsesRetryError(c, concurrencySaturatedMessageZH) {
 					return
@@ -4533,16 +4559,19 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			if msg, ok := h.unsupportedModelPoolMessage(apiKeyID, retryExclusions.ForSelection(), effectiveModel, dispatchPolicy); ok {
+				terminal("model_not_supported", http.StatusBadRequest, true)
 				if isStream && writeCommittedResponsesRetryError(c, msg) {
 					return
 				}
 				c.JSON(http.StatusBadRequest, unsupportedModelPoolError(msg))
 				return
 			}
-			if isStream && writeCommittedResponsesRetryError(c, noAvailableAccountMessage(effectiveModel)) {
+			terminal("no_available_account", http.StatusServiceUnavailable, true)
+			const noAccountHint = "当前没有可处理该请求的账号，请稍后重试；如持续失败，请提供请求 ID"
+			if isStream && writeCommittedResponsesRetryError(c, noAccountHint) {
 				return
 			}
-			c.JSON(http.StatusServiceUnavailable, noAvailableAccountError(effectiveModel))
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": noAccountHint, "type": ErrorTypeServerError, "code": ErrorCodeNoAvailableAccount}})
 			return
 		}
 		if attempt > 0 {
@@ -4563,10 +4592,12 @@ func (h *Handler) Responses(c *gin.Context) {
 		proxyURL, proxyErr := h.resolveProxyForAttempt(account, stickyProxyURL)
 		if proxyErr != nil {
 			h.store.Release(account)
-			if isStream && writeCommittedResponsesRetryError(c, proxyErr.Error()) {
+			recordDispatchDecision(c, "proxy_unavailable", http.StatusServiceUnavailable, logModel, effectiveModel, isStream, auth.DispatchDiagnostic{Scoped: 1, Counts: map[string]int{"egress_unavailable": 1}}, account.ID())
+			const proxyHint = "上游连接暂不可用，请稍后重试；如持续失败，请提供请求 ID"
+			if isStream && writeCommittedResponsesRetryError(c, proxyHint) {
 				return
 			}
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyErr.Error(), "type": ErrorTypeServerError}})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": proxyHint, "type": ErrorTypeServerError}})
 			return
 		}
 		// Pinned requests never read session affinity, so they do not write it.
@@ -9780,7 +9811,7 @@ func (h *Handler) ListModels(c *gin.Context) {
 	// middleware (including older embedders); a real key always gets an
 	// isolated, read-only account snapshot.
 	if row := apiKeyRowFromContext(c); row != nil {
-		api.SendList(c, "list", collapseAntigravityModelChoices(h.scopedModels(ctx, row)))
+		h.serveScopedModelList(c, ctx, row)
 		return
 	}
 	modelIDs := h.supportedModelIDs(ctx)

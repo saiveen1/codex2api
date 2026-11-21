@@ -24,6 +24,7 @@ import { useToast } from '../hooks/useToast'
 import { DEFAULT_PAGE_SIZE_OPTIONS, usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import type { APIKeyRow, OpsErrorSummary, SystemSettings, UsageAPIKeyStat, UsageEndpointStat, UsageFeatureStats, UsageLog, UsageModelStat, UsageStats, PromptFilterLog, PromptPolicyIncidentDetailResponse } from '../types'
 import { DiagnosticDetailsButton, diagnosticContextSummary } from '../components/DiagnosticDetailsDialog'
+import { usageDiagnosticStatus } from '../lib/diagnosticContext'
 import { cn, formatCompactEmail } from '../lib/utils'
 import { formatUsageNumber as formatTokens } from '../lib/usageFormat'
 import { buildModelShareData, formatSharePercent, type ModelShareMetric } from '../lib/usageInsights'
@@ -914,59 +915,32 @@ function ImageUsageBadge({ log }: { log: UsageLog }) {
   )
 }
 
-function StatusCodeBadge({ log }: { log: UsageLog }) {
+function UsageStatusCode({ log, onFilterStatus, onSearchRequest }: {
+  log: UsageLog
+  onFilterStatus: () => void
+  onSearchRequest: (id: string) => void
+}) {
   const { t } = useTranslation()
-  const dotColor = log.status_code === 200
-    ? 'bg-emerald-500'
-    : log.status_code === 429
-      ? 'bg-amber-500 animate-pulse'
-      : 'bg-rose-500 animate-pulse'
-
-  const badge = (
-    <Badge
-      variant="outline"
-      className={cn(
-        usageTableBadgeClass,
-        'gap-1.5',
-        getStatusBadgeClassName(log.status_code),
-        log.status_code !== 200 ? 'cursor-help ring-1 ring-inset ring-current/10' : ''
-      )}
-    >
-      <span className={cn('size-1.5 rounded-full', dotColor)} />
-      <span>{log.status_code}</span>
-    </Badge>
-  )
-
-  if (log.status_code === 200) {
-    return badge
-  }
-
-  const message = log.error_message?.trim() || t('usage.statusErrorEmpty')
-  const title = t('usage.statusErrorDetails')
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} aria-label={`${log.status_code} ${message}`} className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {badge}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="right" sideOffset={8} className="max-w-[360px] rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 text-xs text-slate-50 shadow-xl backdrop-blur-md">
-        <div className="space-y-1.5">
-          <div className="font-semibold text-slate-300">{title}</div>
-          <div className="font-mono text-[11px] tabular-nums text-slate-400">HTTP {log.status_code}</div>
-          <div className="whitespace-pre-wrap break-words leading-relaxed text-slate-50">{message}</div>
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  )
+  const diagnostic = usageDiagnosticStatus(log)
+  const code = diagnostic.failed ? diagnostic.httpStatus : log.status_code
+  const badge = <Badge variant="outline" className={cn(usageTableBadgeClass, 'gap-1.5', getStatusBadgeClassName(diagnostic.failed && code < 400 ? 500 : code))}>
+    <span className={cn('size-1.5 rounded-full', diagnostic.failed ? code === 429 ? 'bg-amber-500' : 'bg-rose-500' : 'bg-emerald-500')} aria-hidden="true" />
+    {code}
+  </Badge>
+  const triggerClass = 'min-h-8 max-w-full rounded-md px-1 text-left transition-colors hover:bg-accent active:bg-muted focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none'
+  if (!diagnostic.failed) return <button type="button" className={triggerClass} onClick={onFilterStatus} title={t('usage.filterByStatus', { status: code })}>{badge}</button>
+  return <DiagnosticDetailsButton log={log} onSearchRequest={onSearchRequest} trigger={
+    <button type="button" className={cn(triggerClass, 'flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 py-1')} aria-label={`HTTP ${code}，${diagnostic.label}，查看诊断详情`}>
+      {badge}<span className="min-w-0 max-w-[12rem] whitespace-normal break-words text-[11px] font-medium leading-snug text-foreground">{diagnostic.label}</span>
+    </button>
+  } />
 }
 
-function UsageErrorSummaryCell({ log, mobile = false }: { log: UsageLog; mobile?: boolean }) {
+function UsageErrorSummaryCell({ log, mobile = false, showAction, onSearchRequest }: { log: UsageLog; mobile?: boolean; showAction: boolean; onSearchRequest: (id: string) => void }) {
   const { t } = useTranslation()
   const errorKind = log.upstream_error_kind?.trim() || ''
   const message = log.error_message?.trim() || ''
-  const hasError = log.status_code >= 400 || Boolean(errorKind || message)
+  const { failed: hasError } = usageDiagnosticStatus(log)
 
   if (!hasError) {
     return mobile ? null : <span className="text-muted-foreground/50">-</span>
@@ -1004,9 +978,9 @@ function UsageErrorSummaryCell({ log, mobile = false }: { log: UsageLog; mobile?
       >
         {conciseSummary}
       </div>
-      <div className="mt-2">
-        <DiagnosticDetailsButton log={log} variant="ghost" className="h-6 px-1.5 text-[11px]" />
-      </div>
+      {showAction ? <div className="mt-2">
+        <DiagnosticDetailsButton log={log} onSearchRequest={onSearchRequest} variant="ghost" className="h-6 px-1.5 text-[11px]" />
+      </div> : null}
     </div>
   )
 }
@@ -1437,6 +1411,7 @@ export default function Usage() {
   const [errorSummary, setErrorSummary] = useState<OpsErrorSummary | null>(null)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [filterRequestId, setFilterRequestId] = useState('')
   const [filterStatus, setFilterStatus] = useState<UsageStatusFilter>('')
   const [filterModel, setFilterModel] = useState('')
   const [filterEndpoint, setFilterEndpoint] = useState('')
@@ -1504,6 +1479,8 @@ export default function Usage() {
       start,
       end,
       q: searchQuery || undefined,
+      requestId: filterRequestId || undefined,
+      includeCanceled: filterRequestId ? 'true' : undefined,
       model: filterModel || undefined,
       endpoint: filterEndpoint || undefined,
       apiKeyId: filterApiKeyId || undefined,
@@ -1518,7 +1495,7 @@ export default function Usage() {
       retry: filterRetry || undefined,
       viaWebsocket: filterTransport === 'ws' ? 'true' : filterTransport === 'http' ? 'false' : undefined,
     }
-  }, [timeRange, customRange, searchQuery, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterUltra, filterModelMismatch, filterType, channel, filterRetry, filterTransport])
+  }, [timeRange, customRange, searchQuery, filterRequestId, filterModel, filterEndpoint, filterApiKeyId, filterAccountId, filterFast, filterUltra, filterModelMismatch, filterType, channel, filterRetry, filterTransport])
 
   const buildLogFilterParams = useCallback(() => {
     return {
@@ -1756,6 +1733,7 @@ export default function Usage() {
   ].filter(Boolean).length
   const hasActiveFilters = Boolean(
     searchInput
+    || filterRequestId
     || filterStatus
     || filterModel
     || filterEndpoint
@@ -1794,6 +1772,8 @@ export default function Usage() {
   const rangeTokensLabel = t('usage.rangeTokensCard', { range: rangeLabel })
   const rangeCostLabel = t('usage.rangeCostCard', { range: rangeLabel })
   const resetLogFilters = () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    setFilterRequestId('')
     setSearchInput('')
     setSearchQuery('')
     setFilterStatus('')
@@ -1810,6 +1790,10 @@ export default function Usage() {
     setFilterRetry('')
     setFilterTransport('')
     setPage(1)
+  }
+  const searchRelatedRequest = (requestId: string) => {
+    resetLogFilters()
+    setFilterRequestId(requestId)
   }
 
   // 表格行的账号/模型可点击:点一下按它筛选,再点同一个取消。
@@ -2246,6 +2230,10 @@ export default function Usage() {
                 </div>
               </div>
 
+              {filterRequestId ? <Button type="button" size="sm" variant="outline" className="mt-2 h-auto min-h-8 max-w-full whitespace-normal text-left transition-colors motion-reduce:transition-none" aria-label={`清除请求 ID 筛选：${filterRequestId}`} onClick={() => { setFilterRequestId(''); setPage(1) }}>
+                <span className="min-w-0 break-all">请求 ID：{filterRequestId}</span><X className="size-3.5" aria-hidden="true" />
+              </Button> : null}
+
               {filterAccountId ? (
                 <button
                   type="button"
@@ -2402,14 +2390,7 @@ export default function Usage() {
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
                           {visibleColumns.status && (
-                            <button
-                              type="button"
-                              onClick={() => { setFilterStatus(String(log.status_code) as UsageStatusFilter); setPage(1) }}
-                              className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              title={t('usage.filterByStatus', { status: log.status_code })}
-                            >
-                              <StatusCodeBadge log={log} />
-                            </button>
+                            <UsageStatusCode log={log} onFilterStatus={() => { setFilterStatus(String(log.status_code) as UsageStatusFilter); setPage(1) }} onSearchRequest={searchRelatedRequest} />
                           )}
                           {log.upstream_error_kind === 'cyber_policy' ? <CyberPolicyDetailButton log={log} /> : null}
                           {visibleColumns.type && log.via_websocket ? (
@@ -2475,7 +2456,7 @@ export default function Usage() {
                         )}
                       </div>
 
-                      {visibleColumns.error && <UsageErrorSummaryCell log={log} mobile />}
+                      {visibleColumns.error && <UsageErrorSummaryCell log={log} mobile showAction={!visibleColumns.status} onSearchRequest={searchRelatedRequest} />}
 
                       {hasDetails && (
                         <div className="mt-2.5 space-y-1 text-xs text-muted-foreground">
@@ -2635,15 +2616,8 @@ export default function Usage() {
                       return (
                       <TableRow key={log.id}>
                         {visibleColumns.status && <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => { setFilterStatus(String(log.status_code) as UsageStatusFilter); setPage(1) }}
-                              className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              title={t('usage.filterByStatus', { status: log.status_code })}
-                            >
-                              <StatusCodeBadge log={log} />
-                            </button>
+                          <div className="flex min-w-24 flex-wrap items-center gap-1.5">
+                            <UsageStatusCode log={log} onFilterStatus={() => { setFilterStatus(String(log.status_code) as UsageStatusFilter); setPage(1) }} onSearchRequest={searchRelatedRequest} />
                             {log.upstream_error_kind === 'cyber_policy' ? <CyberPolicyDetailButton log={log} /> : null}
                           </div>
                         </TableCell>}
@@ -2799,7 +2773,7 @@ export default function Usage() {
                           <UsageCostCell log={log} />
                         </TableCell>}
                         {visibleColumns.error && <TableCell>
-                          <UsageErrorSummaryCell log={log} />
+                          <UsageErrorSummaryCell log={log} showAction={!visibleColumns.status} onSearchRequest={searchRelatedRequest} />
                         </TableCell>}
                         {visibleColumns.time && <TableCell className={`${usageTableMonoClass} text-right whitespace-nowrap`}>
                           <UsageTimeCell value={log.created_at} />

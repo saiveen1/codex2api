@@ -104,21 +104,30 @@ func saveDiagnosticUsageContext(input *database.UsageLogInput, e diagnosticEvent
 // using the existing bounded usage buffer/retention rather than a second unbounded log store.
 func persistDiagnosticOnlyUsage(c *gin.Context, e diagnosticEvent) {
 	a := upstreamTraceFromContext(c.Request.Context())
-	if a == nil {
+	if a == nil || isModelCatalogRequest(c) || e.Outcome != "failure" || e.OutcomeStatus < 400 {
 		return
 	}
+	terminal := e.Decision != nil && e.Event == "request_end"
 	a.mu.Lock()
 	db, logged := a.diagnosticDB, a.diagnosticUsageLogged
 	if db != nil && !logged {
 		a.diagnosticUsageLogged = true
 	}
 	a.mu.Unlock()
-	if db == nil || logged || e.Outcome != "failure" || e.OutcomeStatus < 400 {
+	if db == nil || (logged && !terminal) {
 		return
 	}
 	input := &database.UsageLogInput{RequestID: e.RequestID, ParentRequestID: e.ParentRequestID, Endpoint: e.Endpoint,
 		StatusCode: e.OutcomeStatus, DurationMs: int(e.DurationMs), Stream: e.Stream, ViaWebsocket: e.Websocket,
 		UpstreamErrorKind: e.Stage, ErrorMessage: diagnosticErrorSummary(e.OutcomeStatus, e.Error), DiagnosticContext: encodeDiagnosticEvent(e)}
+	if d := e.Decision; d != nil {
+		input.Model, input.EffectiveModel, input.Channel = d.RequestedModel, d.EffectiveModel, d.Channel
+		input.InboundEndpoint = e.Endpoint
+		input.ErrorMessage, input.UpstreamErrorKind = "Gateway dispatch: "+d.Reason, d.Reason
+		if logged {
+			input.InternalReason = "dispatch_terminal_diagnostic"
+		}
+	}
 	populateAPIKeyMetaFromContext(c, input)
 	if err := db.InsertUsageLog(context.Background(), input); err != nil {
 		log.Print("failed to enqueue local request diagnostic")

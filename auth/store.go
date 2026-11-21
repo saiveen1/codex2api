@@ -2293,37 +2293,40 @@ func (a *Account) IsBanned() bool {
 // ModelCatalogEligible reports only durable account gates used by /v1/models.
 // It intentionally ignores active request count, short cooldowns and transient
 // rate limits so a client model menu does not flicker under load.
-func (a *Account) ModelCatalogEligible() bool {
-	if a == nil || atomic.LoadInt32(&a.Disabled) != 0 {
-		return false
+func (a *Account) ModelCatalogEligible() bool { return a.ModelCatalogBlockReason() == "" }
+
+func (a *Account) ModelCatalogBlockReason() string {
+	if a == nil {
+		return "unclassified"
 	}
-	if a.IsAntigravityAPI() {
-		if atomic.LoadInt32(&a.DispatchPaused) != 0 || atomic.LoadInt32(&a.IntelligencePaused) != 0 {
-			return false
+	if atomic.LoadInt32(&a.Disabled) != 0 {
+		if a.IsBanned() {
+			return "unauthorized"
 		}
-		a.mu.RLock()
-		defer a.mu.RUnlock()
-		if a.Status == StatusError || a.AntigravityHardBlocked ||
-			(a.healthTierLocked() == HealthTierBanned && !a.antigravityUnauthorizedRecoveryLocked(time.Now())) {
-			return false
-		}
-		return a.hasDispatchCredentialLocked()
+		return "account_disabled"
 	}
-	if atomic.LoadInt32(&a.DispatchPaused) != 0 || atomic.LoadInt32(&a.IntelligencePaused) != 0 {
-		return false
+	if atomic.LoadInt32(&a.DispatchPaused) != 0 {
+		return "dispatch_paused"
 	}
+	if atomic.LoadInt32(&a.IntelligencePaused) != 0 {
+		return "intelligence_paused"
+	}
+	anti := a.IsAntigravityAPI()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if a.Status == StatusError || a.healthTierLocked() == HealthTierBanned {
-		return false
+	if a.Status == StatusError || (anti && a.AntigravityHardBlocked) {
+		return "account_error"
 	}
-	// Legacy Codex Free windows are an account availability gate. Grok billing
-	// is represented separately by an explicit, fresh exhausted fact; a lone
-	// 100% percentage must not override PAYG/prepaid semantics.
-	if !a.isGrokAPILocked() && a.usageExhaustedLocked() {
-		return false
+	if a.healthTierLocked() == HealthTierBanned && (!anti || !a.antigravityUnauthorizedRecoveryLocked(time.Now())) {
+		return "unauthorized"
 	}
-	return a.hasDispatchCredentialLocked()
+	if !anti && !a.isGrokAPILocked() && a.usageExhaustedLocked() {
+		return "quota_exhausted"
+	}
+	if !a.hasDispatchCredentialLocked() {
+		return "credential_missing"
+	}
+	return ""
 }
 
 // RuntimeStatus 返回运行时状态字符串（供 admin API 使用）
@@ -10526,8 +10529,12 @@ func (s *Store) APIKeyAllowsAccount(apiKeyID int64, acc *Account) bool {
 // Web keys are fail-closed in native scheduling; only the explicit web admission
 // helper may apply their shared account/group/plan authorization gates.
 func (s *Store) apiKeyAllowsAccount(apiKeyID int64, acc *Account, web bool) bool {
+	return s.apiKeyScopeBlockReason(apiKeyID, acc, web) == ""
+}
+
+func (s *Store) apiKeyScopeBlockReason(apiKeyID int64, acc *Account, web bool) string {
 	if s == nil || apiKeyID <= 0 || acc == nil {
-		return true
+		return ""
 	}
 	s.apiKeyGroupsMu.RLock()
 	allowedGroups := s.apiKeyAllowedGroupSets[apiKeyID]
@@ -10535,14 +10542,34 @@ func (s *Store) apiKeyAllowsAccount(apiKeyID int64, acc *Account, web bool) bool
 	allowedPlans := s.apiKeyAllowedPlanSets[apiKeyID]
 	channel := s.apiKeyUpstreamChannels[apiKeyID]
 	s.apiKeyGroupsMu.RUnlock()
-	return apiKeyAllowsAccountConstraints(acc, allowedGroups, noAffinityGroups, allowedPlans, channel, web)
+	return apiKeyAccountConstraintReason(acc, allowedGroups, noAffinityGroups, allowedPlans, channel, web)
+}
+
+// APIKeyAccountBlockReason shares native scheduling authorization, but reports
+// scope before the account-local allowlist so unrelated pools don't dominate diagnostics.
+func (s *Store) APIKeyAccountBlockReason(apiKeyID int64, acc *Account) string {
+	if acc == nil {
+		return "unclassified"
+	}
+	if reason := s.apiKeyScopeBlockReason(apiKeyID, acc, false); reason != "" {
+		return reason
+	}
+	if !acc.AllowsAPIKey(apiKeyID) {
+		return "account_key_denied"
+	}
+	return ""
 }
 
 // APIKeyRowAllowsAccount evaluates the current database row without relying on
 // asynchronously refreshed scheduler caches.
 func APIKeyRowAllowsAccount(row *database.APIKeyRow, acc *Account) bool {
-	if row == nil || acc == nil || row.ID <= 0 || !acc.AllowsAPIKey(row.ID) {
-		return false
+	return APIKeyRowAccountBlockReason(row, acc) == ""
+}
+
+// APIKeyRowAccountBlockReason does not update the scheduler's cached policy.
+func APIKeyRowAccountBlockReason(row *database.APIKeyRow, acc *Account) string {
+	if row == nil || acc == nil || row.ID <= 0 {
+		return "unclassified"
 	}
 	groups := int64Set(normalizeAllowedGroupIDs(row.AllowedGroupIDs))
 	noAffinity := int64Set(normalizeAllowedGroupIDs(row.Limits.NoAffinityGroupIDs))
@@ -10550,39 +10577,49 @@ func APIKeyRowAllowsAccount(row *database.APIKeyRow, acc *Account) bool {
 	for _, plan := range normalizeAllowedPlans(row.Limits.PlanAllow) {
 		plans[plan] = struct{}{}
 	}
-	return apiKeyAllowsAccountConstraints(acc, groups, noAffinity, plans, row.Limits.ResolveUpstreamChannel(), false)
+	if reason := apiKeyAccountConstraintReason(acc, groups, noAffinity, plans, row.Limits.ResolveUpstreamChannel(), false); reason != "" {
+		return reason
+	}
+	if !acc.AllowsAPIKey(row.ID) {
+		return "account_key_denied"
+	}
+	return ""
 }
 
 func apiKeyAllowsAccountConstraints(acc *Account, allowedGroups, noAffinityGroups map[int64]struct{}, allowedPlans map[string]struct{}, channel string, web bool) bool {
+	return apiKeyAccountConstraintReason(acc, allowedGroups, noAffinityGroups, allowedPlans, channel, web) == ""
+}
+
+func apiKeyAccountConstraintReason(acc *Account, allowedGroups, noAffinityGroups map[int64]struct{}, allowedPlans map[string]struct{}, channel string, web bool) string {
 	// 渠道限定是硬门：grok 渠道只允许 Grok 账号，codex 渠道排除 Grok 账号。
 	switch channel {
 	case database.UpstreamChannelChatGPTWeb:
 		if !web {
-			return false
+			return "channel_mismatch"
 		}
 	case database.UpstreamChannelGrok:
 		if !acc.IsGrokAPI() {
-			return false
+			return "channel_mismatch"
 		}
 	case database.UpstreamChannelCodex:
 		if acc.IsGrokAPI() || acc.IsAntigravityAPI() || acc.IsClaudeOAuth() || acc.IsKiro() {
-			return false
+			return "channel_mismatch"
 		}
 	case database.UpstreamChannelAntigravity:
 		if !acc.IsAntigravityAPI() {
-			return false
+			return "channel_mismatch"
 		}
 	case database.UpstreamChannelClaude:
 		if !acc.IsClaudeOAuth() {
-			return false
+			return "channel_mismatch"
 		}
 	case database.UpstreamChannelKiro:
 		if !acc.IsKiro() {
-			return false
+			return "channel_mismatch"
 		}
 	}
 	if len(allowedGroups) == 0 && len(allowedPlans) == 0 {
-		return true
+		return ""
 	}
 	acc.mu.RLock()
 	defer acc.mu.RUnlock()
@@ -10597,7 +10634,7 @@ func apiKeyAllowsAccountConstraints(acc *Account, allowedGroups, noAffinityGroup
 				!acc.GrokLivePlanExpiresAt.IsZero() && time.Now().Before(acc.GrokLivePlanExpiresAt) {
 				plan = CanonicalGrokLivePlanFilter(acc.GrokLivePlan)
 			} else {
-				return false
+				return "plan_mismatch"
 			}
 		}
 		// Antigravity plan_type is Google's display name ("Google AI Pro");
@@ -10610,21 +10647,21 @@ func apiKeyAllowsAccountConstraints(acc *Account, allowedGroups, noAffinityGroup
 			plan = KiroPlanKey(acc.PlanType)
 		}
 		if _, ok := allowedPlans[plan]; !ok {
-			return false
+			return "plan_mismatch"
 		}
 	}
 	if len(allowedGroups) == 0 {
-		return true
+		return ""
 	}
 	for _, id := range acc.GroupIDs {
 		if _, ok := allowedGroups[id]; ok {
-			return true
+			return ""
 		}
 		if _, ok := noAffinityGroups[id]; ok {
-			return true
+			return ""
 		}
 	}
-	return false
+	return "group_mismatch"
 }
 
 func normalizeAllowedGroupIDs(groupIDs []int64) []int64 {

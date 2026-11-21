@@ -47,6 +47,7 @@ import type {
   GrokCapabilityProbeResponse,
   AdminErrorResponse,
   APIKeysResponse,
+  APIKeyModelDiagnostics,
   APIKeyTokenStat,
   APIKeyAccountStatsResponse,
   APIKeyScopeUsageItem,
@@ -533,6 +534,7 @@ export type UsageLogQueryParams = {
   end: string
   email?: string
   q?: string
+  requestId?: string
   model?: string
   endpoint?: string
   apiKeyId?: string
@@ -558,6 +560,7 @@ export function buildUsageLogSearchParams(params: UsageLogQueryParams) {
   search.set('end', params.end)
   if (params.email) search.set('email', params.email)
   if (params.q) search.set('q', params.q)
+  if (params.requestId) search.set('request_id', params.requestId)
   if (params.model) search.set('model', params.model)
   if (params.endpoint) search.set('endpoint', params.endpoint)
   if (params.apiKeyId) search.set('api_key_id', params.apiKeyId)
@@ -1389,6 +1392,8 @@ export const api = {
   // view: 'lite' — 只要密钥行本身,跳过窗口费用/最近使用时间的日志聚合(筛选下拉等场景)。
   getAPIKeys: (params: { view?: 'lite' } = {}) =>
     request<APIKeysResponse>(params.view ? `/keys?view=${params.view}` : '/keys'),
+  getAPIKeyModelDiagnostics: (id: number, signal?: AbortSignal) =>
+    request<APIKeyModelDiagnostics>(`/keys/${id}/model-diagnostics`, { signal }),
   getAPIKeyConcurrency: () => request<{ concurrency: Record<string, number> }>('/keys-concurrency'),
   createAPIKey: (data: CreateAPIKeyRequest) =>
     request<CreateAPIKeyResponse>('/keys', {

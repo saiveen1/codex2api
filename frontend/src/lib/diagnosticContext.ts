@@ -169,3 +169,96 @@ export function diagnosticCaptureExplanation(captureStatus?: string): string | u
       return undefined
   }
 }
+
+const candidateLabels: Record<string, string> = {
+  group_mismatch: '不在有效分组', channel_mismatch: '渠道不匹配', plan_mismatch: '套餐不匹配',
+  account_key_denied: '未授权给此 Key', unauthorized: '鉴权不可用', account_error: '账号异常',
+  account_disabled: '账号已停用', dispatch_paused: '已暂停调度', intelligence_paused: '降智保护暂停',
+  credential_missing: '缺少凭据', quota_exhausted: '额度耗尽', cooldown: '冷却中',
+  egress_unavailable: '出口不可用', concurrency_saturated: '并发已满', request_filter: '请求条件排除',
+  model_not_supported: '不支持实际选路模型',
+  retry_excluded: '本次重试排除', available: '通过当前检查', unclassified: '未能细分',
+}
+
+export function candidateReasonLabel(reason: string): string {
+  return Object.prototype.hasOwnProperty.call(candidateLabels, reason) ? candidateLabels[reason] : '未能细分'
+}
+
+const dispatchReasons: Record<string, [label: string, action: string]> = {
+  no_available_account: ['没有符合条件的可用账号', '结合候选计数，检查账号鉴权、调度状态和账号侧 Key 授权。'],
+  queue_full: ['等待队列已满', '检查队列容量和当前负载。'],
+  queue_timeout: ['等待可用账号超时', '检查队列等待时间与可用账号并发。'],
+  queue_rejected: ['请求被队列拒绝', '检查调度队列状态和准入限制。'],
+  quota_exhausted: ['额度耗尽', '检查账号和 Key 的额度以及恢复时间。'],
+  scope_budget: ['作用域配额受限', '检查 Key 在有效分组或渠道的配额。'],
+  concurrency_saturated: ['可用账号并发已满', '检查账号并发上限和当前负载。'],
+  model_not_supported: ['找不到支持实际选路模型的账号', '核对请求模型、实际选路模型和 Key 的本地目录。'],
+  response_context_unavailable: ['响应上下文不可用', '检查关联请求记录与续接上下文。'],
+  pinned_account_unavailable: ['续接指定的账号不可用', '检查指定账号的状态、授权和路由。'],
+  proxy_unavailable: ['代理出口不可用', '检查账号所用代理的状态与连通性。'],
+  upstream_pool_exhausted: ['上游候选已用尽', '按请求 ID 查看已记录的尝试，核对上游 HTTP、连接或流错误。'],
+}
+
+export function diagnosticIDs(value: unknown): number[] {
+  return diagnosticArray(value).filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0)
+}
+
+export function candidateCounts(value: unknown): { code: string; label: string; count: number }[] {
+  return Object.entries(diagnosticRecord(value) ?? {}).flatMap(([code, count]) =>
+    typeof count === 'number' && Number.isSafeInteger(count) && count > 0
+      ? [{ code, label: candidateReasonLabel(code), count }]
+      : [],
+  ).sort((a, b) => b.count - a.count)
+}
+
+export function candidateSamples(value: unknown): { id: number; reason: string }[] {
+  return diagnosticArray(value).flatMap((item) => {
+    const sample = diagnosticRecord(item)
+    const [id] = diagnosticIDs([sample?.account_id])
+    const reason = diagnosticString(sample?.reason)
+    return id !== undefined && reason ? [{ id, reason }] : []
+  }).sort((a, b) => Number(b.reason === 'account_key_denied') - Number(a.reason === 'account_key_denied'))
+}
+
+export function getDispatchDecision(event: DiagnosticRecord) {
+  const decision = diagnosticRecord(event.decision)
+  const reason = diagnosticString(decision?.reason)
+  if (!decision || !reason) return undefined
+  const [label, action] = Object.prototype.hasOwnProperty.call(dispatchReasons, reason) ? dispatchReasons[reason] : ['未能细分调度原因', '查看已保存的候选和尝试记录。']
+  const attempted = diagnosticBoolean(decision.attempted)
+  const counts = candidateCounts(decision.counts)
+  const dispatch = attempted === false ? '未派发' : attempted === true ? '已尝试上游' : '未记录是否派发'
+  const blockers = counts.filter(({ code }) => code !== 'available')
+  const inScope = blockers.filter(({ code }) => !['group_mismatch', 'channel_mismatch', 'plan_mismatch'].includes(code))
+  const highlights = inScope.length > 0 ? inScope : blockers
+  return {
+    decision, attempted, counts, action, dispatch, label,
+    summary: reason === 'no_available_account' && highlights.length > 0
+      ? highlights.slice(0, 2).map(({ count, label }) => `${count} 个账号${label}`).join('，')
+      : label,
+  }
+}
+
+export function usageDiagnosticStatus(log: { status_code: number; diagnostic_context?: string | null; error_message?: string; upstream_error_kind?: string }) {
+  const parsed = parseDiagnosticContext(log.diagnostic_context)
+  const event = parsed.state === 'valid' ? parsed.event : undefined
+  const outcomeStatus = diagnosticNumber(event?.outcome_status)
+  const failed = log.status_code >= 400 || (outcomeStatus ?? 0) >= 400
+    || event?.outcome === 'failure' || event?.outcome === 'error'
+    || Boolean(log.error_message?.trim() || log.upstream_error_kind?.trim())
+  if (!failed) return { failed: false as const }
+  const failure = (label: string) => ({ failed: true as const, label, httpStatus: diagnosticNumber(event?.downstream_http_status) ?? log.status_code })
+  if (!event) return failure(parsed.state === 'legacy' ? '历史未采集' : '诊断详情不可读')
+  const error = getDiagnosticError(event)
+  const stage = diagnosticString(event.stage)
+  const source = diagnosticString(error?.source)
+  const upstream = stage?.startsWith('upstream') || source?.startsWith('upstream')
+  const decision = getDispatchDecision(event)
+  if (decision) return failure(`${decision.dispatch} · ${decision.decision.reason === 'no_available_account' && decision.counts.some(({ code }) => code === 'account_key_denied') ? '无符合授权的可用账号' : decision.label}`)
+  if (upstream) return failure(error?.detail === 'generic' ? '上游未提供可定位原因' : '上游请求失败')
+  if (stage === 'dispatch') return failure('调度原因未采集')
+  if (source === 'downstream_response' || source === 'websocket_gateway' || stage === 'local' || stage === 'local_or_gateway' || stage === 'websocket_local_or_gateway' || stage === 'authentication') {
+    return failure('网关返回错误')
+  }
+  return failure('失败来源未确认')
+}

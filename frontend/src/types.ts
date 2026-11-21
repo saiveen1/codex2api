@@ -3705,6 +3705,24 @@ export interface APIKeyAccountStatsResponse {
 
 export type UserBillingMode = 'token' | 'per_image' | 'per_video' | 'per_second'
 
+export interface ModelCatalogDiagnostic {
+  reason: string
+  group_ids?: number[]
+  channel?: string
+  scoped?: number
+  visible?: number
+  models?: string[]
+  counts?: Record<string, number>
+  samples?: { account_id: number; reason: string }[]
+  time?: string
+}
+
+export interface APIKeyModelDiagnostics {
+  current: ModelCatalogDiagnostic
+  last_empty?: (ModelCatalogDiagnostic & { request_id?: string }) | null
+  last_empty_status?: string
+}
+
 export interface UsageLog {
   /** Generated video duration (seconds) on Grok video settlement rows. */
   video_seconds?: number

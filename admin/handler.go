@@ -1360,6 +1360,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/keys/:id/reset-quota", h.ResetAPIKeyQuota)
 	api.GET("/keys/:id/scope-usage", h.GetAPIKeyScopeUsage)
 	api.GET("/keys/:id/model-request-usage", h.GetAPIKeyModelRequestUsage)
+	api.GET("/keys/:id/model-diagnostics", h.GetAPIKeyModelDiagnostics)
 	api.GET("/keys-scope-summary", h.GetAPIKeysScopeSummary)
 	api.POST("/keys/:id/scope-quota/reset", h.ResetAPIKeyScopeQuota)
 	api.DELETE("/keys/:id", h.DeleteAPIKey)

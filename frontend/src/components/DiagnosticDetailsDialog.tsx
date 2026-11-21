@@ -1,17 +1,22 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, Copy, FileSearch, Fingerprint, Info, Network, ShieldAlert } from 'lucide-react'
+import { useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import { CandidateEvidence } from './ModelDiagnosticsDialog'
+import { Check, ChevronDown, Copy, Fingerprint, Info, Network, ShieldAlert } from 'lucide-react'
 import type { UsageLog } from '../types'
 import {
   diagnosticArray,
   diagnosticBoolean,
   diagnosticCaptureExplanation,
   diagnosticErrorNotes,
+  diagnosticIDs,
   diagnosticNumber,
   diagnosticRecord,
   diagnosticString,
   diagnosticStringArray,
   getDiagnosticError,
   getDiagnosticRequestScopes,
+  getDispatchDecision,
+  usageDiagnosticStatus,
   parseDiagnosticContext,
   type DiagnosticRecord,
 } from '../lib/diagnosticContext'
@@ -23,6 +28,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 
 const enumLabels: Record<string, Record<string, string>> = {
@@ -129,6 +135,8 @@ function asRecordList(value: unknown): DiagnosticRecord[] {
 }
 
 function summaryFromEvent(event: DiagnosticRecord): string | undefined {
+  const dispatch = getDispatchDecision(event)
+  if (dispatch) return `${dispatch.dispatch}：${dispatch.summary}`
   const summary = diagnosticString(event.summary)
   if (summary) return summary
   const error = getDiagnosticError(event)
@@ -160,9 +168,9 @@ export function diagnosticContextSummary(
 
 function DetailRow({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
-    <div className="grid grid-cols-[minmax(8rem,0.9fr)_minmax(0,1.6fr)] gap-x-3 gap-y-1 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`min-w-0 break-words text-foreground ${mono ? 'font-geist-mono text-[11px]' : ''}`}>{value}</span>
+    <div className="grid min-w-0 gap-x-3 gap-y-0.5 text-xs sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)]">
+      <span className="min-w-0 break-words text-muted-foreground">{label}</span>
+      <span className={`min-w-0 [overflow-wrap:anywhere] text-foreground ${mono ? 'font-geist-mono text-[11px]' : ''}`}>{value}</span>
     </div>
   )
 }
@@ -175,12 +183,12 @@ function DetailSection({ title, description, children, defaultOpen = true }: {
 }) {
   return (
     <details open={defaultOpen} className="group rounded-lg border border-border bg-card/60">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-semibold text-foreground marker:content-none">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-foreground marker:content-none focus-visible:outline-2 focus-visible:outline-ring">
         <span className="min-w-0">
           {title}
           {description ? <span className="mt-0.5 block text-[11px] font-normal leading-relaxed text-muted-foreground">{description}</span> : null}
         </span>
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" />
       </summary>
       <div className="border-t border-border px-3 py-3">{children}</div>
     </details>
@@ -290,9 +298,9 @@ function SampleList({ title, samples, kind }: { title: string; samples: Diagnost
 }
 
 function RequestShapeSection({ title, description, shape }: { title: string; description: string; shape?: DiagnosticRecord }) {
-  if (!shape) return <DetailSection title={title} description={description}><EmptyHint text="此记录没有该请求形状；这不代表另一侧请求不存在。" /></DetailSection>
+  if (!shape) return <DetailSection title={title} description={description} defaultOpen={false}><EmptyHint text="此记录没有该请求形状；这不代表另一侧请求不存在。" /></DetailSection>
   return (
-    <DetailSection title={title} description={description}>
+    <DetailSection title={title} description={description} defaultOpen={false}>
       <div className="space-y-3">
         <ShapeCounts shape={shape} />
         <details className="rounded-md border border-border/70 bg-muted/10 p-2.5">
@@ -329,7 +337,7 @@ function ErrorSection({ error }: { error?: DiagnosticRecord }) {
   ].filter((item): item is { label: string; value: string } => item.value !== undefined)
 
   return (
-    <DetailSection title="安全错误证据 / safe error evidence" description="仅显示后端已允许保存的元数据，不显示原始提示词、凭据或消息正文。">
+    <DetailSection title="安全错误证据 / safe error evidence" description="仅显示后端已允许保存的元数据，不显示原始提示词、凭据或消息正文。" defaultOpen={false}>
       <div className="space-y-3">
         <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs leading-relaxed text-foreground">
           <div className="mb-1 flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-300"><Info className="size-3.5" />如何理解此错误</div>
@@ -397,16 +405,69 @@ function CopySafeJsonButton({ raw }: { raw: string }) {
   )
 }
 
-function DiagnosticDetailsContent({ log }: { log: UsageLog }) {
+function DispatchOverview({ log, event }: { log: UsageLog; event: DiagnosticRecord }) {
+  const result = getDispatchDecision(event)
+  const [accountId] = diagnosticIDs([event.account_id, log.account_id])
+  const stage = diagnosticString(event.stage)
+  const error = getDiagnosticError(event)
+  const status = usageDiagnosticStatus(log)
+  if (!result) return <div className="space-y-1.5 rounded-lg border border-border bg-card p-3 text-sm">
+    <p className="font-semibold">{status.failed ? status.label : '已记录安全诊断元数据'}</p>
+    <p className="text-xs text-muted-foreground">发生阶段：{stage ? formatEnum('stage', stage) : '未采集'}。{accountId ? `关联账号 #${accountId}。` : '未记录所选账号。'}</p>
+    <p className="text-xs text-muted-foreground">{error?.detail === 'generic' ? '未提供可定位的错误详情。' : summaryFromEvent(event)} 查看事件与安全证据，或按请求 ID 对照尝试记录。</p>
+  </div>
+
+  const { decision, attempted, counts, action, dispatch, label, summary } = result
+  const groupIds = diagnosticIDs(decision.group_ids)
+  const knownCandidate = diagnosticBoolean(decision.has_candidate)
+  const partial = diagnosticBoolean(decision.partial)
+  return <section aria-label="请求当时的调度结果" className="min-w-0 space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-3 sm:p-4">
+    <div>
+      <p className="text-xs font-semibold text-primary">请求当时 · 网关调度</p>
+      <p className="mt-1 break-words text-sm font-semibold">{dispatch}：{summary}</p>
+      {summary !== label ? <p className="mt-1 text-xs text-muted-foreground">{label}。</p> : null}
+    </div>
+    <div className="grid gap-2 text-xs sm:grid-cols-2">
+      <DetailRow label="所选账号" value={accountId ? <Link to={`/accounts?account_id=${accountId}`} className="rounded text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring">账号 #{accountId}</Link> : attempted === false && knownCandidate === false ? '未选中' : '未记录'} />
+      <DetailRow label="已知可用候选" value={knownCandidate === undefined ? '未记录' : knownCandidate ? '有' : partial ? '已采集范围内未发现' : '未发现'} />
+      <DetailRow label="请求模型" value={diagnosticString(decision.requested_model) ?? '未记录'} mono />
+      <DetailRow label="实际选路模型" value={diagnosticString(decision.effective_model) ?? '未记录'} mono />
+      <DetailRow label="有效分组 / 渠道" value={`${groupIds.length ? groupIds.join('、') : '未列出分组'} / ${diagnosticString(decision.channel) ?? '未列出渠道'}`} />
+      <DetailRow label="作用域内账号" value={diagnosticNumber(decision.scoped) ?? '未记录'} />
+    </div>
+    <p className="text-xs leading-relaxed"><strong>下一步：</strong>{action}</p>
+    {partial ? <p className="text-xs text-muted-foreground">候选证据只采集了一部分，未能细分的情况不作推断。</p> : null}
+    {counts.length || diagnosticArray(decision.samples).length ? <DetailSection title="候选计数与账号样本" description="诊断为有界采集，样本不是完整账号列表。" defaultOpen={false}>
+      <div className="text-xs"><CandidateEvidence counts={decision.counts} samples={decision.samples} /></div>
+    </DetailSection> : <EmptyHint text="此记录未保存候选计数或账号样本。" />}
+  </section>
+}
+
+function DiagnosticActions({ requestId, keyId, onSearchRequest }: { requestId?: string; keyId?: number; onSearchRequest?: (id: string) => void }) {
+  const [copyResult, setCopyResult] = useState('')
+  return <div className="space-y-2">
+    {requestId ? <p className="break-all text-xs text-muted-foreground">请求 ID：<code>{requestId}</code></p> : null}
+    <div className="flex flex-wrap gap-2">
+      {requestId ? <Button type="button" size="sm" variant="outline" className="transition-colors motion-reduce:transition-none" onClick={() => {
+        void copyText(requestId).then(() => setCopyResult('请求 ID 已复制'), () => setCopyResult('无法复制，请手动选择上方请求 ID。'))
+      }}>复制请求 ID</Button> : null}
+      {requestId && onSearchRequest ? <Button type="button" size="sm" variant="outline" className="transition-colors motion-reduce:transition-none" onClick={() => onSearchRequest(requestId)}>查看同一请求的记录</Button> : null}
+      {keyId && keyId > 0 ? <Button asChild size="sm" variant="outline" className="transition-colors motion-reduce:transition-none"><Link to={`/api-keys?model_diagnostics=${keyId}`}>检查此 Key 的当前模型目录</Link></Button> : null}
+    </div>
+    {copyResult ? <p role="status" className="text-xs text-muted-foreground">{copyResult}</p> : null}
+  </div>
+}
+
+function DiagnosticDetailsContent({ log, actions }: { log: UsageLog; actions: ReactNode }) {
   const parsed = useMemo(() => parseDiagnosticContext(log.diagnostic_context), [log.diagnostic_context])
   if (parsed.state === 'legacy') {
-    return <LegacyDiagnosticState />
+    return <><LegacyDiagnosticState />{actions}</>
   }
   if (parsed.state === 'oversize') {
-    return <DiagnosticStateNotice title="诊断上下文过大 / context too large">该记录的诊断上下文为 {formatBytes(parsed.bytes)}，超过前端安全读取上限 {formatBytes(parsed.maxBytes)}，因此未展开。原始请求无法由此界面重建。</DiagnosticStateNotice>
+    return <><DiagnosticStateNotice title="诊断上下文过大 / context too large">该记录的诊断上下文为 {formatBytes(parsed.bytes)}，超过前端安全读取上限 {formatBytes(parsed.maxBytes)}，因此未展开。原始请求无法由此界面重建。</DiagnosticStateNotice>{actions}</>
   }
   if (parsed.state === 'invalid') {
-    return <DiagnosticStateNotice title="诊断上下文无效 / invalid context">已保存的诊断上下文不是可安全解析的 JSON（{parsed.reason === 'invalid_json' ? 'JSON 格式错误' : '顶层不是对象'}）。页面已保留原日志，不会因该记录崩溃。</DiagnosticStateNotice>
+    return <><DiagnosticStateNotice title="诊断上下文无效 / invalid context">已保存的诊断上下文不是可安全解析的 JSON（{parsed.reason === 'invalid_json' ? 'JSON 格式错误' : '顶层不是对象'}）。页面已保留原日志，不会因该记录崩溃。</DiagnosticStateNotice>{actions}</>
   }
 
   const event = parsed.event
@@ -440,15 +501,8 @@ function DiagnosticDetailsContent({ log }: { log: UsageLog }) {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-        <div className="flex gap-2">
-          <FileSearch className="mt-0.5 size-4 shrink-0 text-primary" />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground">{summaryFromEvent(event) || '已记录安全诊断元数据。'}</div>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">这是元数据诊断，不含原始提示词、凭据或原始上游消息；HTTP 状态码本身不能确定根因。</p>
-          </div>
-        </div>
-      </div>
+      <DispatchOverview log={log} event={event} />
+      {actions}
 
       {(captureExplanation || attemptCaptureExplanation) ? (
         <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
@@ -457,7 +511,7 @@ function DiagnosticDetailsContent({ log }: { log: UsageLog }) {
         </div>
       ) : null}
 
-      <DetailSection title="事件概览 / event overview" description="记录的阶段、结果、重试与关联标识。">
+      <DetailSection title="事件概览与尝试记录 / event overview" description="记录的阶段、结果、重试与关联标识。" defaultOpen={false}>
         <div className="space-y-3">
           <div className="flex flex-wrap gap-1.5">
             <StatusPill label="采集 / capture" value={captureStatus} group="capture_status" />
@@ -515,38 +569,37 @@ function DiagnosticStateNotice({ title, children }: { title: string; children: R
   )
 }
 
-export function DiagnosticDetailsDialog({ log, open, onOpenChange }: {
-  log: UsageLog
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>诊断详情</DialogTitle>
-          <DialogDescription>安全元数据诊断 / safe diagnostic metadata · HTTP {log.status_code}{log.request_id ? ` · ${log.request_id}` : ''}</DialogDescription>
-        </DialogHeader>
-        <DiagnosticDetailsContent log={log} />
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-export function DiagnosticDetailsButton({ log, className, size = 'xs', variant = 'outline' }: {
+export function DiagnosticDetailsButton({ log, className, size = 'xs', variant = 'outline', trigger, onSearchRequest }: {
   log: UsageLog
   className?: string
   size?: 'xs' | 'sm'
   variant?: 'outline' | 'ghost'
+  trigger?: ReactElement
+  onSearchRequest?: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const parsed = open ? parseDiagnosticContext(log.diagnostic_context) : undefined
+  const event = parsed?.state === 'valid' ? parsed.event : undefined
+  const requestId = diagnosticString(event?.request_id) ?? log.request_id
+  const httpStatus = diagnosticNumber(event?.downstream_http_status) ?? log.status_code
+  const outcomeStatus = diagnosticNumber(event?.outcome_status)
   return (
-    <>
-      <Button type="button" variant={variant} size={size} className={className} onClick={() => setOpen(true)}>
-        <Network className="size-3.5" />
-        诊断详情
-      </Button>
-      <DiagnosticDetailsDialog log={log} open={open} onOpenChange={setOpen} />
-    </>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        {trigger ?? <Button type="button" variant={variant} size={size} className={className}>
+          <Network className="size-3.5" />
+          诊断详情
+        </Button>}
+      </DialogTrigger>
+      <DialogContent className="grid-cols-[minmax(0,1fr)] motion-reduce:animate-none sm:max-w-3xl">
+        <DialogHeader className="pr-5 text-left">
+          <DialogTitle>诊断详情</DialogTitle>
+          <DialogDescription>HTTP {httpStatus}{outcomeStatus && outcomeStatus !== httpStatus ? ` · 业务终态 ${outcomeStatus}` : ''} · 仅显示安全诊断元数据</DialogDescription>
+        </DialogHeader>
+        <DiagnosticDetailsContent log={log} actions={
+          <DiagnosticActions key={requestId} requestId={requestId} keyId={log.api_key_id} onSearchRequest={onSearchRequest ? (id) => { setOpen(false); onSearchRequest(id) } : undefined} />
+        } />
+      </DialogContent>
+    </Dialog>
   )
 }

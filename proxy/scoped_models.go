@@ -6,11 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/codex2api/api"
@@ -93,16 +90,18 @@ func scopedModelOwner(record *scopedModelRecord) string {
 }
 
 func (h *Handler) accountVisibleToAPIKey(account *auth.Account, apiKeyID int64, now time.Time) bool {
-	if h == nil || h.store == nil || account == nil || (!account.ModelCatalogEligible() && !account.DaybreakCatalogEligible()) {
-		return false
-	}
-	if !account.AllowsAPIKey(apiKeyID) || !h.store.APIKeyAllowsAccount(apiKeyID, account) {
-		return false
+	return h != nil && h.store != nil && account != nil && accountCatalogBlockReason(account, now) == "" &&
+		h.store.APIKeyAccountBlockReason(apiKeyID, account) == ""
+}
+
+func accountCatalogBlockReason(account *auth.Account, now time.Time) string {
+	if reason := account.ModelCatalogBlockReason(); reason != "" && !account.DaybreakCatalogEligible() {
+		return reason
 	}
 	if account.IsGrokAPI() && !account.GrokModelCatalogHardAllowed(now) {
-		return false
+		return "upstream_access_or_quota"
 	}
-	return true
+	return ""
 }
 
 func intersectModelIDs(candidates, allow []string) []string {
@@ -136,17 +135,33 @@ func exactModelAliases(mappingJSON string, targetExists func(string) bool) []str
 }
 
 func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRow) map[string]*scopedModelRecord {
+	records, _ := h.buildScopedModelCatalog(ctx, row, false)
+	return records
+}
+
+func (h *Handler) buildScopedModelCatalog(ctx context.Context, row *database.APIKeyRow, inspect bool) (map[string]*scopedModelRecord, ModelCatalogDiagnostic) {
 	records := make(map[string]*scopedModelRecord)
+	diagnosis := ModelCatalogDiagnostic{Reason: "uncollected"}
 	if h == nil || row == nil {
-		return records
+		return records, diagnosis
 	}
-	if row.Limits.ResolveUpstreamChannel() == database.UpstreamChannelChatGPTWeb {
-		return h.chatGPTWebModelRecords(ctx, row)
+	diagnosis.Channel = row.Limits.ResolveUpstreamChannel()
+	diagnosis.GroupIDs = effectiveCatalogGroupIDs(row)
+	if diagnosis.Channel == database.UpstreamChannelChatGPTWeb {
+		// This channel publishes a fixed chat/image contract, not an account snapshot.
+		records = h.chatGPTWebModelRecords(ctx, row)
+		diagnosis.Reason = "ok"
+		if len(records) == 0 {
+			diagnosis.Reason = "models_filtered"
+		}
+		return records, diagnosis
 	}
 	if h.store == nil {
-		return records
+		return records, diagnosis
 	}
-	h.syncAPIKeyAllowedGroups(row)
+	if !inspect {
+		h.syncAPIKeyAllowedGroups(row)
+	}
 	now := time.Now()
 	accounts := h.store.Accounts()
 	sort.SliceStable(accounts, func(i, j int) bool {
@@ -171,18 +186,32 @@ func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRo
 		return ok
 	}
 
-	filteredCatalog := 0
-	filteredCatalogSample := make([]string, 0, 8)
-	visibleAccounts := 0
+	var scoped, visible int
+	diagnosis.Scoped, diagnosis.Visible = &scoped, &visible
 	for _, account := range accounts {
-		if !h.accountVisibleToAPIKey(account, row.ID, now) {
-			filteredCatalog++
-			if len(filteredCatalogSample) < 8 {
-				filteredCatalogSample = append(filteredCatalogSample, catalogFilterSample(account))
-			}
+		if account == nil {
 			continue
 		}
-		visibleAccounts++
+		var reason string
+		if inspect {
+			reason = auth.APIKeyRowAccountBlockReason(row, account)
+		} else {
+			reason = h.store.APIKeyAccountBlockReason(row.ID, account)
+		}
+		switch reason {
+		case "channel_mismatch", "group_mismatch", "plan_mismatch":
+			diagnosis.addBlock(reason, 0)
+			continue
+		}
+		scoped++
+		if reason == "" {
+			reason = accountCatalogBlockReason(account, now)
+		}
+		if reason != "" {
+			diagnosis.addBlock(reason, account.ID())
+			continue
+		}
+		visible++
 		switch {
 		case account.IsGrokAPI():
 			visible := GrokVisibleModelIDsForAccount(account)
@@ -320,6 +349,7 @@ func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRo
 	// alias may therefore remain visible while its hidden target is denied; the
 	// request path applies the same source-name policy before mapping.
 	// Daybreak 另外校验目标程序模型，避免映射绕过该 Key 的权限名单。
+	beforeKeyModelFilter := len(records)
 	for key, record := range records {
 		if record.backing != modelBackingKiro {
 			record.imageInput = false
@@ -336,83 +366,26 @@ func (h *Handler) scopedModelRecords(ctx context.Context, row *database.APIKeyRo
 			addScopedModel(records, id, modelBackingCodex, time.Time{}, true)
 		}
 	}
-	if len(records) == 0 && (filteredCatalog > 0 || visibleAccounts > 0) {
-		logEmptyModelCatalog(row.ID, row.Limits.ResolveUpstreamChannel(), filteredCatalog, visibleAccounts, strings.Join(filteredCatalogSample, "; "))
+	switch {
+	case len(records) > 0:
+		diagnosis.Reason = "ok"
+	case scoped == 0:
+		diagnosis.Reason = "no_scoped_accounts"
+	case visible == 0:
+		diagnosis.Reason = "no_visible_accounts"
+	case beforeKeyModelFilter == 0:
+		diagnosis.Reason = "no_account_models"
+	default:
+		diagnosis.Reason = "models_filtered"
 	}
-	return records
-}
-
-// catalogEmptyLogAt throttles the empty-catalog diagnostic. Clients poll
-// /v1/models, and one redacted line per key per minute is enough to explain
-// a stuck empty list.
-var (
-	catalogEmptyLogMu sync.Mutex
-	catalogEmptyLogAt = map[int64]time.Time{}
-)
-
-func logEmptyModelCatalog(keyID int64, channel string, filtered int, visible int, sample string) {
-	now := time.Now()
-	catalogEmptyLogMu.Lock()
-	if last, ok := catalogEmptyLogAt[keyID]; ok && now.Sub(last) < time.Minute {
-		catalogEmptyLogMu.Unlock()
-		return
-	}
-	catalogEmptyLogAt[keyID] = now
-	if len(catalogEmptyLogAt) > 1024 {
-		for id, at := range catalogEmptyLogAt {
-			if now.Sub(at) >= time.Minute {
-				delete(catalogEmptyLogAt, id)
-			}
-		}
-	}
-	catalogEmptyLogMu.Unlock()
-	log.Printf("model catalog empty for api_key_id=%d channel=%s filtered=%d visible=%d sample=%s", keyID, channel, filtered, visible, sample)
-}
-
-// catalogFilterSample is a redacted reason an account contributed no models.
-// It never includes tokens, email, or proxy URLs.
-func catalogFilterSample(account *auth.Account) string {
-	if account == nil {
-		return "id=0 reason=nil"
-	}
-	upstream := strings.TrimSpace(account.UpstreamType)
-	if len(upstream) > 32 {
-		upstream = upstream[:32]
-	}
-	return fmt.Sprintf("id=%d upstream=%s reason=%s", account.ID(), upstream, catalogFilterReason(account))
-}
-
-func catalogFilterReason(account *auth.Account) string {
-	if account == nil {
-		return "nil"
-	}
-	disabled := atomic.LoadInt32(&account.Disabled) != 0
-	if disabled && account.IsBanned() {
-		return "disabled_banned"
-	}
-	if disabled {
-		return "disabled"
-	}
-	if atomic.LoadInt32(&account.DispatchPaused) != 0 {
-		return "dispatch_paused"
-	}
-	if atomic.LoadInt32(&account.IntelligencePaused) != 0 {
-		return "intelligence_paused"
-	}
-	if !account.ModelCatalogEligible() && !account.DaybreakCatalogEligible() {
-		if account.IsBanned() {
-			return "banned"
-		}
-		if status := account.RuntimeStatus(); status != "" {
-			return "catalog_" + status
-		}
-		return "catalog_ineligible"
-	}
-	return "scope"
+	return records, diagnosis
 }
 
 func (h *Handler) scopedModels(ctx context.Context, row *database.APIKeyRow) []api.Model {
-	records := h.scopedModelRecords(ctx, row)
+	return scopedRecordsToModels(h.scopedModelRecords(ctx, row))
+}
+
+func scopedRecordsToModels(records map[string]*scopedModelRecord) []api.Model {
 	models := make([]api.Model, 0, len(records))
 	for _, record := range records {
 		models = append(models, api.Model{
@@ -466,14 +439,9 @@ func codexManifestNeedsFiltering(row *database.APIKeyRow, account *auth.Account)
 	return account != nil && len(account.CodexModels()) > 0
 }
 
-func codexManifestModelAllowed(row *database.APIKeyRow, account *auth.Account, slug string) bool {
-	if strings.TrimSpace(slug) == "" || account == nil || !account.SupportsCodexModel(slug) {
-		return false
-	}
-	if isProOnlyModel(slug) && !isSparkPlanCandidate(account.GetPlanType()) {
-		return false
-	}
-	return row == nil || checkAPIKeyModel(slug, row.Limits) == ""
+func codexManifestAccountModelAllowed(account *auth.Account, slug string) bool {
+	return strings.TrimSpace(slug) != "" && account != nil && account.SupportsCodexModel(slug) &&
+		(!isProOnlyModel(slug) || isSparkPlanCandidate(account.GetPlanType()))
 }
 
 // filterCodexManifest accepts only the known {"models":[{"slug":...}]} shape.

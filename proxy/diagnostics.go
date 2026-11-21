@@ -59,6 +59,7 @@ type diagnosticEvent struct {
 	FirstTokenMs      int                     `json:"first_token_ms,omitempty"`
 	Request           *diagnosticRequestShape `json:"request,omitempty"`
 	Error             diagnosticError         `json:"error"`
+	Decision          *dispatchDecision       `json:"decision,omitempty"`
 }
 
 var diagnosticIDPattern = regexp.MustCompile(`^(?:[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}|req_[a-fA-F0-9]{8,64})$`)
@@ -331,9 +332,10 @@ func finishRequestDiagnostic(c *gin.Context, errorBody []byte, overflow bool) {
 	}
 	a.mu.Lock()
 	failed, outcome, started, final := a.diagnosticFailed, a.diagnosticOutcome, a.started, a.diagnosticFinal
+	decision, dispatchStream := a.dispatchDecision, a.dispatchStream
 	a.mu.Unlock()
 	status := c.Writer.Status()
-	if !failed && status < 400 {
+	if !failed && status < 400 && decision == nil {
 		return
 	}
 	e := diagnosticBase(c.Request.Context(), "request_end", "completion")
@@ -377,6 +379,21 @@ func finishRequestDiagnostic(c *gin.Context, errorBody []byte, overflow bool) {
 	}
 	if e.Error.Type == "authentication_error" {
 		e.Stage = "authentication"
+	}
+	if decision != nil {
+		e.Decision, e.Stream, e.APIKeyID = decision, dispatchStream, requestAPIKeyID(c)
+		e.Stage, e.Outcome = "dispatch", "failure"
+		if e.AccountID == 0 {
+			e.AccountID = decision.SelectedAccountID
+		}
+		if status < 400 {
+			e.OutcomeStatus = decision.status
+		}
+		if !decision.Attempted && e.Attempt.Error.Source == "" {
+			e.Error.Source = "gateway_dispatch"
+			e.Error.Code = decision.Reason
+			e.Error.Detail = "classified"
+		}
 	}
 	writeDiagnosticEvent(e)
 	persistDiagnosticOnlyUsage(c, e)

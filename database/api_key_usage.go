@@ -67,6 +67,7 @@ func (db *DB) getAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since tim
 		WHERE api_key_id = $1
 		  AND created_at >= $2
 		  AND status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 	`
 	if honorReset {
 		query = `
@@ -81,6 +82,7 @@ func (db *DB) getAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since tim
 			  AND u.created_at >= $2
 			  AND (k.last_reset_at IS NULL OR u.created_at >= k.last_reset_at)
 			  AND u.status_code <> 499
+			  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		`
 	}
 	var oldestRaw interface{}
@@ -119,6 +121,7 @@ func (db *DB) GetAPIKeyAccountWindowUsage(ctx context.Context, apiKeyID int64, w
 		WHERE api_key_id = $1
 		  AND created_at >= $2
 		  AND status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY account_id
 	`, apiKeyID, db.timeArg(since))
 	if err != nil {
@@ -175,6 +178,7 @@ func (db *DB) GetAPIKeyAccountWindowsUsage(ctx context.Context, apiKeyID int64) 
 			COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(user_billed), 0)
 		FROM usage_logs
 		WHERE api_key_id = $1 AND created_at >= $5 AND status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY account_id
 	`, apiKeyID, since5h, since1d, since7d, since30d)
 	if err != nil {
@@ -238,6 +242,7 @@ func (db *DB) GetAPIKeysAccountWindowUsage(ctx context.Context, apiKeyIDs []int6
 		WHERE api_key_id IN (%s)
 		  AND created_at >= %s
 		  AND status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY api_key_id, account_id
 	`, strings.Join(placeholders, ","), sincePlaceholder)
 
@@ -361,6 +366,7 @@ func (db *DB) ListAPIKeyTokenStats(ctx context.Context, rangeStart, rangeEnd tim
 			COALESCE(SUM(user_billed), 0) AS user_billed
 		FROM usage_logs
 		WHERE status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		  AND created_at >= $1
 	`
 	args := []interface{}{db.timeArg(rangeStart)}
@@ -466,6 +472,7 @@ func (db *DB) ListAPIKeyAccountStats(ctx context.Context, apiKeyID int64, rangeS
 				COALESCE(SUM(user_billed), 0) AS user_billed
 			FROM usage_logs
 			WHERE api_key_id = $1 AND status_code <> 499 AND created_at >= $2
+			  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 	`
 	args := []interface{}{apiKeyID, db.timeArg(rangeStart)}
 	if !rangeEnd.IsZero() {
@@ -628,6 +635,7 @@ func (db *DB) ListAPIKeyLastUsedAt(ctx context.Context) (map[int64]time.Time, er
 			FROM usage_logs u
 			WHERE u.api_key_id = k.id
 			  AND u.status_code <> 499
+			  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'
 			ORDER BY u.created_at DESC
 			LIMIT 1
 		)
@@ -685,6 +693,7 @@ func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, honor
 		WHERE api_key_id > 0
 		  AND created_at >= $1
 		  AND status_code <> 499
+		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY api_key_id
 	`
 	if honorReset {
@@ -696,6 +705,7 @@ func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, honor
 			  AND u.created_at >= $1
 			  AND (k.last_reset_at IS NULL OR u.created_at >= k.last_reset_at)
 			  AND u.status_code <> 499
+			  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'
 			GROUP BY u.api_key_id
 		`
 	}
@@ -977,7 +987,7 @@ const (
 )
 
 func (db *DB) apiKeySelfUsageWhere(apiKeyID int64, rangeStart, rangeEnd time.Time) (string, []interface{}) {
-	where := "api_key_id = $1 AND status_code <> 499"
+	where := "api_key_id = $1 AND status_code <> 499 AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'"
 	args := []interface{}{apiKeyID}
 	if !rangeStart.IsZero() {
 		args = append(args, db.timeArg(rangeStart))
@@ -1187,7 +1197,7 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 				COUNT(NULLIF(first_token_ms, 0)),
 				MIN(created_at)
 			FROM usage_logs
-			WHERE api_key_id = $1 AND status_code <> 499 AND ` + spanWhere + `
+			WHERE api_key_id = $1 AND status_code <> 499 AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic' AND ` + spanWhere + `
 			GROUP BY 1, 2, 3, 4`
 		if err := accumulate(query, args); err != nil {
 			return err
@@ -1216,7 +1226,7 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 				` + sumBigint("first_token_samples") + `,
 				MIN(min_created_at)
 			FROM usage_log_hourly
-			WHERE api_key_id = $1 AND status_code <> 499 AND ` + bucketWhere + `
+			WHERE api_key_id = $1 AND status_code <> 499 AND internal <> 2 AND ` + bucketWhere + `
 			GROUP BY 1, 2, 3, 4`
 		if err := accumulate(query, args); err != nil {
 			return err
@@ -1307,7 +1317,7 @@ func (db *DB) countAPIKeySelfLogs(ctx context.Context, apiKeyID int64, rangeStar
 	}
 	if plan.useRollup {
 		bucketWhere, args := db.usageHourlyBucketWhere("bucket", plan, []interface{}{apiKeyID})
-		where, args := appendAPIKeySelfLogFilter("api_key_id = $1 AND status_code <> 499 AND "+bucketWhere, args, filter)
+		where, args := appendAPIKeySelfLogFilter("api_key_id = $1 AND status_code <> 499 AND internal <> 2 AND "+bucketWhere, args, filter)
 		var count int64
 		if err := db.conn.QueryRowContext(ctx, `SELECT `+sumBigint("requests")+` FROM usage_log_hourly WHERE `+where, args...).Scan(&count); err != nil {
 			return 0, err

@@ -82,6 +82,8 @@ type upstreamTraceAudit struct {
 	diagnosticFinal       string
 	diagnosticDB          *database.DB
 	diagnosticUsageLogged bool
+	dispatchDecision      *dispatchDecision
+	dispatchStream        bool
 }
 
 func upstreamTraceFromContext(ctx context.Context) *upstreamTraceAudit {

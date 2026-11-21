@@ -238,7 +238,7 @@ func (db *DB) usageHourlyUpsertSQL(where string) string {
 		"COALESCE(u.endpoint, '')",
 		"COALESCE(u.status_code, 0)",
 		"COALESCE(u.stream, false)",
-		"CASE WHEN TRIM(COALESCE(u.internal_reason, '')) <> '' THEN 1 ELSE 0 END",
+		"CASE WHEN u.internal_reason = 'dispatch_terminal_diagnostic' THEN 2 WHEN TRIM(COALESCE(u.internal_reason, '')) <> '' THEN 1 ELSE 0 END",
 	}
 	updates := make([]string, 0, len(usageHourlyAggregates)+1)
 	for _, agg := range usageHourlyAggregates {

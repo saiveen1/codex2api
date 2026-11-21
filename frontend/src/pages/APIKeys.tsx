@@ -9,7 +9,8 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { ModelDiagnosticsDialog } from "../components/ModelDiagnosticsDialog";
 import { api } from "../api";
 import APIKeyConcurrencyBadge, { useAPIKeyConcurrency } from "../components/APIKeyConcurrencyBadge";
 import KeyUsageAccountPermissions from "../components/KeyUsageAccountPermissions";
@@ -298,6 +299,9 @@ const initialEditForm: EditKeyFormState = {
 
 export default function APIKeys() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawDiagnosticsKey = searchParams.get("model_diagnostics") ?? "";
+  const diagnosticsKey = /^[1-9]\d*$/.test(rawDiagnosticsKey) ? Number(rawDiagnosticsKey) : 0;
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] =
     useState<CreateKeyFormState>(initialCreateForm);
@@ -1670,6 +1674,7 @@ export default function APIKeys() {
                             </div>
 
                             <div className="mt-3 flex flex-wrap gap-1.5">
+                              <ModelDiagnosticsDialog keyId={keyRow.id} trigger={<Button type="button" variant="outline" size="sm" className="min-w-[7rem] flex-1 transition-colors motion-reduce:transition-none">检查模型目录</Button>} />
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -1902,6 +1907,7 @@ export default function APIKeys() {
                                 </TableCell>
                                 <TableCell>
                                   <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                    <ModelDiagnosticsDialog keyId={keyRow.id} trigger={<Button type="button" variant="outline" size="sm" className="transition-colors motion-reduce:transition-none">检查模型目录</Button>} />
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -2726,6 +2732,15 @@ export default function APIKeys() {
           ) : null}
         </Modal>
 
+        {Number.isSafeInteger(diagnosticsKey) && diagnosticsKey > 0 ? (
+          <ModelDiagnosticsDialog keyId={diagnosticsKey} open onOpenChange={(open) => {
+            if (!open) setSearchParams((current) => {
+              const next = new URLSearchParams(current);
+              next.delete("model_diagnostics");
+              return next;
+            }, { replace: true });
+          }} />
+        ) : null}
         {confirmDialog}
       </>
     </StateShell>

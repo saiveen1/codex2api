@@ -256,7 +256,7 @@ func TestScopedModelsLogsRedactedReasonWhenClaudeAccountIsFiltered(t *testing.T)
 		t.Fatalf("filtered Claude account still published models: %+v", models)
 	}
 	logged := buf.String()
-	if !strings.Contains(logged, "model catalog empty") || !strings.Contains(logged, "id=867") || !strings.Contains(logged, "disabled_banned") {
+	if !strings.Contains(logged, "model catalog empty") || !strings.Contains(logged, "{867 unauthorized}") || !strings.Contains(logged, "no_visible_accounts") {
 		t.Fatalf("diagnostic log = %q", logged)
 	}
 	if strings.Contains(logged, secret) || strings.Contains(logged, "refresh-secret") {

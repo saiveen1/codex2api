@@ -19,6 +19,7 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // CodexModelsManifestHandler 向 Codex 客户端提供模型清单。
@@ -31,20 +32,22 @@ import (
 func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 	row := apiKeyRowFromContext(c)
 	if h.preferScopedCodexManifest(c) {
-		if !h.serveScopedCodexManifest(c, row) {
+		if !h.serveScopedCodexManifest(c, row, true) {
 			api.SendError(c, api.ErrServiceUnavailable)
 		}
 		return
 	}
 	account := h.scopedCodexManifestAccount(row)
 	if account == nil {
-		if !h.serveScopedCodexManifest(c, row) {
+		if !h.serveScopedCodexManifest(c, row, true) {
 			api.SendError(c, api.ErrServiceUnavailable)
 		}
 		return
 	}
 	restrictManifest := codexManifestNeedsFiltering(row, account)
-	extraModels := h.extraRelayManifestModels(c.Request.Context(), row)
+	records, diagnosis := h.buildScopedModelCatalog(c.Request.Context(), row, false)
+	extraModels := relayManifestModelsFromRecords(records)
+	diagnosis.Reason = "no_account_models"
 	// Capability intersections can change when account scope or credentials
 	// change, even if the source descriptor is unchanged. Always fetch a body
 	// and compare the client's validator against the final gateway descriptor.
@@ -58,11 +61,11 @@ func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 		c.Request.Header,
 	)
 	if err != nil {
-		if h.serveScopedCodexManifest(c, row) {
+		if h.serveScopedCodexManifest(c, row, false) {
 			return
 		}
 		api.SendErrorWithStatus(c,
-			api.NewAPIError(api.ErrCodeUpstreamError, fmt.Sprintf("codex models manifest: %v", err), api.ErrorTypeUpstream),
+			api.NewAPIError(api.ErrCodeUpstreamError, "codex models manifest could not be retrieved", api.ErrorTypeUpstream),
 			http.StatusBadGateway)
 		return
 	}
@@ -75,16 +78,23 @@ func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 			return
 		}
 		body, _, filterErr := filterCodexManifest(manifest.Body, manifest.ETag, func(slug string) bool {
-			return codexManifestModelAllowed(row, account, slug)
+			if !codexManifestAccountModelAllowed(account, slug) {
+				return false
+			}
+			if row != nil && checkAPIKeyModel(slug, row.Limits) != "" {
+				diagnosis.Reason = "models_filtered"
+				return false
+			}
+			return true
 		})
 		if filterErr != nil {
 			api.SendErrorWithStatus(c,
-				api.NewAPIError(api.ErrCodeUpstreamError, fmt.Sprintf("codex models manifest: %v", filterErr), api.ErrorTypeUpstream),
+				api.NewAPIError(api.ErrCodeUpstreamError, "codex models manifest has an unsupported format", api.ErrorTypeUpstream),
 				http.StatusBadGateway)
 			return
 		}
 		h.learnFetchedManifestAsync(manifest)
-		h.writeMergedCodexManifest(c, body, "", extraModels)
+		h.writeMergedCodexManifest(c, body, "", extraModels, diagnosis)
 		return
 	}
 
@@ -97,19 +107,23 @@ func (h *Handler) CodexModelsManifestHandler(c *gin.Context) {
 	// 顺手把清单里注册表不认识的新模型学习进注册表（只增不改不删），
 	// 让选单里出现的新模型立即通过请求侧模型校验，无需等手动同步。
 	h.learnFetchedManifestAsync(manifest)
-	h.writeMergedCodexManifest(c, manifest.Body, manifest.ETag, extraModels)
+	h.writeMergedCodexManifest(c, manifest.Body, manifest.ETag, extraModels, diagnosis)
 }
 
 func (h *Handler) preferScopedCodexManifest(c *gin.Context) bool {
 	return requestUpstreamChannel(c) == database.UpstreamChannelAntigravity
 }
 
-func (h *Handler) serveScopedCodexManifest(c *gin.Context, row *database.APIKeyRow) bool {
+func (h *Handler) serveScopedCodexManifest(c *gin.Context, row *database.APIKeyRow, recordEmpty bool) bool {
 	if h == nil || c == nil || row == nil {
 		return false
 	}
-	models := h.scopedModels(c.Request.Context(), row)
+	records, diagnosis := h.buildScopedModelCatalog(c.Request.Context(), row, false)
+	models := scopedRecordsToModels(records)
 	if len(models) == 0 {
+		if recordEmpty {
+			h.markEmptyModelCatalog(c, row, diagnosis)
+		}
 		return false
 	}
 	body, err := buildScopedCodexManifest(models)
@@ -122,12 +136,12 @@ func (h *Handler) serveScopedCodexManifest(c *gin.Context, row *database.APIKeyR
 	return true
 }
 
-func (h *Handler) writeMergedCodexManifest(c *gin.Context, body []byte, upstreamETag string, extras []api.Model) {
+func (h *Handler) writeMergedCodexManifest(c *gin.Context, body []byte, upstreamETag string, extras []api.Model, diagnosis ...ModelCatalogDiagnostic) {
 	merged := body
 	if len(extras) > 0 {
 		next, err := mergeCodexManifestModels(body, extras)
 		if err != nil {
-			log.Printf("merge relay models into Codex manifest: %v", err)
+			log.Print("could not merge relay models into Codex manifest")
 		} else {
 			merged = next
 		}
@@ -137,14 +151,23 @@ func (h *Handler) writeMergedCodexManifest(c *gin.Context, body []byte, upstream
 	if etag == "" || string(merged) != string(body) {
 		etag = ""
 	}
+	if len(diagnosis) > 0 && codexManifestIsEmpty(merged) {
+		h.markEmptyModelCatalog(c, apiKeyRowFromContext(c), diagnosis[0])
+	}
 	h.writeCodexManifest(c, merged, etag)
 }
 
+func codexManifestIsEmpty(body []byte) bool {
+	models := gjson.GetBytes(body, "models")
+	return models.IsArray() && len(models.Raw) >= 2 && models.Raw[len(models.Raw)-1] == ']' &&
+		strings.TrimSpace(models.Raw[1:len(models.Raw)-1]) == "" && gjson.ValidBytes(body)
+}
+
 func (h *Handler) extraRelayManifestModels(ctx context.Context, row *database.APIKeyRow) []api.Model {
-	if h == nil || row == nil {
-		return nil
-	}
-	records := h.scopedModelRecords(ctx, row)
+	return relayManifestModelsFromRecords(h.scopedModelRecords(ctx, row))
+}
+
+func relayManifestModelsFromRecords(records map[string]*scopedModelRecord) []api.Model {
 	extras := make([]api.Model, 0, len(records))
 	for _, record := range records {
 		if record == nil {
@@ -544,12 +567,8 @@ func fetchCodexModelsManifestWithURL(ctx context.Context, account *auth.Account,
 		return &CodexModelsManifest{ETag: resp.Header.Get("ETag"), NotModified: true}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = resp.Status
-		}
-		return nil, fmt.Errorf("codex models upstream status %d: %s", resp.StatusCode, message)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("codex models upstream status %d", resp.StatusCode)
 	}
 
 	body, err := ReadModelsListBody(resp.Body, CurrentRuntimeSettings().ModelsListReadMaxBytes)
