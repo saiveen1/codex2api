@@ -441,7 +441,7 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 					item.Error = publicError(importErr)
 				}
 				if retained != nil {
-					registerRecovery(s, *retained, job.AutoRecovery)
+					registerRecovery(s, *retained, job.usesSavedRecovery())
 				}
 				if summary != nil {
 					summary.RecoveryState = "not_enrolled"

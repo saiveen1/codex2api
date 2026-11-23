@@ -19,7 +19,7 @@ type Quota = { remaining?: number; total?: number; reserved?: number; used?: num
 type Group = { id: number; name: string }
 type Identifier = { identifier?: string; identifier_masked?: string }
 type Preview = { valid: boolean; count: number; groups: number; rows?: (Identifier & { line: number; proxy_mode: string })[]; errors?: { line: number; code: string }[] }
-type Recovery = { account_id: number; identifier: string; state: string; attempts: number; next_attempt_at?: string; job_id?: string; error?: Problem; can_disable: boolean; last_outcome?: string; last_outcome_at?: string; account_disabled?: boolean }
+type Recovery = { account_id: number; identifier: string; state: string; attempts: number; next_attempt_at?: string; job_id?: string; error?: Problem; can_disable: boolean; can_reauthorize?: boolean; last_outcome?: string; last_outcome_at?: string; account_disabled?: boolean }
 type Connection = { oauth: { ok: boolean; error?: Problem; capabilities?: Capabilities; quota?: Quota }; codex: { ok: boolean; error?: Problem; groups?: Group[] } }
 type ProxyCheck = { usable: boolean; requested_country?: string; observed_country?: string; openai_reachable?: boolean; openai_http_status?: number; trace_http_status?: number; error?: Problem }
 const fieldClass = 'w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -352,6 +352,24 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
       }
     }
   })
+  const reauthorizeSaved = (entry: Recovery) => run('submit', async signal => {
+    if (formLocked || !entry.can_reauthorize || entry.account_disabled || busy.current.has(`recovery:${entry.account_id}`)) return
+    if (!window.confirm(tr(`Reauthorize account #${entry.account_id} with its saved login material? A successful authorization can use one gateway credit.`, `使用已保管材料重新授权账号 #${entry.account_id}？成功会消耗一次网关额度。`))) return
+    if (!globalThis.crypto?.randomUUID) throw new Error(tr('Use HTTPS to generate a safe request ID.', '请使用 HTTPS 打开后台，以生成安全的请求 ID。'))
+    const id = `saved-${crypto.randomUUID()}`
+    rememberPendingRequest(id); setPendingID(id)
+    try {
+      const job = await gatewayRequest<Job>(`/recovery/${entry.account_id}/reauthorize`, 'POST', { request_id: id }, signal)
+      if (signal.aborted) return
+      if (job?.id !== id) throw new GatewayError(200, { message: 'Unexpected job response' }, true)
+      forgetPendingRequest()
+      setMessage(tr(`Reauthorization queued: ${job.id}`, `重新授权已排队：${job.id}`)); setArchived(false); setReload(n => n + 1)
+    } catch (e) {
+      if (signal.aborted) return
+      if (e instanceof GatewayError && e.uncertain) setUncertain(id)
+      else { forgetPendingRequest(); throw e }
+    } finally { if (!signal.aborted) setPendingID('') }
+  })
   const disableRecovery = (entry: Recovery) => run(`recovery:${entry.account_id}`, async signal => {
     if (!window.confirm(tr(`Stop automatic recovery for account #${entry.account_id} and discard its saved login material?`, `停止账号 #${entry.account_id} 的自动恢复并清除保管的登录材料？`))) return
     await gatewayRequest(`/recovery/${entry.account_id}/disable`, 'POST', {}, signal)
@@ -505,11 +523,11 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
     {settings?.auto_recovery_supported && <Card id="oauth-recovery" className="scroll-mt-6"><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><CardTitle>{tr('Automatic account recovery', '账号自动恢复')}</CardTitle><Button size="sm" variant="outline" onClick={() => setReload(n => n + 1)}>{tr('Refresh recovery status', '刷新恢复状态')}</Button></div></CardHeader><CardContent className="space-y-3">
       <p className="text-sm text-muted-foreground">{tr('Only accounts explicitly enrolled above are listed. Recovery keeps the original ID, proxy and groups; identity changes or unknown results require review.', '这里只列出明确启用的账号。恢复保留原 ID、代理和分组；身份变化或结果未知时必须核查。')}</p>
       {recoveryError && <p role="alert" className="break-words text-sm text-destructive">{recoveryError}</p>}
-      {recoveries === null ? <p className="text-sm text-muted-foreground">{recoveryError ? tr('Retry with Refresh recovery status.', '请点击刷新恢复状态重试。') : tr('Loading recovery status…', '正在读取恢复状态…')}</p> : !recoveries.length ? <p className="text-sm text-muted-foreground">{tr('No enrolled accounts. Opt in when authorizing or repairing an account.', '暂无登记记录。在上方新增或修复账号时，可勾选加密保管材料。')}</p> : recoveries.map(entry => <div key={entry.account_id} className="space-y-2 border-t border-border pt-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-3"><p className="min-w-0 break-all">#{entry.account_id} {entry.identifier}</p><Button variant="outline" size="sm" disabled={!entry.can_disable || !!pending[`recovery:${entry.account_id}`]} onClick={() => disableRecovery(entry)}>{pending[`recovery:${entry.account_id}`] ? tr('Stopping…', '正在停止…') : tr('Stop recovery and clear material', '停止恢复并清除材料')}</Button></div>
-        <p>{entry.state === 'ready' ? tr('Standing by', '待命') : stateText(entry.state)} · {tr('Reauthorization attempts', '自动重授权次数')}: {entry.attempts}{entry.next_attempt_at ? ` · ${tr('Next check', '下次检查')}: ${new Date(entry.next_attempt_at).toLocaleString()}` : ''}</p>
+      {recoveries === null ? <p className="text-sm text-muted-foreground">{recoveryError ? tr('Retry with Refresh recovery status.', '请点击刷新恢复状态重试。') : tr('Loading recovery status…', '正在读取恢复状态…')}</p> : !recoveries.length ? <p className="text-sm text-muted-foreground">{tr('No enrolled accounts. Opt in when authorizing or repairing an account.', '暂无登记记录。在上方新增或修复账号时，可勾选加密保管材料。')}</p> : recoveries.map(entry => <div key={entry.account_id} className="space-y-2 border-t border-border pt-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-3"><p className="min-w-0 break-all">#{entry.account_id} {entry.identifier}</p><div className="flex flex-wrap gap-2">{entry.can_reauthorize !== undefined && <Button variant="outline" size="sm" disabled={!entry.can_reauthorize || entry.account_disabled || formLocked || !!pending[`recovery:${entry.account_id}`]} onClick={() => reauthorizeSaved(entry)}>{tr('Reauthorize with saved material', '手动重新授权')}</Button>}<Button variant="outline" size="sm" disabled={!entry.can_disable || !!pending[`recovery:${entry.account_id}`]} onClick={() => disableRecovery(entry)}>{pending[`recovery:${entry.account_id}`] ? tr('Stopping…', '正在停止…') : tr('Stop recovery and clear material', '停止恢复并清除材料')}</Button></div></div>
+        <p>{entry.state === 'ready' ? tr('Standing by', '待命') : stateText(entry.state)} · {tr('Reauthorization attempts', '重授权次数')}: {entry.attempts}{entry.next_attempt_at ? ` · ${tr('Next check', '下次检查')}: ${new Date(entry.next_attempt_at).toLocaleString()}` : ''}</p>
         {entry.account_disabled && <p className="text-muted-foreground">{tr('Account disabled; recovery will not enable it.', '账号已禁用；恢复不会自动启用账号。')}</p>}
-        {entry.last_outcome && <p>{tr('Last recovery result', '最近恢复结果')}: {entry.last_outcome === 'refresh_succeeded' ? tr('Token refresh succeeded', '普通令牌刷新成功') : entry.last_outcome === 'reauthorization_succeeded' ? tr('Automatic reauthorization succeeded', '自动重授权成功') : stateText(entry.last_outcome)}{entry.last_outcome_at && ` · ${new Date(entry.last_outcome_at).toLocaleString()}`}</p>}
-        {!entry.can_disable && <p className="text-xs text-muted-foreground">{tr('Recovery is disabled for this record.', '这条记录已停止恢复。')}</p>}{entry.job_id && <p className="break-all">{tr('Linked job', '关联任务')}: {entry.job_id}</p>}{entry.error && <p className="break-words text-destructive">{problemText(entry.error)}</p>}{showError(`recovery:${entry.account_id}`)}</div>)}
+        {entry.last_outcome && <p>{tr('Last recovery result', '最近恢复结果')}: {entry.last_outcome === 'refresh_succeeded' ? tr('Token refresh succeeded', '普通令牌刷新成功') : entry.last_outcome === 'reauthorization_succeeded' ? tr('Reauthorization succeeded', '重授权成功') : stateText(entry.last_outcome)}{entry.last_outcome_at && ` · ${new Date(entry.last_outcome_at).toLocaleString()}`}</p>}
+        {!entry.can_disable && <p className="text-xs text-muted-foreground">{tr('Recovery is disabled for this record.', '这条记录已停止恢复。')}</p>}{entry.job_id && <p className="break-all">{tr('Linked job', '关联任务')}: <a className="text-primary underline" href={`#oauth-job-${encodeURIComponent(entry.job_id)}`}>{entry.job_id}</a></p>}{entry.error && <p className="break-words text-destructive">{problemText(entry.error)}</p>}{showError(`recovery:${entry.account_id}`)}</div>)}
     </CardContent></Card>}
   </div>
 }

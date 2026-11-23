@@ -91,7 +91,7 @@ func (a *App) Archive(id string, discardCredentials bool) (JobView, error) {
 				state.Version = 3
 			}
 			// Finish any linked recovery before removing its terminal job.
-			if job.AutoRecovery && job.Recovery != nil {
+			if job.usesSavedRecovery() && job.Recovery != nil {
 				reconcileRecovery(state, job.ID, current.State, recoveryJobProblem(job))
 			}
 			state.Archived = append(state.Archived, archived)

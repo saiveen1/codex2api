@@ -203,6 +203,9 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 			disabled := h.db.OAuthGatewayDisabledAccounts(ctx, ids)
 			for i := range entries {
 				entries[i].AccountDisabled = disabled[entries[i].AccountID]
+				if entries[i].AccountDisabled {
+					entries[i].CanReauthorize = false
+				}
 			}
 		}
 		data = entries
@@ -257,7 +260,25 @@ func (h *Handler) handleOAuthGateway(c *gin.Context) {
 		}
 	default:
 		parts := strings.Split(path, "/")
-		if len(parts) == 3 && parts[0] == "recovery" && parts[2] == "disable" && method == "POST" {
+		if len(parts) == 3 && parts[0] == "recovery" && parts[2] == "reauthorize" && method == "POST" {
+			var input struct {
+				RequestID string `json:"request_id"`
+			}
+			if !decodeOAuthGatewayJSON(c, &input) {
+				return
+			}
+			id, parseErr := strconv.ParseInt(parts[1], 10, 64)
+			if parseErr != nil || id <= 0 {
+				err = oauthGatewayFault(400, "invalid_recovery_account", "恢复账号 ID 必须为正整数。")
+				break
+			}
+			var existing bool
+			data, existing, err = app.ReauthorizeSaved(ctx, id, input.RequestID)
+			if err == nil && !existing {
+				c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": data})
+				return
+			}
+		} else if len(parts) == 3 && parts[0] == "recovery" && parts[2] == "disable" && method == "POST" {
 			var empty struct{}
 			if !decodeOAuthGatewayJSON(c, &empty) {
 				return

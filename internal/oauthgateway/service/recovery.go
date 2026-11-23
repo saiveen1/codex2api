@@ -59,6 +59,7 @@ type RecoveryView struct {
 	JobID           string     `json:"job_id,omitempty"`
 	Error           *Problem   `json:"error,omitempty"`
 	CanDisable      bool       `json:"can_disable"`
+	CanReauthorize  bool       `json:"can_reauthorize"`
 	LastOutcome     string     `json:"last_outcome,omitempty"`
 	LastOutcomeAt   *time.Time `json:"last_outcome_at,omitempty"`
 	AccountDisabled bool       `json:"account_disabled,omitempty"`
@@ -95,7 +96,7 @@ func (a *App) Recoveries() ([]RecoveryView, error) {
 	}
 	out := make([]RecoveryView, 0, len(s.Recoveries))
 	for _, r := range s.Recoveries {
-		v := RecoveryView{AccountID: r.Snapshot.AccountID, Identifier: r.Material.Identifier, State: r.State, Attempts: r.Attempts, JobID: r.JobID, Error: r.Error, CanDisable: r.Enabled}
+		v := RecoveryView{AccountID: r.Snapshot.AccountID, Identifier: r.Material.Identifier, State: r.State, Attempts: r.Attempts, JobID: r.JobID, Error: r.Error, CanDisable: r.Enabled, CanReauthorize: r.canReauthorize(time.Now())}
 		v.LastOutcome, v.LastOutcomeAt = r.LastOutcome, r.LastOutcomeAt
 		if v.Identifier == "" {
 			v.Identifier = r.Snapshot.Identifier

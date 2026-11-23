@@ -74,6 +74,8 @@ JSON 示例（合成数据；示例运行代理须先登记）：
 
 每个账号只允许一个在途恢复，自动授权最多三次，后续尝试至少冷却15分钟；失败、挑战、身份不能证明或结果未知进入人工核查，不把封禁、代理/网络故障、网关 CDK 鉴权失败、`missing_scope` 等一律当作可重登。新凭据通过原账号主键、generation、family和凭据指纹的条件事务写回；未知数据库提交保留 `import_unknown`，不重复写入。
 
+已登记的账号可在「OAuth 网关 → 账号自动恢复」中点「手动重新授权」。这会直接使用已加密保管的材料，不需要下一次 401，也不先刷新旧令牌；成功可能消耗一次网关额度。手动与自动使用同一冷却和次数限制，不绕过未决任务、身份校验或禁用状态。返回不明时用原 `request_id` 查任务，不另建请求。
+
 已保管账号不被 401/错误自动清理抢先删除。恢复 worker 故障停止不能撤销已知保管记录的清理保护；手动删除/禁用仍有效，后台不能自动复活。“停止恢复并清除材料”清除保管秘密、撤销未来恢复，已在途授权仍按原ID对账，但停止后的结果不能写回原账号。
 
 恢复记录可在页面查看 `ready`、`refreshing`、`pending`、`recovering`、`manual_review`、`disabled` 状态、尝试次数、关联任务和错误。非重试类失败需要人工纠正材料或账号状态；不能反复点新建任务替代对账。
@@ -108,6 +110,7 @@ JSON 示例（合成数据；示例运行代理须先登记）：
 | POST | `/jobs/{id}/retry-import` | `{}`，只重试已确认未写入的导入 |
 | POST | `/jobs/{id}/archive` | `{discard_credentials:boolean}`，安全归档 |
 | GET | `/recovery` | 恢复保管状态数组：账号 ID、完整标识、状态、尝试次数、下次检查、原任务及错误 |
+| POST | `/recovery/{account_id}/reauthorize` | `{request_id:"saved-…"}`，使用已保管材料重新授权原账号，不等待 401；新任务 202，幂等命中 200 |
 | POST | `/recovery/{account_id}/disable` | `{}`，停止恢复并清除保管秘密；成功返回 `{}` |
 
 `preview` / `jobs` 输入可选 `source_text` 或 `accounts`（二选一），另含 `options`、`group_ids`、`runtime_proxy`、boolean `save_credentials`（默认 false）和可选 `recovery_account_id`。指定修复 ID 时只能包含一条材料，`group_ids` 必须为空、`runtime_proxy` 必须留空。请求中的标识必须匹配原账号；无法安全对应手机号与原账号身份时转人工处理。
