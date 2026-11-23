@@ -65,6 +65,24 @@ func TestCodexWorkspaceLegacyNormalizationAndDiscovery(t *testing.T) {
 	}
 }
 
+func TestCodexWorkspaceNameUsesExactActiveMembership(t *testing.T) {
+	token := workspaceTestToken(t, time.Now().Add(time.Hour), "workspace-selected")
+	identity := NormalizeCodexWorkspaceIdentity(CodexWorkspaceIdentity{Email: "legacy@example.com", UserID: "user-legacy"}, "", token)
+	for _, tc := range []struct{ selected, want string }{
+		{`"workspace-selected":{"account":{"account_id":"workspace-selected","name":"研发团队"}},`, "研发团队"},
+		{`"workspace-selected":{"account":{"account_id":"workspace-selected","name":"Inactive","is_deactivated":true}},`, ""},
+		{`"workspace-selected":{"account":{"account_id":"workspace-selected","name":{"malformed":true}}},`, ""},
+		{"", ""},
+	} {
+		calls := 0
+		accounts := `{"accounts":{` + tc.selected + `"default":{"account":{"account_id":"workspace-other","name":"Wrong workspace"}}}}`
+		ctx := workspaceMetadataContext(t, token, `{"id":"user-legacy","email":"legacy@example.com"}`, accounts, &calls)
+		if got := LookupCodexWorkspaceName(ctx, identity, token, ""); got != tc.want || calls != 2 {
+			t.Fatalf("workspace name=%q, want %q, calls=%d", got, tc.want, calls)
+		}
+	}
+}
+
 func TestCodexWorkspaceExplicitTargetNeverFallsBack(t *testing.T) {
 	token := workspaceTestToken(t, time.Now().Add(time.Hour), "")
 	for _, tc := range []struct {

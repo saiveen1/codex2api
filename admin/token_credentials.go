@@ -20,6 +20,7 @@ type tokenCredentialSeed struct {
 	idToken         string
 	accountID       string
 	workspaceID     string
+	workspaceName   string
 	// userID 是 OpenAI 用户 ID（user-...），仅作为账号元数据保存。
 	userID string
 	// allowDuplicate 仅允许有效工作区（Token workspace 或请求头覆盖）为空的账号重复。
@@ -181,6 +182,7 @@ func (h *Handler) prepareTokenCredentialSeed(ctx context.Context, seed tokenCred
 		return seed, nil
 	}
 	seed.accountID, seed.workspaceID, seed.userID, seed.email = identity.AccountID, identity.WorkspaceID, identity.UserID, identity.Email
+	seed.workspaceName = identity.WorkspaceName
 	return seed, nil
 }
 

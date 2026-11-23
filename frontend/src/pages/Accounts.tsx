@@ -1541,6 +1541,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                 <PlanBadge
                                   planType={account.plan_type}
                                   workspaceId={accountWorkspaceId(account)}
+                                  workspaceName={account.workspace_name}
                                 />
                               </TableCell>
                             )}
@@ -14084,6 +14085,7 @@ function AccountMobileCard({
               <PlanBadge
                 planType={account.plan_type}
                 workspaceId={accountWorkspaceId(account)}
+                workspaceName={account.workspace_name}
               />
             )}
             {showColumn("priority") && <SchedulerPriorityBadge account={account} />}

@@ -1104,10 +1104,11 @@ func TestListAccountsPageIncludesWorkspaceID(t *testing.T) {
 	db := newTestAdminDB(t)
 	ctx := context.Background()
 	id, err := db.InsertAccountWithCredentials(ctx, "team-workspace", map[string]interface{}{
-		"refresh_token": "rt-team",
-		"email":         "team@example.com",
-		"plan_type":     "team",
-		"workspace_id":  "ws-team-123",
+		"refresh_token":  "rt-team",
+		"email":          "team@example.com",
+		"plan_type":      "team",
+		"workspace_id":   "ws-team-123",
+		"workspace_name": "Team display name",
 		"custom_headers": map[string]interface{}{
 			"Chatgpt-Account-Id": "ws-override-456",
 		},
@@ -1139,8 +1140,8 @@ func TestListAccountsPageIncludesWorkspaceID(t *testing.T) {
 	if row.DetailLoaded || row.CustomHeaders != nil {
 		t.Fatalf("paged row leaked details: %+v", row)
 	}
-	if row.TokenWorkspaceID != "ws-team-123" {
-		t.Fatalf("token workspace = %q", row.TokenWorkspaceID)
+	if row.TokenWorkspaceID != "ws-team-123" || row.WorkspaceName != "Team display name" {
+		t.Fatalf("token workspace = %q, name = %q", row.TokenWorkspaceID, row.WorkspaceName)
 	}
 	if row.WorkspaceIDOverride != "ws-override-456" {
 		t.Fatalf("workspace override = %q", row.WorkspaceIDOverride)

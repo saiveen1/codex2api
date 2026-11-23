@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/oauthgateway/service"
 	"github.com/codex2api/internal/oauthgateway/upstream"
 	"github.com/codex2api/internal/openaiidentity"
+	"github.com/tidwall/gjson"
 )
 
 type oauthGatewayTarget struct{ h *Handler }
@@ -35,6 +38,7 @@ func (t oauthGatewayTarget) AccountResult(ctx context.Context, id int64) service
 	}
 	result := service.AccountResult{
 		WorkspaceID:    openaiidentity.NormalizeWorkspaceID(row.GetCredential("workspace_id")),
+		WorkspaceName:  row.GetCredential("workspace_name"),
 		PlanType:       row.GetCredential("plan_type"),
 		RuntimeProxyID: t.h.db.OAuthGatewayProxyID(ctx, row.ProxyURL),
 	}
@@ -98,6 +102,26 @@ func oauthGatewayImportFailure(code string) (upstream.ImportResult, error) {
 	return upstream.ImportResult{Total: 1, Failed: 1}, service.LocalImportError(code)
 }
 
+// Only explicit workspace metadata is eligible; the account's own name may be an email.
+func oauthGatewayWorkspaceName(raw json.RawMessage) string {
+	for _, path := range []string{"credentials.workspace_name", "workspace_name", "extra.workspace_name", "credentials.chatgpt_account_name"} {
+		if field := gjson.GetBytes(raw, path); field.Type == gjson.String {
+			if name := boundedOAuthWorkspaceName(field.Str); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func boundedOAuthWorkspaceName(value string) string {
+	name := strings.TrimSpace(value)
+	if len(name) > 512 || strings.ContainsFunc(name, unicode.IsControl) {
+		return ""
+	}
+	return name
+}
+
 // Import uses the ordinary account parser and database/runtime entry points,
 // without making an HTTP request to our own administrator endpoint. This is not
 // a recovery upsert: even a freshly authorized duplicate cannot replace a newer
@@ -153,6 +177,16 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 		return oauthGatewayImportFailure("gateway_identity_mismatch")
 	}
 	seed.accountID, seed.workspaceID, seed.userID = workspace, workspace, user
+	workspaceName := oauthGatewayWorkspaceName(raw)
+	if workspaceName == "" {
+		workspaceName = boundedOAuthWorkspaceName(seed.workspaceName)
+		if workspaceName == "" && !seed.identityPrepared && t.h.store != nil {
+			if egress, usable := t.h.store.ResolveUsableProxyForAccount(&auth.Account{ProxyURL: runtimeProxy}); usable {
+				identity := auth.CodexWorkspaceIdentity{WorkspaceID: workspace, UserID: user, Email: seed.email}
+				workspaceName = boundedOAuthWorkspaceName(auth.LookupCodexWorkspaceName(ctx, identity, seed.accessToken, egress))
+			}
+		}
+	}
 	t.h.mergeDuplicateMu.Lock()
 	defer t.h.mergeDuplicateMu.Unlock()
 	duplicateID, err := t.h.findOAuthIdentityDuplicate(ctx, seed, 0)
@@ -172,7 +206,11 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 	if name == "" {
 		name = seed.email
 	}
-	id, err := t.h.db.InsertOAuthGatewayAccount(ctx, name, t.h.newCodexAccountCredentials(seed), runtimeProxy, groupIDs)
+	credentials := t.h.newCodexAccountCredentials(seed)
+	if workspaceName != "" {
+		credentials["workspace_name"] = workspaceName
+	}
+	id, err := t.h.db.InsertOAuthGatewayAccount(ctx, name, credentials, runtimeProxy, groupIDs)
 	if err != nil {
 		// A lost COMMIT response may already have inserted an account. Never
 		// classify arbitrary SQL errors as proof that another write is safe.

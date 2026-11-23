@@ -1800,6 +1800,7 @@ type accountResponse struct {
 	EmailDomain             string `json:"email_domain,omitempty"`
 	ChatGPTAccountID        string `json:"chatgpt_account_id,omitempty"`
 	TokenWorkspaceID        string `json:"token_workspace_id,omitempty"`
+	WorkspaceName           string `json:"workspace_name,omitempty"`
 	WorkspaceIDOverride     string `json:"workspace_id_override,omitempty"`
 	EffectiveWorkspaceID    string `json:"effective_workspace_id,omitempty"`
 	PlanType                string `json:"plan_type"`

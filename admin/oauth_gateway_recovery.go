@@ -83,6 +83,9 @@ func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySn
 			updates[key] = value
 		}
 	}
+	if name := oauthGatewayWorkspaceName(raw); name != "" {
+		updates["workspace_name"] = name
+	}
 	if err := t.h.db.RecoverOAuthGatewayAccount(ctx, snap, updates, jobID); err != nil {
 		var known *upstream.Error
 		if errors.As(err, &known) && !known.Uncertain {

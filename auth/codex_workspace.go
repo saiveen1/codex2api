@@ -18,6 +18,7 @@ import (
 // Headers remain caller-owned; discovery never rewrites a per-route override.
 type CodexWorkspaceIdentity struct {
 	AccountID, WorkspaceID, UserID, Email string
+	WorkspaceName                         string
 	Headers                               map[string]string
 	TrustedWorkspace                      bool
 }
@@ -99,12 +100,29 @@ func workspaceIdentityFailure(code string, rejected bool) error {
 // HydrateCodexWorkspaceIdentity authenticates missing identity using the same AT
 // and fixed egress for both requests. Complete token identities need no probe.
 func HydrateCodexWorkspaceIdentity(ctx context.Context, identity CodexWorkspaceIdentity, accessToken, proxyURL string) (CodexWorkspaceIdentity, error) {
+	return hydrateCodexWorkspaceIdentity(ctx, identity, accessToken, proxyURL, false)
+}
+
+// LookupCodexWorkspaceName reads only the name for the already-selected workspace.
+func LookupCodexWorkspaceName(ctx context.Context, identity CodexWorkspaceIdentity, accessToken, proxyURL string) string {
+	if !openaiidentity.ValidWebWorkspaceID(identity.WorkspaceID) {
+		return ""
+	}
+	identity.Headers = nil
+	identity, err := hydrateCodexWorkspaceIdentity(ctx, identity, accessToken, proxyURL, true)
+	if err != nil {
+		return ""
+	}
+	return identity.WorkspaceName
+}
+
+func hydrateCodexWorkspaceIdentity(ctx context.Context, identity CodexWorkspaceIdentity, accessToken, proxyURL string, lookupName bool) (CodexWorkspaceIdentity, error) {
 	original := identity
 	target, err := openaiidentity.RequestedWebWorkspace(identity.WorkspaceID, identity.Headers)
 	if err != nil {
 		return original, workspaceIdentityFailure("invalid_target", true)
 	}
-	if identity.TrustedWorkspace && identity.Email != "" && identity.WorkspaceID != "" && target == identity.WorkspaceID {
+	if !lookupName && identity.TrustedWorkspace && identity.Email != "" && identity.WorkspaceID != "" && target == identity.WorkspaceID {
 		return identity, nil
 	}
 	info := ParseAccessToken(strings.TrimSpace(accessToken))
@@ -196,8 +214,9 @@ func HydrateCodexWorkspaceIdentity(ctx context.Context, identity CodexWorkspaceI
 	var metadata struct {
 		Accounts map[string]struct {
 			Account struct {
-				ID          string `json:"account_id"`
-				Deactivated bool   `json:"is_deactivated"`
+				ID          string          `json:"account_id"`
+				Name        json.RawMessage `json:"name"`
+				Deactivated bool            `json:"is_deactivated"`
 			} `json:"account"`
 		} `json:"accounts"`
 	}
@@ -229,6 +248,14 @@ func HydrateCodexWorkspaceIdentity(ctx context.Context, identity CodexWorkspaceI
 			return original, workspaceIdentityFailure("missing_authenticated_default", false)
 		}
 		identity.WorkspaceID = strings.TrimSpace(entry.Account.ID)
+	}
+	// Prefer the record keyed by the base workspace ID, not an unrelated default.
+	entry, ok := metadata.Accounts[identity.WorkspaceID]
+	if !ok {
+		entry = metadata.Accounts["default"]
+	}
+	if !entry.Account.Deactivated && strings.TrimSpace(entry.Account.ID) == identity.WorkspaceID {
+		_ = json.Unmarshal(entry.Account.Name, &identity.WorkspaceName)
 	}
 	identity.Email, identity.UserID = me.Email, me.ID
 	identity.TrustedWorkspace = true

@@ -224,6 +224,7 @@ func (h *Handler) buildAccountResponse(
 		EmailDomain:                  accountEmailDomain(email),
 		ChatGPTAccountID:             row.GetCredential("account_id"),
 		TokenWorkspaceID:             tokenWorkspaceID,
+		WorkspaceName:                row.GetCredential("workspace_name"),
 		WorkspaceIDOverride:          workspaceIDOverride,
 		EffectiveWorkspaceID:         effectiveWorkspaceID,
 		PlanType:                     planType,

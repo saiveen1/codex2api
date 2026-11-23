@@ -46,10 +46,24 @@ function isWorkspacePlan(planType?: string): boolean {
   );
 }
 
-export default function PlanBadge({
-  planType,
-  workspaceId,
-}: {
+export default function PlanBadge({ planType, workspaceId, workspaceName }: {
+  planType?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+}) {
+  const badge = <PlanTypeBadge planType={planType} workspaceId={workspaceId} />;
+  if (!workspaceName) return badge;
+  return (
+    <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
+      {badge}
+      <span className="max-w-36 truncate text-xs text-muted-foreground" title={workspaceName}>
+        {workspaceName}
+      </span>
+    </div>
+  );
+}
+
+function PlanTypeBadge({ planType, workspaceId }: {
   planType?: string;
   workspaceId?: string;
 }) {

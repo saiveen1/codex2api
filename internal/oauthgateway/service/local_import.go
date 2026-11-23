@@ -84,6 +84,7 @@ func committedAccountResult(ctx context.Context, target Target, job Job, g Group
 		}
 		if openaiidentity.ValidWebWorkspaceID(row.WorkspaceID) {
 			r.WorkspaceID = row.WorkspaceID
+			r.WorkspaceName = row.WorkspaceName
 		}
 		if row.GroupIDs != nil {
 			ids := sortedGroups(*row.GroupIDs)

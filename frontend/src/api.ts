@@ -1861,8 +1861,8 @@ export const api = {
     request<ProxyRiskScoreSnapshot | { score: null; status: 'unscored' }>(`/proxies/${id}/risk-score`),
   getProxyRiskScoreHistory: (id: number, profileId: number, page = 1, pageSize = 20) =>
     request<{ items: ProxyRiskScoreSnapshot[]; total: number; page: number; page_size: number }>(`/proxies/${id}/risk-score/history?profile_id=${profileId}&page=${page}&page_size=${pageSize}`),
-  testProxy: (url: string, id?: number, lang?: string) =>
-    request<ProxyTestResult>('/proxies/test', { method: 'POST', body: JSON.stringify({ url, id, lang }) }),
+  testProxy: (url: string, id?: number, lang?: string, signal?: AbortSignal) =>
+    request<ProxyTestResult>('/proxies/test', { method: 'POST', signal, body: JSON.stringify({ url, id, lang }) }),
   // OAuth
   generateOAuthURL: (data: { proxy_url?: string; redirect_uri?: string; timezone?: string }) =>
     request<OAuthURLResponse>('/oauth/generate-auth-url', { method: 'POST', body: JSON.stringify(data) }),

@@ -87,7 +87,7 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original"}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original","workspace_name":"Recovered Workspace"}}`)
 	wrong := json.RawMessage(strings.ReplaceAll(string(account), "workspace-original", "wrong-workspace"))
 	if result, err := target.Recover(ctx, snap, wrong, "wrong"); err == nil || result.Failed != 1 {
 		t.Fatal("workspace mismatch accepted")
@@ -109,6 +109,9 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	}
 	if after.GetCredential("access_token") != "new-AT" || h.store.FindByID(id).GetCredentialGeneration() != snap.Generation+1 {
 		t.Fatal("recovered credentials not published")
+	}
+	if after.GetCredential("workspace_name") != "Recovered Workspace" {
+		t.Fatal("recovery did not save the verified workspace name")
 	}
 	if result, err = target.Recover(ctx, snap, account, "stale"); err == nil || result.Failed != 1 {
 		t.Fatal("stale recovery overwrote new credentials")

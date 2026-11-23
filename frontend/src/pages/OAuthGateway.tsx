@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Select } from '../components/ui/select'
-import { api, PROXY_POOL_CHANGED, type ProxyRow } from '../api'
+import { api, PROXY_POOL_CHANGED, type ProxyRow, type ProxyTestResult } from '../api'
 import { ProxyPoolSelect } from '../components/ProxyPoolSelect'
 import { formatProxyDisplayURL, formatProxyIdentity, proxyIsSelectable } from '../lib/accountProxyBinding'
 import { createSubmission, parseMaterial, withAccountRuntimeProxies, previewMatches, readPendingRequest, rememberPendingRequest, forgetPendingRequest, type Account, type GatewayInput, type Problem } from '../lib/oauthGateway'
@@ -26,6 +26,38 @@ const fieldClass = 'w-full rounded-md border border-input bg-transparent px-3 py
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'Request failed'
 const identifier = (item: Identifier) => item.identifier || item.identifier_masked || '—'
 const label = (name: string, child: ReactNode, hint?: string) => <label className="flex min-w-0 flex-col gap-2 text-sm"><span className="font-medium">{name}</span>{child}{hint && <span className="text-xs text-muted-foreground">{hint}</span>}</label>
+
+function RuntimeProxyTest({ url, disabled, zh, name }: { url: string; disabled: boolean; zh: boolean; name: string }) {
+  const [result, setResult] = useState<ProxyTestResult | null>(null)
+  const [testing, setTesting] = useState(false)
+  const request = useRef<AbortController | null>(null)
+  useEffect(() => () => request.current?.abort(), [])
+  const probe = async () => {
+    if (!url || request.current) return
+    const controller = new AbortController()
+    request.current = controller
+    setTesting(true); setResult(null)
+    try {
+      // Omit the proxy ID: this probe must not alter the pool's health or bindings.
+      const value = await api.testProxy(url, undefined, zh ? 'zh-CN' : 'en', controller.signal)
+      if (!controller.signal.aborted) setResult(value)
+    } catch {
+      if (!controller.signal.aborted) setResult({ success: false, conclusive: false })
+    } finally {
+      request.current = null
+      if (!controller.signal.aborted) setTesting(false)
+    }
+  }
+  return <div className="flex flex-wrap items-center gap-2">
+    <Button type="button" size="sm" variant="outline" aria-label={name} disabled={disabled || !url || testing} onClick={() => void probe()}>
+      {testing ? (zh ? '正在测试…' : 'Testing…') : (zh ? '测试连通性' : 'Test connectivity')}
+    </Button>
+    {result && <span role="status" className={`text-xs tabular-nums ${result.success ? 'text-muted-foreground' : 'text-destructive'}`}>
+      {result.success ? (zh ? '可连通' : 'Reachable') : result.conclusive ? (zh ? '不可连通' : 'Unreachable') : (zh ? '未能确认连通性' : 'Connectivity not confirmed')}
+      {result.latency_ms != null && ` · ${result.latency_ms} ms`}
+    </span>}
+  </div>
+}
 
 export default function OAuthGateway({ embedded = false, active = true }: { embedded?: boolean; active?: boolean }) {
   const { hash } = useLocation()
@@ -87,6 +119,10 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
     if (!value) return tr('Inherit the server proxy policy', '沿用服务正常代理策略')
     const selected = runtimeProxies?.find(p => p.url === value)
     return selected ? `${formatProxyIdentity(selected)} (${formatProxyDisplayURL(value)})` : formatProxyDisplayURL(value)
+  }
+  const runtimeProxyTest = (value: string, name: string) => {
+    const url = value.trim()
+    return <RuntimeProxyTest key={url} url={url} disabled={formLocked || repairing} zh={zh} name={name} />
   }
 
   const problemText = (p?: Problem) => p ? [p.message || p.code, p.code && p.message ? `(${p.code})` : '', p.retry_after != null ? tr(`Retry after ${p.retry_after}s`, `${p.retry_after} 秒后再试`) : ''].filter(Boolean).join(' ') : ''
@@ -427,7 +463,7 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
           <div className="flex flex-wrap items-center justify-between gap-2"><h3 id="runtime-proxy-heading" className="text-sm font-semibold">{tr('Runtime proxy for imported accounts', '导入后的运行代理')}</h3><Button variant="outline" size="sm" disabled={!!pending['runtime-proxies']} onClick={loadRuntimeProxies}>{pending['runtime-proxies'] ? tr('Loading proxies…', '正在读取代理…') : tr('Refresh proxy list', '刷新代理列表')}</Button></div>
           <div className="grid gap-2 md:grid-cols-2">
             {label(tr('Batch runtime proxy (optional)', '本次批量运行代理（可选）'), <Input aria-label={tr('Batch runtime proxy URI', '本次批量运行代理 URI')} type="password" value={runtimeProxy} disabled={repairing} autoComplete="new-password" onChange={e => { setRuntimeProxy(e.target.value); invalidate() }} />, repairing ? tr('Keep the original account proxy and groups.', '修复已有账号时保留原代理和分组。') : tr('Default for every account in this import, unless explicitly overridden below. Used for model requests only. Blank uses server policy.', '适用于本次导入的所有账号，除非下方单独覆盖。只用于导入后的模型请求；留空沿用服务器策略。'))}
-            <div className="space-y-1"><span className="text-sm font-medium">{tr('Choose a batch proxy from the pool', '从代理池选择批量代理')}</span><ProxyPoolSelect proxies={runtimeProxies || []} value={runtimeProxy} disabled={formLocked || repairing} onSelect={value => { if (!formLocked && !repairing) { setRuntimeProxy(value); invalidate() } }} /></div>
+            <div className="space-y-2"><span className="text-sm font-medium">{tr('Choose a batch proxy from the pool', '从代理池选择批量代理')}</span><ProxyPoolSelect proxies={runtimeProxies || []} value={runtimeProxy} disabled={formLocked || repairing} onSelect={value => { if (!formLocked && !repairing) { setRuntimeProxy(value); invalidate() } }} />{runtimeProxyTest(runtimeProxy, tr('Test batch proxy connectivity', '测试批量代理连通性'))}</div>
           </div>
           <p className="break-words text-xs text-muted-foreground">{tr('Batch default', '本次默认')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(runtimeProxy)}</p>
           <Link className="inline-block text-xs text-primary underline underline-offset-4" to="/proxies" target="_blank" rel="noopener noreferrer">{tr('Add or manage proxies in a new tab', '在新标签页添加或管理代理')}</Link>
@@ -438,7 +474,9 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
             <p className="text-xs text-muted-foreground">{repairing ? tr('Repair skips both these settings and runtime_proxy in the material.', '修复不会应用这里的设置或材料里的 runtime_proxy。') : tr('Set only exceptions. Blank inherits the batch default; only registered, available proxies may be used.', '只设置例外；空白继承本次批量代理。代理须已登记且允许该账号使用。')}</p>
           {!runtimeAccounts.length ? <p className="text-sm text-muted-foreground">{tr('Enter valid TXT or JSON material to configure each account here.', '填写有效的 TXT 或 JSON 材料后，即可在这里逐个设置。')}</p> : <div className="divide-y divide-border">{runtimeAccounts.map((account, index) => <div key={`${account.identifier.trim().toLowerCase()}:${index}`} role="group" aria-label={tr(`Runtime proxy for ${account.identifier}`, `账号 ${account.identifier} 的运行代理`)} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
             <p className="min-w-0 break-all text-sm">{index + 1}. {account.identifier}</p>
-            <div className="min-w-0 space-y-2"><div className="grid gap-2 sm:grid-cols-2"><Input aria-label={tr(`Runtime proxy URI for ${account.identifier}`, `账号 ${account.identifier} 的运行代理 URI`)} type="password" autoComplete="new-password" value={account.runtime_proxy || ''} disabled={repairing} placeholder={tr('Blank inherits the default above', '留空沿用上方统一设置')} onChange={e => setAccountRuntimeProxy(account, e.target.value)} /><ProxyPoolSelect proxies={runtimeProxies || []} value={account.runtime_proxy || ''} disabled={formLocked || repairing} onSelect={value => setAccountRuntimeProxy(account, value)} /></div><div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{tr('Effective setting', '生效设置')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(account.runtime_proxy || runtimeProxy)}</p><Button size="sm" variant="outline" disabled={repairing || !account.runtime_proxy} onClick={() => setAccountRuntimeProxy(account, '')}>{tr('Inherit default', '沿用统一设置')}</Button></div>{!repairing && runtimeProxies && !errors['runtime-proxies'] && (account.runtime_proxy || runtimeProxy) && !runtimeProxies.some(p => p.url === (account.runtime_proxy || runtimeProxy) && proxyIsSelectable(p)) && <p className="text-xs text-destructive">{tr('This proxy is unavailable to new accounts; correct it before preview.', '该代理当前不可用于新账号，请修正后再预检。')}</p>}</div>
+            <div className="min-w-0 space-y-2"><div className="grid gap-2 sm:grid-cols-2"><Input aria-label={tr(`Runtime proxy URI for ${account.identifier}`, `账号 ${account.identifier} 的运行代理 URI`)} type="password" autoComplete="new-password" value={account.runtime_proxy || ''} disabled={repairing} placeholder={tr('Blank inherits the default above', '留空沿用上方统一设置')} onChange={e => setAccountRuntimeProxy(account, e.target.value)} /><ProxyPoolSelect proxies={runtimeProxies || []} value={account.runtime_proxy || ''} disabled={formLocked || repairing} onSelect={value => setAccountRuntimeProxy(account, value)} /></div><div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{tr('Effective setting', '生效设置')}: {repairing ? tr('Keep the original account proxy', '保留原账号代理') : runtimeProxyLabel(account.runtime_proxy || runtimeProxy)}</p><Button size="sm" variant="outline" disabled={repairing || !account.runtime_proxy} onClick={() => setAccountRuntimeProxy(account, '')}>{tr('Inherit default', '沿用统一设置')}</Button></div>
+              {runtimeProxyTest(account.runtime_proxy || runtimeProxy, tr(`Test proxy connectivity for ${account.identifier}`, `测试账号 ${account.identifier} 的代理连通性`))}
+              {!repairing && runtimeProxies && !errors['runtime-proxies'] && (account.runtime_proxy || runtimeProxy) && !runtimeProxies.some(p => p.url === (account.runtime_proxy || runtimeProxy) && proxyIsSelectable(p)) && <p className="text-xs text-destructive">{tr('This proxy is unavailable to new accounts; correct it before preview.', '该代理当前不可用于新账号，请修正后再预检。')}</p>}</div>
           </div>)}</div>}
           </details>
         </section>

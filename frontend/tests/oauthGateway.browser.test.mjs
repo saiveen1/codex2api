@@ -23,7 +23,9 @@ before(async () => {
     name: 'oauth-fixture', enforce: 'pre',
     resolveId(id) { if (id === 'virtual:oauth-fixture') return '\0oauth-fixture'; if (/^(?:\.\.\/|\.\/)+api$/.test(id)) return '\0oauth-admin-auth' },
     load(id) {
-      if (id === '\0oauth-admin-auth') return 'export const getAdminKey=()=>"synthetic-admin"; export const resetAdminAuthState=()=>{window.__loggedOut=true}; export const PROXY_POOL_CHANGED="synthetic-proxy-change"; export const api={listProxies:async()=>{const r=await fetch("/api/admin/proxies",{headers:{"X-Admin-Key":"synthetic-admin"}});if(!r.ok)throw new Error("Synthetic proxy list failed");return r.json()}}'
+      if (id === '\0oauth-admin-auth') return `export const getAdminKey=()=>"synthetic-admin"; export const resetAdminAuthState=()=>{window.__loggedOut=true}; export const PROXY_POOL_CHANGED="synthetic-proxy-change";
+        const request=async(path,init)=>{const r=await fetch('/api/admin'+path,{...init,headers:{'X-Admin-Key':getAdminKey()}});if(!r.ok)throw new Error('Synthetic proxy request failed');return r.json()};
+        export const api={listProxies:()=>request('/proxies'),testProxy:(url,id,lang,signal)=>request('/proxies/test',{method:'POST',body:JSON.stringify({url,id,lang}),signal})}`
       if (id !== '\0oauth-fixture') return
       return `import React from 'react'; import {createRoot} from 'react-dom/client'; import {MemoryRouter} from 'react-router-dom';
         import OAuthGateway from ${JSON.stringify(path.join(root, 'src/pages/OAuthGateway.tsx'))};
@@ -53,6 +55,7 @@ async function fixture(t, options = {}) {
     failures: { capabilities: options.capabilityFailures || 0, quota: options.quotaFailures || 0, groups: options.groupFailures || 0 },
     settings: { oauth_url: 'https://oauth.cala.lol', oauth_token_set: true, configured: true, auto_recovery_supported: true, auto_recovery_reason: '', max_jobs: 200, max_archived_jobs: 10000 },
     caps: { countries: ['auto', 'US'], environments: ['auto', 'custom_ua'], proxy_modes: ['system', 'custom'], workspace_policies: ['team_preferred'], max_batch_size: 100, max_upload_bytes: 1048576, features: { proxy_check: true, expected_identity_guard: true } },
+    proxyTests: [],
     quota: { total: 10, remaining: 9, reserved: 0, used: 1 }, groups: options.emptyGroups ? [] : [{ id: 1, name: '测试分组' }],
     recoveries: options.recoveries || [], disabledRecoveries: [], missingLookup: false,
     proxies: options.proxies || [{ id: 1, url: 'http://one-runtime.example.invalid:8080', label: '运行节点一', enabled: true, test_status: 'success', bound_count: 0, exclusive: false }, { id: 2, url: 'http://two-runtime.example.invalid:8080', label: '运行节点二', enabled: true, test_status: 'untested', bound_count: 0, exclusive: false }],
@@ -60,6 +63,13 @@ async function fixture(t, options = {}) {
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
     if (url.origin !== origin) throw new Error('unexpected external network in OAuth UI test')
+    if (url.pathname === '/api/admin/proxies/test') {
+      assert.equal(request.headers()['x-admin-key'], 'synthetic-admin')
+      const payload = request.postDataJSON()
+      state.proxyTests.push(payload)
+      const result = payload.url === state.proxies[0].url ? { success: true, conclusive: true, latency_ms: 123 } : { success: false, conclusive: true }
+      return route.fulfill({ status: 200, json: result })
+    }
     if (url.pathname === '/api/admin/proxies') return route.fulfill({ status: options.proxyFailure ? 503 : 200, contentType: 'application/json', body: JSON.stringify({ proxies: state.proxies }) })
     if (!url.pathname.startsWith('/api/admin/oauth-gateway/')) return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div></body></html>' })
     assert.equal(request.headers()['x-admin-key'], 'synthetic-admin')
@@ -372,6 +382,30 @@ test('one account can select a runtime proxy without changing OAuth proxy mode',
   assert.equal(stored.includes('one-runtime'), false)
 })
 
+test('runtime proxy probes show latency without changing the preview or binding', async t => {
+  const { page, state } = await fixture(t)
+  await prepare(page)
+  const batch = page.getByRole('button', { name: '测试批量代理连通性', exact: true })
+  assert.equal(await batch.isDisabled(), true)
+  await page.getByLabel('本次批量运行代理 URI', { exact: true }).fill(state.proxies[0].url)
+  await page.getByRole('button', { name: '预检', exact: true }).click()
+  await page.getByText(/^预检通过 ·/).waitFor()
+  await batch.click()
+  await page.getByText('可连通 · 123 ms', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: '创建授权任务', exact: true }).isDisabled(), false)
+  await page.getByText('单账号覆盖 (0)', { exact: true }).click()
+  const row = page.getByRole('group', { name: '账号 fixture@example.invalid 的运行代理', exact: true })
+  const probe = row.getByRole('button', { name: /测试账号 .* 的代理连通性/ })
+  await probe.click()
+  await row.getByText('可连通 · 123 ms', { exact: true }).waitFor()
+  await row.getByLabel('账号 fixture@example.invalid 的运行代理 URI', { exact: true }).fill(state.proxies[1].url)
+  assert.equal(await row.getByRole('status').count(), 0)
+  await probe.click()
+  await row.getByText('不可连通', { exact: true }).waitFor()
+  assert.deepEqual(state.proxyTests, [state.proxies[0].url, state.proxies[0].url, state.proxies[1].url].map(url => ({ url, lang: 'zh-CN' })))
+  assert.equal(state.submissions, 0)
+})
+
 test('multiple account runtime proxies survive reordering and inherit the batch default', async t => {
   const { page, state } = await fixture(t)
   await ready(page)
@@ -467,7 +501,7 @@ test('job filters, stable pagination, result snapshot and guarded batch archive'
   const jobs = Array.from({ length: 12 }, (_, i) => ({
     id: `fixture-job-${i}`, job_type: 'import', state: 'completed', total: 1, imported: 1, failed: 0, pending: 0, can_archive: true, group_ids: i === 9 ? [1] : [],
     created_at: `2026-01-${String(20 - i).padStart(2, '0')}T00:00:00Z`, requested_country: 'US',
-    account_results: [{ line: 1, account_id: 100 + i, plan_type: 'plus', workspace_id: 'synthetic-workspace', group_ids: i === 9 ? [1] : [], runtime_proxy_id: 2, recovery_state: 'ready', identifier_masked: 'f***@example.invalid', outcome: 'imported' }],
+    account_results: [{ line: 1, account_id: 100 + i, plan_type: 'plus', workspace_id: 'synthetic-workspace', workspace_name: '研发团队', group_ids: i === 9 ? [1] : [], runtime_proxy_id: 2, recovery_state: 'ready', identifier_masked: 'f***@example.invalid', outcome: 'imported' }],
     groups: [{ index: 0, state: 'completed', imported: 1, total: 1, items: [{ line: 1, identifier: `fixture-${i}@example.invalid`, state: 'succeeded', import_state: 'imported' }] }],
   }))
   const { page, state } = await fixture(t, { jobs: [...jobs, active], recoveries: [{ account_id: 109, identifier: 'fixture@example.invalid', state: 'ready', attempts: 0, can_disable: true, account_disabled: true, last_outcome: 'refresh_succeeded' }] })
@@ -479,6 +513,7 @@ test('job filters, stable pagination, result snapshot and guarded batch archive'
   await row.getByText('批次与账号详情', { exact: true }).click()
   await row.getByText('plus', { exact: true }).waitFor()
   assert.equal(await row.getByRole('link', { name: '#109', exact: true }).getAttribute('href'), '/accounts?account_id=109')
+  await row.getByText('研发团队 · synthetic-workspace', { exact: true }).waitFor()
   assert.equal(await row.getByRole('link', { name: '#109', exact: true }).getAttribute('target'), '_blank')
   await panel.getByRole('button', { name: '刷新列表' }).click()
   await panel.getByText('第 2 / 2 页', { exact: true }).waitFor()

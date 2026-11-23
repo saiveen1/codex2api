@@ -7,7 +7,7 @@ import { Select } from './ui/select'
 import type { Problem } from '../lib/oauthGateway'
 
 type JobItem = { identifier?: string; identifier_masked?: string; line: number; state: string; import_state: string; can_reauthorize?: boolean; diagnostic?: { upstream_code?: string; http_status?: number; endpoint?: string; stage?: string }; error?: Problem }
-type AccountResult = { line: number; account_id?: number; plan_type?: string; workspace_id?: string; group_ids?: number[]; runtime_proxy_id?: number; recovery_state?: string; identifier_masked?: string; outcome?: string }
+type AccountResult = { line: number; account_id?: number; plan_type?: string; workspace_id?: string; workspace_name?: string; group_ids?: number[]; runtime_proxy_id?: number; recovery_state?: string; identifier_masked?: string; outcome?: string }
 export type Job = {
   id: string; state: string; total: number; imported: number; failed: number; pending: number
   can_refresh: boolean; can_cancel: boolean; can_retry_import: boolean; can_archive: boolean; retained_material: boolean; archived: boolean
@@ -75,7 +75,7 @@ export function OAuthJobs({ jobs, groups, archived, error, maxJobs, busy, batchA
       : row.recovery_state ? stateText(row.recovery_state) : unknown
     const values = [
       [tr('Plan at import', '入库套餐'), row.plan_type || unknown],
-      [tr('Workspace', '实际工作区'), row.workspace_id || unknown],
+      [tr('Workspace', '实际工作区'), [row.workspace_name, row.workspace_id].filter(Boolean).join(' · ') || unknown],
       [tr('Imported groups', '落地分组'), row.group_ids ? row.group_ids.map(groupLabel).join('、') || tr('No group', '无分组') : unknown],
       [tr('Bound runtime proxy', '绑定的运行代理'), row.runtime_proxy_id ? `#${row.runtime_proxy_id}` : row.runtime_proxy_id === 0 ? tr('No dedicated binding', '未单独绑定') : unknown],
       [tr('Recovery at import', '入库时的自动恢复'), enrollment],

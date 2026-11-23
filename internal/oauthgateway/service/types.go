@@ -163,6 +163,7 @@ type AccountResult struct {
 	AccountID        int64    `json:"account_id,omitempty"`
 	PlanType         string   `json:"plan_type,omitempty"`
 	WorkspaceID      string   `json:"workspace_id,omitempty"`
+	WorkspaceName    string   `json:"workspace_name,omitempty"`
 	GroupIDs         *[]int64 `json:"group_ids,omitempty"`
 	RuntimeProxyID   *int64   `json:"runtime_proxy_id,omitempty"`
 	RecoveryState    string   `json:"recovery_state,omitempty"`
