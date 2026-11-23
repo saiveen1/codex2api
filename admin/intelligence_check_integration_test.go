@@ -359,6 +359,65 @@ func TestIntelligenceAdminAPIAndRunner(t *testing.T) {
 	}
 }
 
+func TestIntelligenceRunnerAutomaticConcurrency(t *testing.T) {
+	for _, limit := range []int{3, 1} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			db := newTestAdminDB(t)
+			started := make(chan struct{}, 4)
+			unblock := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				started <- struct{}{}
+				select {
+				case <-unblock:
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprintf(w, "data: %s\n\n", intelligenceSuccess)
+				case <-r.Context().Done():
+				}
+			}))
+			defer upstream.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			store := auth.NewStore(db, nil, nil)
+			h := &Handler{store: store, db: db}
+			defer func() { cancel(); h.WaitIntelligenceChecks() }()
+			settings, err := db.GetIntelligenceCheckSettings(ctx)
+			if err != nil || settings.Concurrency != 3 {
+				t.Fatalf("default concurrency = %d, err = %v", settings.Concurrency, err)
+			}
+			settings.Enabled, settings.GPTModel, settings.Concurrency = true, "gpt-5.4", limit
+			if _, err := db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+				t.Fatal(err)
+			}
+			for range 4 {
+				id := insertTestAccount(t, db)
+				if err := db.UpdateCredentials(ctx, id, map[string]any{"upstream_type": auth.UpstreamOpenAIResponses, "base_url": upstream.URL, "api_key": "fixture-key", "models": []string{"gpt-5.4"}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.LoadAccountByID(ctx, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.intelligenceTick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for i := range limit {
+				select {
+				case <-started:
+				case <-ctx.Done():
+					t.Fatalf("only %d of %d requests started before any could finish", i, limit)
+				}
+			}
+			for status, want := range map[string]int{"running": limit, "queued": 4 - limit} {
+				_, total, err := db.ListIntelligenceCheckRuns(ctx, database.IntelligenceCheckRunFilter{Status: status, Source: "automatic"})
+				if err != nil || total != want {
+					t.Errorf("%s automatic checks = %d, want %d; err = %v", status, total, want, err)
+				}
+			}
+			close(unblock)
+			h.WaitIntelligenceChecks()
+		})
+	}
+}
+
 func TestIntelligenceRuntimeConfigurationFailureIsInterrupted(t *testing.T) {
 	db := newTestAdminDB(t)
 	id := insertTestAccount(t, db)

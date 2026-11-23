@@ -118,10 +118,10 @@ export function IntelligenceHistory({ groups, onRun }: { groups: IntelligenceGro
       <FilterSelect label="状态" value={filters.status} onChange={status => change({ status })} choices={statuses.map(value => ({ value, label: intelligenceLabels[value] }))} />
       <FilterSelect label="发起方式" value={filters.source} onChange={source => change({ source })} choices={options({ manual: "手动", automatic: "自动" })} />
       <FilterSelect label="检测类型" value={filters.record_only} onChange={record_only => change({ record_only })} choices={options({ true: "试跑（只记录）", false: "常规检测" })} />
-      <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">开始时间（含）
+      <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">入队起始时间（含）
         <Input className="min-w-0" type="datetime-local" value={filters.from} onChange={e => change({ from: e.target.value })} />
       </label>
-      <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">结束时间（不含）
+      <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">入队截止时间（不含）
         <Input className="min-w-0" type="datetime-local" value={filters.before} onChange={e => change({ before: e.target.value })} />
       </label>
     </div>
@@ -136,7 +136,13 @@ export function IntelligenceHistory({ groups, onRun }: { groups: IntelligenceGro
             {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">试跑（只记录）</span>}
           </div>
           <p className="text-xs text-muted-foreground">{run.channel} · 分组：{intelligenceGroupNames(run.groups)} · 套餐：{run.plan || "未知"} · 规则：{intelligencePolicyName(run)}</p>
-          <p className="text-xs text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : "未记录时间"}{(run.question_name || run.question?.name) && ` · ${run.question_name || run.question?.name}`}{run.duration_ms != null ? ` · ${(run.duration_ms / 1000).toFixed(2)} 秒` : ""}</p>
+          <p className="text-xs text-muted-foreground">
+            入队：{run.created_at ? new Date(run.created_at).toLocaleString() : "未知"}
+            {run.started_at && <> · 开始：<time dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></>}
+            {run.completed_at && <> · 完成：<time dateTime={run.completed_at}>{new Date(run.completed_at).toLocaleString()}</time></>}
+            {(run.question_name || run.question?.name) && ` · ${run.question_name || run.question?.name}`}
+            {run.duration_ms != null ? ` · ${(run.duration_ms / 1000).toFixed(2)} 秒` : ""}
+          </p>
         </Row>)}
       </ul>
       <PageFooter data={data} page={page} onPage={setPage} />

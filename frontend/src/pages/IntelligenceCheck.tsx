@@ -178,6 +178,7 @@ export default function IntelligenceCheck() {
     label: string,
     min: number,
     max: number,
+    hint?: string,
   ) =>
     field(
       label,
@@ -188,6 +189,7 @@ export default function IntelligenceCheck() {
         value={settings?.[key] ?? ""}
         onChange={(e) => change(key, Number(e.target.value))}
       />,
+      hint,
     );
   return (
     <>
@@ -246,6 +248,7 @@ export default function IntelligenceCheck() {
                 />,
                 "管控所有自动检测，包括独立策略和恢复检测。关闭不影响手动检测。",
               )}
+              {numeric("concurrency", "检测并发数", 1, 100, "默认 3。手动和自动检测共用此上限；多个账号同时到期时可并行。")}
               <div className="flex flex-col gap-2 text-sm">
                 <span className="font-medium">自动检测范围</span>
                 <Select aria-label="自动检测范围" value={settings.rules_only ? "rules" : "global"}
@@ -353,7 +356,6 @@ export default function IntelligenceCheck() {
               {numeric("interval_seconds", "正常间隔（秒）", 1, 86400)}
               {numeric("retry_seconds", "异常重试间隔（秒）", 1, 86400)}
               {numeric("timeout_seconds", "请求超时（秒）", 1, 3600)}
-              {numeric("concurrency", "全局检测并发", 1, 100)}
               {numeric("retention", "每账号保留记录", 1, 10000)}
               <div className="sm:col-span-2">
                 {field("自适应检测", <Switch aria-label="自适应检测" checked={settings.adaptive_enabled ?? false} onCheckedChange={v => change("adaptive_enabled", v)} />,
