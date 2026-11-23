@@ -192,6 +192,16 @@ export interface IntelligenceBar {
   action: IntelligenceAction;
   records: IntelligenceRecord[];
 }
+export interface IntelligenceRuleParticipant {
+  account_id: number;
+  account_name: string;
+  groups: IntelligenceGroup[];
+  original_group_ids?: number[];
+  recovery: boolean;
+  next_due_at?: string;
+  state: "due" | "scheduled" | "queued" | "running" | "quota_wait" | "not_dispatchable" | "config_error";
+  available_after?: string;
+}
 export interface IntelligencePage<T> {
   items: T[];
   total: number;

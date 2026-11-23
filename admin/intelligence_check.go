@@ -19,6 +19,7 @@ func (h *Handler) registerIntelligenceCheckRoutes(api *gin.RouterGroup) {
 	api.GET("/intelligence-check/settings", h.GetIntelligenceSettings)
 	api.PUT("/intelligence-check/settings", h.SaveIntelligenceSettings)
 	api.GET("/intelligence-check/accounts", h.ListIntelligenceAccounts)
+	api.GET("/intelligence-check/rule-participants", h.ListIntelligenceRuleParticipants)
 	api.PATCH("/intelligence-check/accounts", h.SetIntelligenceAccounts)
 	api.POST("/intelligence-check/runs", h.CreateIntelligenceRuns)
 	api.GET("/intelligence-check/runs", h.ListIntelligenceRuns)
@@ -105,6 +106,31 @@ func (h *Handler) ListIntelligenceAccounts(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"items": items, "total": total, "page": page, "page_size": size})
 }
+func (h *Handler) ListIntelligenceRuleParticipants(c *gin.Context) {
+	id := c.Query("rule_id")
+	if strings.TrimSpace(id) == "" || len(id) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择有效的已保存规则。"})
+		return
+	}
+	if h.store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "账号运行状态不可用，请稍后刷新。"})
+		return
+	}
+	page, size := intelligencePagination(c)
+	now := time.Now().UTC()
+	items, total, err := h.db.ListIntelligenceRuleParticipants(c.Request.Context(), id, (page-1)*size, size, now, h.intelligencePreflight())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "规则尚未保存或已删除，请刷新配置。"})
+			return
+		}
+		intelligenceAPIError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": page, "page_size": size, "checked_at": now})
+}
+
 func intelligenceIDs(ids []int64, maxCount int) ([]int64, error) {
 	if len(ids) == 0 || len(ids) > maxCount {
 		return nil, fmt.Errorf("请选择 1–%d 个账号", maxCount)

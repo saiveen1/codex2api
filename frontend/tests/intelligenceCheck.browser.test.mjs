@@ -24,7 +24,7 @@ before(async () => {
   name: 'intelligence-harness', enforce: 'pre',
   resolveId(id) { if (id === 'virtual:intelligence-harness') return '\0intelligence-harness'; if (/^(?:\.\.\/|\.\/)+api$/.test(id)) return '\0mock-api' },
   load(id) {
-   if (id === '\0mock-api') return 'export const api = new Proxy({}, { get: (_, name) => (...args) => window.__api(name, args) }); export const getAdminKey = () => "fixture"; export const resetAdminAuthState = () => {}; export class AdminAPIError extends Error {}'
+   if (id === '\0mock-api') return 'export const api = new Proxy({}, { get: (_, name) => (...args) => window.__api(name, args) }); export const getAdminKey = () => "fixture"; export const resetAdminAuthState = () => {}; export const PROXY_POOL_CHANGED = "codex2api:proxy-pool-changed"; export class AdminAPIError extends Error {}'
    if (id !== '\0intelligence-harness') return
    return `import React from 'react'; import {createRoot} from 'react-dom/client'; import {MemoryRouter} from 'react-router-dom';
    import IntelligenceCheck from ${JSON.stringify(path.join(root, 'src/pages/IntelligenceCheck.tsx'))};
@@ -44,7 +44,7 @@ before(async () => {
  const bundle = Array.isArray(result) ? result[0] : result
  script = bundle.output.find(item => item.type === 'chunk').code
  css = bundle.output.filter(item => item.type === 'asset' && item.fileName.endsWith('.css')).map(item => item.source).join('\n')
- browser = await chromium.launch({ headless: true })
+ browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined })
 })
 after(async () => { await browser?.close() })
 async function fixture(t, options = {}) {
@@ -59,6 +59,10 @@ async function fixture(t, options = {}) {
   if (options.dark) document.documentElement.classList.add('dark')
   window.__conflictActive = !!options.conflict
   if (options.conflict) window.__config = {...settings, action: 'switch_group', target_group_id: 1}
+  if (options.participantPreview) {
+   window.__config = {...settings, enabled:true, rules:[{id:'scope',name:'Team 规则',channel:'codex',group_id:1,automatic:true}]}
+   window.__participants = [{account_id:1,account_name:'转组后的原号',groups:[{id:9,name:'降智'}],original_group_ids:[1],recovery:true,state:'due'}]
+  }
   const historicalRun = {...run, groups:[{id:1, name:'检测时的旧分组名'}], plan:'plus', rule_id:'premium', rule_name:'Plus 试跑规则', record_only:true};
   window.__api = async (name, args) => {
    window.__calls.push({ name, args })
@@ -76,6 +80,7 @@ async function fixture(t, options = {}) {
    if (name === 'getChannelMonitorBillingRates') return { rates: [] }
    if (name === 'getIntelligenceSettings') return window.__config
    if (name === 'listAccountGroups') return { groups: [{ id: 1, name: '隔离分组', channel: 'codex' }, { id: 2, name: 'Claude 隔离', channel: 'claude' }, { id: 3, name: 'Grok 隔离', channel: 'grok' }] }
+   if (name === 'getIntelligenceRuleParticipants') return { items: window.__participants, total: window.__participants.length, page: args[1], page_size: 20, checked_at: new Date().toISOString() }
    if (name === 'getIntelligenceAccounts') {
     if (options.error) throw new Error('本地模拟读取失败')
     if (options.bulk) {
@@ -110,6 +115,26 @@ async function fixture(t, options = {}) {
  if (!options.accountsPage) await page.getByRole('heading', { name: '降智检测', exact: true, includeHidden: true }).waitFor({ state: 'attached' })
  return page
 }
+test('rule participant preview refreshes new accounts and explains moved recovery rows', async t => {
+ const page = await fixture(t, {participantPreview:true, mobile:true})
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ const toggle = page.getByRole('button', {name:'下轮参与账号', exact:true})
+ await toggle.waitFor()
+ assert.equal(await page.evaluate(() => window.__calls.some(c => c.name === 'getIntelligenceRuleParticipants')), false)
+ await toggle.click()
+ const preview = page.getByRole('region', {name:'下轮参与账号名单'})
+ await preview.getByText('转组后的原号', {exact:true}).waitFor()
+ await preview.getByText('恢复复测', {exact:true}).waitFor()
+ await preview.getByText('当前分组：降智 · 按原分组匹配：隔离分组', {exact:true}).waitFor()
+ await page.evaluate(() => window.__participants.push({account_id:2,account_name:'刚加入的账号',groups:[{id:1,name:'隔离分组'}],recovery:false,state:'scheduled',next_due_at:'2026-11-23T02:00:00Z'}))
+ await preview.getByRole('button', {name:'刷新名单'}).click()
+ await preview.getByText('刚加入的账号', {exact:true}).waitFor()
+ await preview.getByText('尚未到期', {exact:true}).waitFor()
+ assert.deepEqual(await page.evaluate(() => window.__calls.filter(c => c.name === 'getIntelligenceRuleParticipants').map(c => c.args.slice(0,2))), [['scope',1],['scope',1]])
+ assert.equal(await page.evaluate(() => window.__calls.some(c => c.name === 'createIntelligenceRuns')), false)
+ await page.screenshot({path:path.join(artifactDir,'rule-participants-mobile.png'),fullPage:true})
+})
+
 test('configuration and questions share one page and preserve their save flow', async t => {
  const page = await fixture(t)
  assert.deepEqual(await page.getByRole('tab').allTextContents(), ['配置', '独立策略', '检测历史', '批量操作'])

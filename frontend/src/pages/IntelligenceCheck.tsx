@@ -659,7 +659,7 @@ export default function IntelligenceCheck() {
               <Switch id="intelligence-rules-only" checked={!!settings.rules_only} disabled={busy} onCheckedChange={value => change("rules_only", value)} />
             </div>
             <p className="text-xs text-muted-foreground">匹配分组不等于匹配同名套餐。已有账号还需开启自己的检测开关；可到 <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setTab("batch")}>批量操作</Button> 按分组筛选并开启。</p>
-            <IntelligenceRules settings={settings} groups={groups} disabled={busy} onChange={rules => change("rules", rules)} />
+            <IntelligenceRules settings={settings} saved={saved} groups={groups} dirty={dirty} disabled={busy} onChange={rules => change("rules", rules)} />
           </>}
         </Tabs.Content>
         <Tabs.Content value="history">

@@ -10,6 +10,7 @@ import { Card, CardContent } from "./ui/card";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { Switch } from "./ui/switch";
+import IntelligenceRuleParticipants from "./IntelligenceRuleParticipants";
 
 const choices = (values: Record<string, string>) => Object.entries(values).map(([value, label]) => ({ value, label }));
 const inherit = { value: "", label: "继承全局" };
@@ -20,10 +21,12 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   </label>;
 }
 
-export default function IntelligenceRules({ settings, groups, onChange, disabled }: {
-  settings: IntelligenceSettings; groups: IntelligenceGroup[]; onChange: (rules: IntelligenceRule[]) => void; disabled: boolean;
+export default function IntelligenceRules({ settings, saved, groups, onChange, disabled, dirty }: {
+  settings: IntelligenceSettings; saved: IntelligenceSettings | null; groups: IntelligenceGroup[];
+  onChange: (rules: IntelligenceRule[]) => void; disabled: boolean; dirty: boolean;
 }) {
   const [editor, setEditor] = useState<string>();
+  const [preview, setPreview] = useState<string>();
   const rules = settings.rules ?? [];
   const edit = (id: string, patch: Partial<IntelligenceRule>) => onChange(rules.map(r => r.id === id ? { ...r, ...patch } : r));
   const move = (index: number, direction: -1 | 1) => {
@@ -47,6 +50,7 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
     <ol className="space-y-3">
       {rules.map((rule, index) => {
         const name = rule.name || "未命名规则";
+        const canPreview = saved?.rules?.some(r => r.id === rule.id);
         const patch = (value: Partial<IntelligenceRule>) => edit(rule.id, value);
         const groupChoices = groups.filter(g => (g.channel || "codex") === rule.channel).map(g => ({ value: String(g.id), label: `${g.name} #${g.id}` }));
         const groupOptions = (id: number | undefined, empty: string) => [
@@ -65,16 +69,19 @@ export default function IntelligenceRules({ settings, groups, onChange, disabled
               {rule.automatic && rule.normal_only && <p className="text-xs text-muted-foreground">仅检测正常账号</p>}
               <p className="mt-1 text-xs text-muted-foreground">{rule.action ? intelligenceActionOptions[rule.action] : "处置继承全局"}{rule.target_group_id ? ` → ${groups.find(g => g.id === rule.target_group_id)?.name || `#${rule.target_group_id}`}` : ""}</p>
             </div>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap items-center gap-1">
+              <Button variant="outline" size="sm" aria-expanded={preview === rule.id} disabled={disabled || !canPreview} title={!canPreview ? "请先保存规则" : undefined} onClick={() => setPreview(preview === rule.id ? undefined : rule.id)}>下轮参与账号</Button>
               <Button variant="ghost" size="icon" aria-label={`上移 ${name}`} disabled={disabled || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-4" /></Button>
               <Button variant="ghost" size="icon" aria-label={`下移 ${name}`} disabled={disabled || index === rules.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-4" /></Button>
               <Button variant="outline" size="sm" aria-expanded={editor === rule.id} disabled={disabled} onClick={() => setEditor(editor === rule.id ? undefined : rule.id)}>编辑</Button>
               <Button variant="ghost" size="icon" aria-label={`删除 ${name}`} disabled={disabled} onClick={() => {
                 onChange(rules.filter(r => r.id !== rule.id));
                 if (editor === rule.id) setEditor(undefined);
+                if (preview === rule.id) setPreview(undefined);
               }}><Trash2 className="size-4" /></Button>
             </div>
           </div>
+          {canPreview && preview === rule.id && <IntelligenceRuleParticipants key={`${rule.id}:${saved?.revision}`} ruleID={rule.id} groups={groups} dirty={dirty} />}
           {error && <p className="text-sm text-destructive">{error}</p>}
           {editor === rule.id && <fieldset aria-label="规则编辑" disabled={disabled} className="grid min-w-0 gap-4 border-t pt-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="规则名称"><Input value={rule.name} onChange={e => patch({ name: e.target.value })} /></Field>

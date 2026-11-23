@@ -428,11 +428,12 @@ func (db *DB) intelligenceAccountSelect() string {
 	return intelligenceAccountColumns + db.intelligenceChannelExpr() + db.intelligenceScopeColumns("a") + "," + db.intelligenceNormalAccountSQL("a")
 }
 
-func scanIntelligenceAccount(row interface{ Scan(...interface{}) error }) (IntelligenceCheckAccount, error) {
+func scanIntelligenceAccount(row interface{ Scan(...interface{}) error }, extra ...any) (IntelligenceCheckAccount, error) {
 	var a IntelligenceCheckAccount
 	var due int64
 	var raw, groups string
-	err := row.Scan(&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel, &a.Plan, &groups, &a.normalAccount)
+	dest := []any{&a.AccountID, &a.AccountName, &a.CredentialGeneration, &a.Enabled, &a.ManualEnabled, &a.AccountStatus, &a.Status, &a.QualityPaused, &a.ManualRevision, &due, &a.QuestionCursor, &raw, &a.Channel, &a.Plan, &groups, &a.normalAccount}
+	err := row.Scan(append(dest, extra...)...)
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &a.State)
 	}

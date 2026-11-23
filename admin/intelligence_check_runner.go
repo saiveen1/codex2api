@@ -49,15 +49,7 @@ func (h *Handler) intelligenceTick(ctx context.Context) error {
 	if _, err := h.db.ExpireIntelligenceCheckLeases(opCtx, time.Now()); err != nil {
 		return err
 	}
-	preflight := database.IntelligenceCheckPreflight{
-		QuotaHold: func(id int64, model string) (time.Time, bool) {
-			return h.intelligenceQuotaHold(h.store.FindByID(id), model)
-		},
-		IsAvailable: func(id int64) bool {
-			return intelligenceAccountAvailable(h.store.FindByID(id))
-		},
-	}
-	if _, err := h.db.EnqueueDueIntelligenceChecks(opCtx, time.Now(), 100, preflight); err != nil {
+	if _, err := h.db.EnqueueDueIntelligenceChecks(opCtx, time.Now(), 100, h.intelligencePreflight()); err != nil {
 		return err
 	}
 	for i := 0; i < 100 && ctx.Err() == nil; i++ {
@@ -90,6 +82,17 @@ func (h *Handler) intelligenceTick(ctx context.Context) error {
 		}(*run)
 	}
 	return nil
+}
+
+func (h *Handler) intelligencePreflight() database.IntelligenceCheckPreflight {
+	return database.IntelligenceCheckPreflight{
+		QuotaHold: func(id int64, model string) (time.Time, bool) {
+			return h.intelligenceQuotaHold(h.store.FindByID(id), model)
+		},
+		IsAvailable: func(id int64) bool {
+			return intelligenceAccountAvailable(h.store.FindByID(id))
+		},
+	}
 }
 
 // intelligenceQuotaHold reports whether a detector request to account would

@@ -60,9 +60,21 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 				return step == 0
 			},
 		}
+		participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, preflight)
+		if err != nil || total != 1 || len(participants) != 1 || participants[0].AccountID != pro || participants[0].State != "due" || participants[0].Recovery != (step == 1) {
+			t.Fatalf("preview step %d: %+v, total=%d, err=%v", step, participants, total, err)
+		}
+		if step == 1 && (!slices.Equal(participants[0].OriginalGroupIDs, []int64{main}) || len(participants[0].Groups) != 1 || participants[0].Groups[0].ID != isolation) {
+			t.Fatal("moved account was not listed with both group identities")
+		}
+		checkedModel, availabilityChecks = "", 0
 		queued, err := db.EnqueueDueIntelligenceChecks(ctx, at, 1, preflight)
 		if err != nil || queued != 1 || checkedModel != "gpt-6-sol" || availabilityChecks != 1-step {
 			t.Fatalf("queue step %d: %d %q availability checks=%d err=%v", step, queued, checkedModel, availabilityChecks, err)
+		}
+		participants, _, err = db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, preflight)
+		if err != nil || len(participants) != 1 || participants[0].State != "queued" {
+			t.Fatalf("queued preview step %d: %+v %v", step, participants, err)
 		}
 		run, err := db.ClaimIntelligenceCheck(ctx, "worker", at, time.Minute)
 		if err != nil || run == nil || run.AccountID != pro || run.RuleID != "specific" || run.Model != "gpt-6-sol" || run.Plan != "pro" {
@@ -84,6 +96,22 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 		if ids, err := db.GetAccountGroupIDs(ctx, pro); !slices.Equal(ids, []int64{wantAfter}) || err != nil {
 			t.Fatal(ids, err)
 		}
+	}
+	newID := intelligenceAccount(t, db)
+	if err := db.SetAccountGroups(ctx, newID, []int64{main}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateCredentials(ctx, newID, map[string]any{"plan_type": "pro"}); err != nil {
+		t.Fatal(err)
+	}
+	participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 1, now.Add(21*time.Second), IntelligenceCheckPreflight{
+		QuotaHold: func(id int64, _ string) (time.Time, bool) { return now.Add(time.Hour), id == newID },
+	})
+	if err != nil || total != 2 || len(participants) != 1 || participants[0].AccountID != newID || participants[0].State != "quota_wait" || participants[0].AvailableAfter == nil {
+		t.Fatalf("refreshed, paginated preview: %+v, total=%d, err=%v", participants, total, err)
+	}
+	if _, n, err := db.ListIntelligenceCheckRuns(ctx, IntelligenceCheckRunFilter{AccountID: newID}); err != nil || n != 0 {
+		t.Fatal("read-only preview created a run", n, err)
 	}
 	if err := db.UpdateCredentials(ctx, pro, map[string]any{"plan_type": "free"}); err != nil {
 		t.Fatal(err)
