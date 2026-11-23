@@ -45,6 +45,10 @@ func TestOAuthPathsAndResults(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"ok":true,"data":{"usable":false,"requested_country":"US","openai_reachable":false,"checked_at":1,"elapsed_ms":2,"error":{"code":"proxy_country_mismatch","message":"secret","source":"execution","action":"fix_request","retryable":false,"retry_after":null}}}`)
 		case "/prefix/api/v1/oauth/requests/r1", "/prefix/api/v1/oauth/batches/b1", "/prefix/api/v1/oauth/batches/b1/cancel", "/prefix/api/v1/oauth/batches":
+			if r.URL.Path == "/prefix/api/v1/oauth/batches/b1" {
+				fmt.Fprint(w, `{"ok":true,"data":{"batch_id":"b1","request_id":"r1","state":"completed","total":1,"succeeded":1,"failed":0,"pending":0,"items":[{"item_id":"i1","line":1,"state":"succeeded","identifier":"fixture@example.invalid","success_summary":{"workspace_id":"ws-a","workspace_name":"  Team A  ","plan_type":"team"}}]}}`)
+				return
+			}
 			if r.Method == "GET" {
 				b, _ := io.ReadAll(r.Body)
 				if len(b) != 0 {
@@ -79,8 +83,8 @@ func TestOAuthPathsAndResults(t *testing.T) {
 	if _, err = c.Submit(ctx, SubmitRequest{RequestID: "r1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.Batch(ctx, "b1"); err != nil {
-		t.Fatal(err)
+	if batch, err := c.Batch(ctx, "b1"); err != nil || len(batch.Items) != 1 || batch.Items[0].SuccessSummary == nil || *batch.Items[0].SuccessSummary != (BatchSuccessSummary{WorkspaceID: "ws-a", WorkspaceName: "Team A"}) {
+		t.Fatalf("documented batch summary without identifier_masked: %+v %v", batch, err)
 	}
 	if _, err = c.Lookup(ctx, "r1"); err != nil {
 		t.Fatal(err)
@@ -118,13 +122,13 @@ func TestOAuthUnknownAndRedirect(t *testing.T) {
 }
 func TestDelivery(t *testing.T) {
 	var batch Batch
-	if err := json.Unmarshal([]byte(`{"items":[{"item_id":"a","line":1,"state":"succeeded","success_summary":{"workspace_name":"  Team A  ","unused":"not retained"}},{"item_id":"b","line":2,"state":"succeeded","success_summary":{"workspace_name":["invalid"]}},{"item_id":"c","line":3,"state":"succeeded"}]}`), &batch); err != nil {
+	if err := json.Unmarshal([]byte(`{"items":[{"item_id":"a","line":1,"state":"succeeded","success_summary":{"workspace_id":"ws-a","workspace_name":"  Team A  "}},{"item_id":"b","line":2,"state":"succeeded","success_summary":{"workspace_id":"ws-a","workspace_name":"Wrong team"}},{"item_id":"c","line":3,"state":"succeeded"}]}`), &batch); err != nil {
 		t.Fatal(err)
 	}
-	original := Result{Data: json.RawMessage(`{"type":"sub2api-data","version":1,"accounts":[{"token":"b","workspace_name":"Legacy B"},{"token":"a","workspace_name":"Legacy A"}]}`), Delivery: Delivery{IncludedCount: 2, ExpiredCount: 1, ExpiredItemIDs: []string{"c"}, Items: []DeliveryItem{{ItemID: "a", Line: 1, AccountIndex: 1}, {ItemID: "b", Line: 2, AccountIndex: 0}}}}
+	original := Result{Data: json.RawMessage(`{"type":"sub2api-data","version":1,"accounts":[{"credentials":{"chatgpt_account_id":"ws-b"},"workspace_name":"Legacy B"},{"credentials":{"chatgpt_account_id":"ws-a"},"workspace_name":"Legacy A"}]}`), Delivery: Delivery{IncludedCount: 2, ExpiredCount: 1, ExpiredItemIDs: []string{"c"}, Items: []DeliveryItem{{ItemID: "a", Line: 1, AccountIndex: 1}, {ItemID: "b", Line: 2, AccountIndex: 0}}}}
 	a, err := ValidateDelivery(original, batch)
-	if err != nil || string(a[1]) != `{"token":"a","workspace_name":"Team A"}` || string(a[0]) != `{"token":"b","workspace_name":"Legacy B"}` {
-		t.Fatal("reordered workspace mapping or legacy fallback failed", err)
+	if err != nil || string(a[1]) != `{"credentials":{"chatgpt_account_id":"ws-a"},"workspace_name":"Team A"}` || string(a[0]) != `{"credentials":{"chatgpt_account_id":"ws-b"},"workspace_name":"Legacy B"}` {
+		t.Fatal("reordered workspace mapping or mismatch fallback failed", err)
 	}
 	for _, tc := range []struct {
 		name   string

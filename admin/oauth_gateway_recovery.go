@@ -83,7 +83,7 @@ func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySn
 			updates[key] = value
 		}
 	}
-	if name := oauthGatewayWorkspaceName(raw); name != "" {
+	if name := oauthGatewayWorkspaceName(raw, snap.Identity.ChatGPTAccountID); name != "" {
 		updates["workspace_name"] = name
 	}
 	if err := t.h.db.RecoverOAuthGatewayAccount(ctx, snap, updates, jobID); err != nil {

@@ -87,7 +87,11 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original","workspace_name":"Recovered Workspace"}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original"},"extra":{"oauth_workspace":{"id":"workspace-original","name":"Recovered Workspace"}}}`)
+	wrongMetadata := json.RawMessage(strings.Replace(string(account), `"id":"workspace-original"`, `"id":"wrong-workspace"`, 1))
+	if oauthGatewayWorkspaceName(wrongMetadata, snap.Identity.ChatGPTAccountID) != "" {
+		t.Fatal("accepted a name from a different workspace")
+	}
 	wrong := json.RawMessage(strings.ReplaceAll(string(account), "workspace-original", "wrong-workspace"))
 	if result, err := target.Recover(ctx, snap, wrong, "wrong"); err == nil || result.Failed != 1 {
 		t.Fatal("workspace mismatch accepted")

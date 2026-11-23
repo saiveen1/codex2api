@@ -102,8 +102,13 @@ func oauthGatewayImportFailure(code string) (upstream.ImportResult, error) {
 }
 
 // Only explicit workspace metadata is eligible; the account's own name may be an email.
-func oauthGatewayWorkspaceName(raw json.RawMessage) string {
-	for _, path := range []string{"workspace_name", "credentials.workspace_name", "extra.workspace_name", "credentials.chatgpt_account_name"} {
+func oauthGatewayWorkspaceName(raw json.RawMessage, workspaceID string) string {
+	paths := []string{"workspace_name"} // A matched batch summary is carried here by ValidateDelivery.
+	if field := gjson.GetBytes(raw, "extra.oauth_workspace.id"); field.Type == gjson.String && openaiidentity.NormalizeWorkspaceID(field.Str) == workspaceID && openaiidentity.ValidWebWorkspaceID(workspaceID) {
+		paths = append(paths, "extra.oauth_workspace.name")
+	}
+	paths = append(paths, "credentials.workspace_name", "extra.workspace_name", "credentials.chatgpt_account_name")
+	for _, path := range paths {
 		if field := gjson.GetBytes(raw, path); field.Type == gjson.String {
 			if name := upstream.NormalizeWorkspaceName(field.Str); name != "" {
 				return name
@@ -168,7 +173,7 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 		return oauthGatewayImportFailure("gateway_identity_mismatch")
 	}
 	seed.accountID, seed.workspaceID, seed.userID = workspace, workspace, user
-	workspaceName := oauthGatewayWorkspaceName(raw)
+	workspaceName := oauthGatewayWorkspaceName(raw, workspace)
 	if workspaceName == "" {
 		workspaceName = upstream.NormalizeWorkspaceName(seed.workspaceName)
 		if workspaceName == "" && !seed.identityPrepared && t.h.store != nil {

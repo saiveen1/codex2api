@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/codex2api/internal/openaiidentity"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -87,12 +88,19 @@ type ProxyCheck struct {
 	Error            *Error  `json:"error"`
 }
 type BatchSuccessSummary struct {
+	WorkspaceID   string `json:"workspace_id,omitempty"`
 	WorkspaceName string `json:"workspace_name,omitempty"`
 }
 
 func (s *BatchSuccessSummary) UnmarshalJSON(data []byte) error {
 	// Optional display metadata must not invalidate an otherwise valid batch.
 	s.WorkspaceName = ""
+	s.WorkspaceID = ""
+	if field := gjson.GetBytes(data, "workspace_id"); field.Type == gjson.String {
+		if id := openaiidentity.NormalizeWorkspaceID(field.Str); openaiidentity.ValidWebWorkspaceID(id) {
+			s.WorkspaceID = id
+		}
+	}
 	if field := gjson.GetBytes(data, "workspace_name"); field.Type == gjson.String {
 		s.WorkspaceName = NormalizeWorkspaceName(field.Str)
 	}
@@ -265,7 +273,7 @@ func (o *OAuthClient) batchCall(ctx context.Context, method, path string, body a
 	b, _, err = o.call(ctx, method, path, body, 1<<20, uncertain)
 	if err == nil {
 		err = decode(b, &v, "batch_id", "request_id", "state", "total", "succeeded", "failed", "pending", "items")
-		if err == nil && (!validID(v.BatchID) || !validID(v.RequestID) || v.State == "" || !arrayObjects(b, "items", "item_id", "line", "identifier_masked", "state")) {
+		if err == nil && (!validID(v.BatchID) || !validID(v.RequestID) || v.State == "" || !arrayObjects(b, "items", "item_id", "line", "state")) {
 			err = failure("invalid_response", uncertain)
 		}
 		if err == nil {
@@ -354,9 +362,11 @@ func ValidateDelivery(result Result, batch Batch) ([]json.RawMessage, error) {
 			return bad()
 		}
 		ids[m.ItemID] = true
-		if item.SuccessSummary != nil && item.SuccessSummary.WorkspaceName != "" {
-			// Carry only the matched item's name through the shared import/recovery path.
-			account, err := sjson.SetBytes(bundle.Accounts[m.AccountIndex], "workspace_name", item.SuccessSummary.WorkspaceName)
+		account := bundle.Accounts[m.AccountIndex]
+		workspaceID := openaiidentity.NormalizeWorkspaceID(gjson.GetBytes(account, "credentials.chatgpt_account_id").String())
+		if summary := item.SuccessSummary; summary != nil && summary.WorkspaceName != "" && summary.WorkspaceID == workspaceID && openaiidentity.ValidWebWorkspaceID(workspaceID) {
+			// A display name cannot establish or change the credential's workspace.
+			account, err := sjson.SetBytes(account, "workspace_name", summary.WorkspaceName)
 			if err != nil {
 				return bad()
 			}
