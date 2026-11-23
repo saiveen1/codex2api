@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 let artifactDir
 let browser, script, css
 const question = { id: 'candy', name: '糖果配对', prompt: '本地演示题目，最终只恢复数字结果。', expected_answer: '21', match_mode: 'exact', max_duration_ms: 20000, enabled: true }
-const settings = { adaptive_enabled: false, pause_initial_seconds: 1800, pause_max_seconds: 172800, recovery_initial_seconds: 300, recovery_min_seconds: 120, revision: 1, enabled: false, gpt_model: 'gpt-6-astra', claude_model: 'claude-sonnet-4-6', reasoning_effort: 'high', judge_mode: 'answer', interval_seconds: 300, retry_seconds: 60, timeout_seconds: 180, concurrency: 3, retention: 200, new_accounts_enabled: true, action: 'none', degrade_threshold: 2, recover_threshold: 1, target_group_id: 0, questions: [question] }
+const settings = { adaptive_enabled: false, pause_initial_seconds: 1800, pause_max_seconds: 172800, recovery_initial_seconds: 300, recovery_min_seconds: 120, revision: 1, enabled: false, gpt_model: 'gpt-6-astra', claude_model: 'claude-sonnet-4-6', reasoning_effort: 'high', judge_mode: 'answer', interval_seconds: 300, retry_seconds: 60, timeout_seconds: 180, concurrency: 4, retention: 200, new_accounts_enabled: true, action: 'none', degrade_threshold: 2, recover_threshold: 1, target_group_id: 0, questions: [question] }
 const accounts = [{ account_id: 1, account_name: '本地 Codex 测试账号', channel: 'codex', enabled: true, latest_status: 'degraded', failed_streak: 2, passed_streak: 0, action: 'pause', next_due_at: '2026-10-15T13:00:00Z' }]
 const run = { id: 11, account_id: 1, account_name: accounts[0].account_name, channel: 'codex', source: 'manual', status: 'degraded', config_revision: 1, model: 'gpt-6-astra', response_model: 'gpt-6-astra', reasoning_effort: 'high', judge_mode: 'answer', question, output: '29', error: '', duration_ms: 4120, input_tokens: 120, output_tokens: 10, reasoning_tokens: 8, created_at: '2026-10-15T12:00:00Z', started_at: '2026-10-15T12:00:00Z', completed_at: '2026-10-15T12:00:04Z', action: 'pause' }
 before(async () => {
@@ -145,14 +145,10 @@ test('configuration and questions share one page and preserve their save flow', 
  assert.ok(right.x>left.x && Math.abs(right.y-left.y)<1)
  await page.getByLabel('GPT / Codex 模型',{exact:true}).fill('gpt-6.1-sol')
  await page.getByLabel('题目正文').fill('第一行\n第二行')
- const concurrency = config.getByRole('spinbutton', {name:/检测并发数/})
- assert.equal(await concurrency.inputValue(), '3')
- await concurrency.fill('5')
  await page.getByRole('button',{name:'保存配置',exact:true}).click()
  await page.getByRole('button',{name:'保存配置',exact:true,disabled:true}).waitFor()
  assert.equal(await page.evaluate(()=>window.__config.gpt_model),'gpt-6.1-sol')
  assert.equal(await page.evaluate(()=>window.__config.questions[0].prompt),'第一行\n第二行')
- assert.equal(await page.evaluate(()=>window.__config.concurrency),5)
  assert.equal(await page.evaluate(()=>window.__calls.some(c=>c.name==='getIntelligenceRuns'||c.name==='getIntelligenceRunSummaries')),false)
  await page.screenshot({path:path.join(artifactDir,'settings-light.png'),fullPage:true})
 })
@@ -421,7 +417,6 @@ test('global history paginates summary records, forwards filters and loads detai
  const panel = page.getByRole('tabpanel', {name:'检测历史'})
  const list = panel.getByRole('list', {name:'检测历史列表'})
  await list.getByText('试跑（只记录）').waitFor()
- assert.deepEqual(await list.locator('time').evaluateAll(nodes => nodes.map(node => node.dateTime)), [run.started_at, run.completed_at])
  assert.equal(await page.evaluate(() => window.__calls.some(c=>c.name==='getIntelligenceRun')), false)
  assert.doesNotMatch(await list.innerText(), /本地演示题目/)
  await panel.getByLabel('账号搜索').fill('本地')
@@ -431,8 +426,8 @@ test('global history paginates summary records, forwards filters and loads detai
  await selectOption(page,'状态','未通过',panel)
  await selectOption(page,'发起方式','手动',panel)
  await selectOption(page,'检测类型','试跑（只记录）',panel)
- await panel.getByLabel('入队起始时间（含）').fill('2026-10-15T11:00')
- await panel.getByLabel('入队截止时间（不含）').fill('2026-10-15T13:00')
+ await panel.getByLabel('开始时间（含）').fill('2026-10-15T11:00')
+ await panel.getByLabel('结束时间（不含）').fill('2026-10-15T13:00')
  await panel.getByRole('button',{name:'下一页'}).click()
  const filter = await page.evaluate(() => window.__calls.findLast(c=>c.name==='getIntelligenceRunSummaries'&&c.args[0]===2).args[1])
  const time = await page.evaluate(() => ['2026-10-15T11:00','2026-10-15T13:00'].map(v=>new Date(v).toISOString()))

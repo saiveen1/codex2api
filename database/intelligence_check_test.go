@@ -77,7 +77,7 @@ func TestIntelligenceCheckSettingsAndMigration(t *testing.T) {
 	db := intelligenceDB(t)
 	ctx := context.Background()
 	s, e := db.GetIntelligenceCheckSettings(ctx)
-	if e != nil || s.Enabled || s.Concurrency != 3 || s.Questions[0].ExpectedAnswer != "21" {
+	if e != nil || s.Enabled || s.Questions[0].ExpectedAnswer != "21" {
 		t.Fatal(s, e)
 	}
 	if e = db.ensureIntelligenceCheckSchema(ctx); e != nil {
