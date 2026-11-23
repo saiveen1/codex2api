@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,7 +73,8 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at", "expires_at": "2099-01-01T00:00:00Z"}
+	h.store.SetUsageProbeConcurrency(1)
+	credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at", "expires_at": "2099-01-01T00:00:00Z", "plan_type": "plus"}
 	id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "http://original.invalid:80", []int64{group})
 	if err != nil {
 		t.Fatal(err)
@@ -82,12 +84,36 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	}
 	originalRuntime := h.store.FindByID(id)
 	originalRuntime.TotalRequests.Store(17)
+	h.store.MarkCooldownWithErrorExactDuration(originalRuntime, time.Hour, "unauthorized", "synthetic 401")
+	channel := database.UpstreamChannelCodex
+	before, err := h.getAccountListSnapshot(ctx, channel)
+	if err != nil || len(before.Items) != 1 || before.Items[0].Status != "unauthorized" || before.Items[0].PlanType != "plus" {
+		t.Fatal("initial unauthorized snapshot missing", err)
+	}
+	started, release := make(chan struct{}), make(chan struct{}, 1)
+	defer close(release)
+	var probes atomic.Int32
+	h.probeUsage = func(probeCtx context.Context, acc *auth.Account) error {
+		if probes.Add(1) == 1 {
+			close(started)
+		}
+		if acc != originalRuntime || acc.GetAccessToken() != "new-AT" || acc.RuntimeStatus() != "active" {
+			t.Error("probe did not use the recovered runtime account")
+		}
+		select {
+		case <-release:
+			acc.SetUsagePercent7d(1)
+		case <-probeCtx.Done():
+			return probeCtx.Err()
+		}
+		return nil
+	}
 	target := oauthGatewayTarget{h}
 	snap, err := target.RecoverySnapshot(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original"},"extra":{"oauth_workspace":{"id":"workspace-original","name":"Recovered Workspace"}}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original","plan_type":"self_serve_business_prolite"},"extra":{"oauth_workspace":{"id":"workspace-original","name":"Recovered Workspace"}}}`)
 	wrongMetadata := json.RawMessage(strings.Replace(string(account), `"id":"workspace-original"`, `"id":"wrong-workspace"`, 1))
 	if oauthGatewayWorkspaceName(wrongMetadata, snap.Identity.ChatGPTAccountID) != "" {
 		t.Fatal("accepted a name from a different workspace")
@@ -99,6 +125,21 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	result, err := target.Recover(ctx, snap, account, "repair")
 	if err != nil || result.Updated != 1 || result.Success != 0 {
 		t.Fatal("native recovery failed", err)
+	}
+	waitImportProbeSignal(t, started)
+	ready, err := h.getAccountListSnapshot(ctx, channel)
+	if err != nil || len(ready.Items) != 1 || ready.Items[0].Status != "active" || ready.Items[0].PlanType != "self_serve_business_prolite" || accountListNormal(ready.Items[0]) {
+		t.Fatal("first list refresh must see recovered state and plan without faking usage", err)
+	}
+	if _, ok, err := h.cache.GetRuntime(ctx, "account-cooldown", strconv.FormatInt(id, 10)); err != nil || ok {
+		t.Fatal("stale 401 cache survived recovery", err)
+	}
+	release <- struct{}{}
+	drainImportProbeQueue(t, h)
+	sampled, err := h.getAccountListSnapshot(ctx, channel)
+	filter := accountPageQuery{Status: "normal", Plan: "team", GroupInclude: []int64{group}}
+	if err != nil || len(sampled.Items) != 1 || !accountListItemMatches(sampled.Items[0], filter, channel) || probes.Load() != 1 {
+		t.Fatal("recovered account did not enter normal + team + original group after sampling", err)
 	}
 	after, err := h.db.GetAccountByID(ctx, id)
 	if err != nil {
@@ -135,6 +176,16 @@ func TestOAuthGatewayRecoveryRefresh401AndConcurrentFences(t *testing.T) {
 	for _, scenario := range []string{"success", "new-429", "generation", "deleted", "disabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, _, _ := newOAuthGatewayAdminFixture(t)
+			h.store.SetUsageProbeConcurrency(1)
+			var samples atomic.Int32
+			h.probeUsage = func(_ context.Context, acc *auth.Account) error {
+				samples.Add(1)
+				if acc.GetAccessToken() != "new-at" {
+					t.Error("refresh follow-up used stale credentials")
+				}
+				acc.SetUsagePercent7d(1)
+				return nil
+			}
 			ctx := context.Background()
 			credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at"}
 			id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "", nil)
@@ -180,6 +231,10 @@ func TestOAuthGatewayRecoveryRefresh401AndConcurrentFences(t *testing.T) {
 			eligible, err := (oauthGatewayTarget{h}).RefreshBeforeRecovery(ctx, snap)
 			if calls.Load() != 1 || eligible {
 				t.Fatal("wrong refresh path", calls.Load(), eligible, err)
+			}
+			drainImportProbeQueue(t, h)
+			if scenario == "success" && samples.Load() != 1 || err != nil && samples.Load() != 0 {
+				t.Fatal("invalid post-refresh sampling", scenario, samples.Load(), err)
 			}
 			row, e := h.db.GetAccountByIDIncludingDeleted(ctx, id)
 			if e != nil {

@@ -205,17 +205,27 @@ func (s *Store) ReloadOAuthRecoveredAccount(ctx context.Context, id int64) error
 	}
 	acc := s.FindByID(id)
 	if acc == nil {
+		s.clearRecoveredOAuthCooldownCache(row, time.Time{})
 		return s.LoadAccountByID(ctx, id)
 	}
+	acc.usageCooldownPersistMu.Lock()
 	if !applyCodexCredentialValues(acc, row.Credentials, row.CredentialGeneration) {
+		acc.usageCooldownPersistMu.Unlock()
 		return nil
 	}
+	var clearedUntil time.Time
 	acc.mu.Lock()
-	if acc.CredentialGeneration == row.CredentialGeneration {
+	if acc.CredentialGeneration == row.CredentialGeneration && row.CooldownReason != "unauthorized" {
 		if acc.CooldownReason == "unauthorized" {
+			clearedUntil = acc.CooldownUtil
 			acc.CooldownReason = ""
 			acc.CooldownUtil = time.Time{}
 			acc.Status = StatusReady
+			if row.CooldownUntil.Valid && row.CooldownUntil.Time.After(time.Now()) {
+				acc.setCooldownUntilLocked(row.CooldownUntil.Time, row.CooldownReason)
+			}
+			acc.usageCooldownPersistPending = false
+			acc.usageCooldownClearErrorPending = false
 		}
 		if acc.Status == StatusError {
 			acc.Status = StatusReady
@@ -227,6 +237,8 @@ func (s *Store) ReloadOAuthRecoveredAccount(ctx context.Context, id int64) error
 		atomic.StoreInt32(&acc.Disabled, 0)
 	}
 	acc.mu.Unlock()
+	s.clearRecoveredOAuthCooldownCache(row, clearedUntil)
+	acc.usageCooldownPersistMu.Unlock()
 	if s.tokenCache != nil {
 		if err := s.tokenCache.DeleteAccessToken(ctx, id); err != nil {
 			return err
@@ -235,4 +247,14 @@ func (s *Store) ReloadOAuthRecoveredAccount(ctx context.Context, id int64) error
 	s.finishCodexRefresh(ctx, acc, "")
 	s.invalidateRoutingSchedulers()
 	return nil
+}
+
+func (s *Store) clearRecoveredOAuthCooldownCache(row *database.AccountRow, clearedUntil time.Time) {
+	if row.CooldownReason == "unauthorized" {
+		return
+	}
+	record, ok := s.getCachedAccountCooldown(row.ID)
+	if ok && record.Reason == "unauthorized" && (record.ResetAt.Equal(clearedUntil) || !record.UpdatedAt.After(row.UpdatedAt)) {
+		s.deleteCachedAccountCooldown(row.ID)
+	}
 }
