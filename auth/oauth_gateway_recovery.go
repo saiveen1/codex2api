@@ -40,16 +40,27 @@ func IsOAuthRecoveryUnauthorized(status int, body []byte) bool {
 	if status != http.StatusUnauthorized || len(body) > 1<<20 || recoveryDenied(string(body)) {
 		return false
 	}
+	type codedError struct{ Code string }
 	var response struct {
-		Error struct {
-			Code string `json:"code"`
-			Type string `json:"type"`
-		} `json:"error"`
+		Code     string
+		Error    *codedError
+		Detail   *codedError
+		Response struct {
+			Error         *codedError
+			StatusDetails struct{ Error *codedError } `json:"status_details"`
+		}
 	}
 	if json.Unmarshal(body, &response) != nil {
 		return false
 	}
-	switch response.Error.Code {
+	code := response.Code
+	for _, field := range []*codedError{response.Error, response.Response.Error, response.Response.StatusDetails.Error, response.Detail} {
+		if field != nil {
+			code = field.Code
+			break
+		}
+	}
+	switch code {
 	case "token_expired", "token_invalidated", "token_revoked", "invalid_token", "invalid_access_token", "access_token_expired", "session_expired", "session_invalidated":
 		return true
 	}
@@ -69,6 +80,14 @@ func IsOAuthRecoveryRefreshFailure(err error) bool {
 		return true
 	}
 	return false
+}
+
+// MarkUpstreamUnauthorized applies the cooldown before the OAuth worker can refresh.
+func (s *Store) MarkUpstreamUnauthorized(acc *Account, body []byte, detail string) {
+	s.MarkCooldownWithError(acc, 24*time.Hour, "unauthorized", detail)
+	if acc != nil && !acc.IsRelayStyle() && !acc.IsCodexAgentIdentity() {
+		s.NotifyOAuthRecoveryUnauthorized(acc, http.StatusUnauthorized, body)
+	}
 }
 
 func (s *Store) NotifyOAuthRecoveryUnauthorized(acc *Account, status int, body []byte) bool {

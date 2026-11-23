@@ -12,6 +12,23 @@ import (
 	"github.com/codex2api/internal/oauthgateway/upstream"
 )
 
+func TestOAuthRecoveryResponsesTerminalEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"type":"response.failed","response":{"error":{"code":"token_revoked"}}}`, true},
+		{`{"type":"error","code":"token_revoked"}`, true},
+		{`{"type":"error","status_code":403,"error":{"code":"token_revoked"}}`, false},
+		{`{"type":"error","status_code":401,"error":{"code":"missing_scope"}}`, false},
+		{`{"type":"error","status_code":401,"error":{"message":"token_revoked"}}`, false},
+	} {
+		if got := IsResponsesOAuthRecoveryFailure([]byte(tc.body)); got != tc.want {
+			t.Errorf("terminal OAuth recovery for %s = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestOAuthRecovery401CleanupIntegration(t *testing.T) {
 	for _, code := range []string{"token_expired", "token_revoked"} {
 		t.Run(code, func(t *testing.T) {

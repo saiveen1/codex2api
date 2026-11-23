@@ -81,6 +81,15 @@ func (h *Handler) applyResponsesUsageLimitFailure(account *auth.Account, resp *h
 	return true
 }
 
+func (h *Handler) applyResponsesOAuthRecovery(account *auth.Account, payload []byte) bool {
+	if h == nil || h.store == nil || account == nil || account.IsRelayStyle() || account.IsCodexAgentIdentity() || !h.store.OAuthRecoveryProtected(account.ID()) || !proxy.IsResponsesOAuthRecoveryFailure(payload) {
+		return false
+	}
+	message := sanitizeCodexTestText(formatUpstreamTestError(payload, "上游凭据失效"), codexTestSecrets(account))
+	h.store.MarkUpstreamUnauthorized(account, payload, message)
+	return true
+}
+
 // TestConnection 测试账号连接（SSE 流式返回）
 // GET /api/admin/accounts/:id/test
 func (h *Handler) TestConnection(c *gin.Context) {
@@ -279,7 +288,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 		if !isTransient {
 			switch resp.StatusCode {
 			case http.StatusUnauthorized:
-				h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", errMsg)
+				h.store.MarkUpstreamUnauthorized(account, errBody, errMsg)
 			case http.StatusPaymentRequired:
 				// 测连 402 是账号侧计费/工作区拒绝，标成错误，避免继续显示成「未采样」。
 				if proxy.IsDeactivatedWorkspaceError(errBody) {
@@ -392,6 +401,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 				sentTerminal = true
 				if !isTransient {
 					h.applyResponsesUsageLimitFailure(account, resp, testModel, data)
+					h.applyResponsesOAuthRecovery(account, data)
 				}
 				if isTransient && proxy.IsUsageLimitReachedError(data) {
 					transientOutcome = "rate_limited"
@@ -441,6 +451,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 			sentTerminal = true
 			if !isTransient {
 				h.applyResponsesUsageLimitFailure(account, resp, testModel, data)
+				h.applyResponsesOAuthRecovery(account, data)
 			}
 			if isTransient && proxy.IsUsageLimitReachedError(data) {
 				transientOutcome = "rate_limited"
@@ -452,6 +463,7 @@ func (h *Handler) testConnection(c *gin.Context, quality *qualityTestRequest) {
 			sentTerminal = true
 			if !isTransient {
 				h.applyResponsesUsageLimitFailure(account, resp, testModel, data)
+				h.applyResponsesOAuthRecovery(account, data)
 			}
 			if isTransient && proxy.IsUsageLimitReachedError(data) {
 				transientOutcome = "rate_limited"
@@ -1758,7 +1770,7 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 		} else if !acc.IsRelayStyle() {
 			proxy.SyncCodexUsageState(h.store, acc, resp)
 		}
-		h.store.MarkCooldownWithError(acc, 24*time.Hour, "unauthorized", fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300)))
+		h.store.MarkUpstreamUnauthorized(acc, body, fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300)))
 		return "banned", "上游返回 401: 账号授权失败"
 	case http.StatusTooManyRequests:
 		body, readErr := readBatchTestErrorBody(testCtx, resp.Body)
@@ -2001,7 +2013,7 @@ func (h *Handler) batchTestWhamPreflight(ctx context.Context, acc *auth.Account)
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
 			msg := fmt.Sprintf("WHAM 用量探针返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
-			h.store.MarkCooldownWithError(acc, 24*time.Hour, "unauthorized", msg)
+			h.store.MarkUpstreamUnauthorized(acc, body, msg)
 			return "banned", msg, true
 		default:
 			if shouldMarkUsageProbeAccountError(resp.StatusCode, body) {
@@ -2107,6 +2119,9 @@ func (h *Handler) batchTestTerminalFailure(acc *auth.Account, resp *http.Respons
 	message := formatUpstreamTestError(payload, fallback)
 	if h.applyResponsesUsageLimitFailure(acc, resp, model, payload) {
 		return "rate_limited", message
+	}
+	if h.applyResponsesOAuthRecovery(acc, payload) {
+		return "banned", message
 	}
 	h.markBatchTestStreamFailure(acc, message)
 	return "failed", message

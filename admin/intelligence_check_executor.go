@@ -182,7 +182,9 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		result.Error = ctx.Err().Error()
 	}
 	if applySignals && !claude && !account.IsAntigravityAPI() && result.Error != "" && len(result.terminalPayload) > 0 {
-		h.applyResponsesUsageLimitFailure(account, resp, model, result.terminalPayload)
+		if !h.applyResponsesUsageLimitFailure(account, resp, model, result.terminalPayload) {
+			h.applyResponsesOAuthRecovery(account, result.terminalPayload)
+		}
 	}
 	// Never mark an account successful/reset its authentication or quota state here.
 	if applySignals && claude && result.Error != "" {
@@ -222,7 +224,7 @@ func (h *Handler) applyIntelligenceUpstreamFailure(account *auth.Account, resp *
 	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
-		h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", detail)
+		h.store.MarkUpstreamUnauthorized(account, raw, detail)
 	case http.StatusPaymentRequired:
 		if proxy.IsDeactivatedWorkspaceError(raw) {
 			h.store.MarkDeactivatedWorkspace(account, detail)

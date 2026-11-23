@@ -400,7 +400,7 @@ func (h *Handler) probeUsageViaWham(ctx context.Context, account *auth.Account, 
 				// /responses 二次佐证。否则关闭 fallback 时账号会永久停在“未采样”。
 				h.store.ReportRequestFailure(account, "client", 0)
 				errorMsg := fmt.Sprintf("用量探针上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
-				h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", errorMsg)
+				h.store.MarkUpstreamUnauthorized(account, body, errorMsg)
 				return nil
 			}
 			// 不在此处上报失败/封号：wham 401 对 codex_at 账号可能是误报，
@@ -538,6 +538,7 @@ func (h *Handler) probeUsageViaResponses(ctx context.Context, account *auth.Acco
 			h.applyResponsesUsageLimitFailure(account, resp, h.store.GetTestModel(), terminalPayload)
 			return nil
 		case responsesTerminalFailed:
+			h.applyResponsesOAuthRecovery(account, terminalPayload)
 			return fmt.Errorf("Responses 恢复探针未成功: %s", formatUpstreamTestError(terminalPayload, "上游返回失败终止事件"))
 		case responsesTerminalUnknown:
 			return fmt.Errorf("Responses 恢复探针缺少明确终止事件")
@@ -550,7 +551,7 @@ func (h *Handler) probeUsageViaResponses(ctx context.Context, account *auth.Acco
 		return nil
 	case http.StatusUnauthorized:
 		h.store.ReportRequestFailure(account, "client", 0)
-		h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", fmt.Sprintf("用量探针上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300)))
+		h.store.MarkUpstreamUnauthorized(account, body, fmt.Sprintf("用量探针上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300)))
 		return nil
 	case http.StatusTooManyRequests:
 		h.store.ReportRequestFailure(account, "client", 0)

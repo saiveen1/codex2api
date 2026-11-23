@@ -82,6 +82,7 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 		ws     bool
 	}
 	captured := make(chan capture, 4)
+	var failureStatus atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if websocket.IsWebSocketUpgrade(r) {
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -104,6 +105,16 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 			}
 		}
 		body, _ := io.ReadAll(r.Body)
+		if status := failureStatus.Load(); status != 0 {
+			if status == http.StatusUnauthorized {
+				w.WriteHeader(http.StatusUnauthorized)
+				io.WriteString(w, `{"error":{"code":"token_revoked"}}`)
+			} else {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, "data: "+`{"type":"response.failed","response":{"error":{"code":"token_revoked","message":"token_revoked"}}}`+"\n\n")
+			}
+			return
+		}
 		captured <- capture{r.Header.Clone(), body, false}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, "data: %s\n\n", intelligenceSuccess)
@@ -181,6 +192,33 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 		}
 		if i == 2 && result.EffectiveContext["transport"] != "websocket" {
 			t.Fatal("transport audit lost")
+		}
+	}
+	settings.CodexForceWebsocket = false
+	proxy.ApplyRuntimeSettings(settings)
+	var signals int
+	store.SetOAuthRecoveryHooks(&auth.OAuthRecoveryHooks{
+		Enabled: func(id int64) bool { return id == account.ID() },
+		Signal: func(id, generation int64, refreshFirst bool) {
+			signals++
+			if id != account.ID() || generation != account.GetCredentialGeneration() || !refreshFirst || account.GetCooldownReason() != "unauthorized" {
+				t.Error("recovery must refresh the same credential after cooldown is written")
+			}
+		},
+	})
+	for _, tc := range []struct {
+		status      int32
+		recordOnly  bool
+		wantSignals int
+	}{
+		{http.StatusUnauthorized, true, 0},
+		{http.StatusUnauthorized, false, 1},
+		{http.StatusOK, false, 2},
+	} {
+		failureStatus.Store(tc.status)
+		result := h.executeIntelligenceCheck(t.Context(), account, "gpt-5.4", "high", prompt, tc.recordOnly)
+		if !strings.Contains(result.Error, "token_revoked") || signals != tc.wantSignals {
+			t.Fatalf("status=%d record-only=%v: error=%q signals=%d want=%d", tc.status, tc.recordOnly, result.Error, signals, tc.wantSignals)
 		}
 	}
 }

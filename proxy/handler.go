@@ -2884,6 +2884,11 @@ func applyResponseFailedDecisionKind(outcome streamOutcome, payload []byte, deci
 	return outcome
 }
 
+// IsResponsesOAuthRecoveryFailure checks provider error frames without treating the outer HTTP 200 as the error status.
+func IsResponsesOAuthRecoveryFailure(payload []byte) bool {
+	return responseFailedStatusCode(payload) == http.StatusUnauthorized && auth.IsOAuthRecoveryUnauthorized(http.StatusUnauthorized, payload)
+}
+
 func responseFailedStatusCodeWithEvidence(payload []byte) (int, bool) {
 	for _, path := range []string{
 		"response.status_code",
@@ -2898,6 +2903,9 @@ func responseFailedStatusCodeWithEvidence(payload []byte) (int, bool) {
 		}
 	}
 
+	if auth.IsOAuthRecoveryUnauthorized(http.StatusUnauthorized, payload) {
+		return http.StatusUnauthorized, true
+	}
 	codeOrType := strings.ToLower(strings.Join([]string{
 		gjson.GetBytes(payload, "response.error.code").String(),
 		gjson.GetBytes(payload, "response.error.type").String(),
@@ -9176,9 +9184,7 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 		}
 
 		if h.store.OAuthRecoveryProtected(account.ID()) {
-			h.store.MarkCooldownWithError(account, 5*time.Minute, "unauthorized", upstreamAccountErrorMessage(statusCode, body))
-			// The recovery worker requires the unauthorized state before refreshing.
-			h.store.NotifyOAuthRecoveryUnauthorized(account, statusCode, body)
+			h.store.MarkUpstreamUnauthorized(account, body, upstreamAccountErrorMessage(statusCode, body))
 			return codex429Decision{}
 		}
 
