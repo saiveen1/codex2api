@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"unicode"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
@@ -104,22 +103,14 @@ func oauthGatewayImportFailure(code string) (upstream.ImportResult, error) {
 
 // Only explicit workspace metadata is eligible; the account's own name may be an email.
 func oauthGatewayWorkspaceName(raw json.RawMessage) string {
-	for _, path := range []string{"credentials.workspace_name", "workspace_name", "extra.workspace_name", "credentials.chatgpt_account_name"} {
+	for _, path := range []string{"workspace_name", "credentials.workspace_name", "extra.workspace_name", "credentials.chatgpt_account_name"} {
 		if field := gjson.GetBytes(raw, path); field.Type == gjson.String {
-			if name := boundedOAuthWorkspaceName(field.Str); name != "" {
+			if name := upstream.NormalizeWorkspaceName(field.Str); name != "" {
 				return name
 			}
 		}
 	}
 	return ""
-}
-
-func boundedOAuthWorkspaceName(value string) string {
-	name := strings.TrimSpace(value)
-	if len(name) > 512 || strings.ContainsFunc(name, unicode.IsControl) {
-		return ""
-	}
-	return name
 }
 
 // Import uses the ordinary account parser and database/runtime entry points,
@@ -179,11 +170,11 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 	seed.accountID, seed.workspaceID, seed.userID = workspace, workspace, user
 	workspaceName := oauthGatewayWorkspaceName(raw)
 	if workspaceName == "" {
-		workspaceName = boundedOAuthWorkspaceName(seed.workspaceName)
+		workspaceName = upstream.NormalizeWorkspaceName(seed.workspaceName)
 		if workspaceName == "" && !seed.identityPrepared && t.h.store != nil {
 			if egress, usable := t.h.store.ResolveUsableProxyForAccount(&auth.Account{ProxyURL: runtimeProxy}); usable {
 				identity := auth.CodexWorkspaceIdentity{WorkspaceID: workspace, UserID: user, Email: seed.email}
-				workspaceName = boundedOAuthWorkspaceName(auth.LookupCodexWorkspaceName(ctx, identity, seed.accessToken, egress))
+				workspaceName = upstream.NormalizeWorkspaceName(auth.LookupCodexWorkspaceName(ctx, identity, seed.accessToken, egress))
 			}
 		}
 	}

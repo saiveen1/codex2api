@@ -117,11 +117,14 @@ func TestOAuthUnknownAndRedirect(t *testing.T) {
 	}
 }
 func TestDelivery(t *testing.T) {
-	batch := Batch{Items: []BatchItem{{ItemID: "a", Line: 1, State: "succeeded"}, {ItemID: "b", Line: 2, State: "succeeded"}, {ItemID: "c", Line: 3, State: "succeeded"}}}
-	original := Result{Data: json.RawMessage(`{"type":"sub2api-data","version":1,"accounts":[{"token":"b"},{"token":"a"}]}`), Delivery: Delivery{IncludedCount: 2, ExpiredCount: 1, ExpiredItemIDs: []string{"c"}, Items: []DeliveryItem{{ItemID: "a", Line: 1, AccountIndex: 1}, {ItemID: "b", Line: 2, AccountIndex: 0}}}}
+	var batch Batch
+	if err := json.Unmarshal([]byte(`{"items":[{"item_id":"a","line":1,"state":"succeeded","success_summary":{"workspace_name":"  Team A  ","unused":"not retained"}},{"item_id":"b","line":2,"state":"succeeded","success_summary":{"workspace_name":["invalid"]}},{"item_id":"c","line":3,"state":"succeeded"}]}`), &batch); err != nil {
+		t.Fatal(err)
+	}
+	original := Result{Data: json.RawMessage(`{"type":"sub2api-data","version":1,"accounts":[{"token":"b","workspace_name":"Legacy B"},{"token":"a","workspace_name":"Legacy A"}]}`), Delivery: Delivery{IncludedCount: 2, ExpiredCount: 1, ExpiredItemIDs: []string{"c"}, Items: []DeliveryItem{{ItemID: "a", Line: 1, AccountIndex: 1}, {ItemID: "b", Line: 2, AccountIndex: 0}}}}
 	a, err := ValidateDelivery(original, batch)
-	if err != nil || !strings.Contains(string(a[1]), `"a"`) {
-		t.Fatal("reordered mapping failed", err)
+	if err != nil || string(a[1]) != `{"token":"a","workspace_name":"Team A"}` || string(a[0]) != `{"token":"b","workspace_name":"Legacy B"}` {
+		t.Fatal("reordered workspace mapping or legacy fallback failed", err)
 	}
 	for _, tc := range []struct {
 		name   string

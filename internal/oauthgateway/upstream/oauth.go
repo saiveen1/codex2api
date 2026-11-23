@@ -5,6 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+	"unicode"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type Identity struct {
@@ -81,14 +86,36 @@ type ProxyCheck struct {
 	ElapsedMS        float64 `json:"elapsed_ms"`
 	Error            *Error  `json:"error"`
 }
+type BatchSuccessSummary struct {
+	WorkspaceName string `json:"workspace_name,omitempty"`
+}
+
+func (s *BatchSuccessSummary) UnmarshalJSON(data []byte) error {
+	// Optional display metadata must not invalidate an otherwise valid batch.
+	s.WorkspaceName = ""
+	if field := gjson.GetBytes(data, "workspace_name"); field.Type == gjson.String {
+		s.WorkspaceName = NormalizeWorkspaceName(field.Str)
+	}
+	return nil
+}
+
+func NormalizeWorkspaceName(value string) string {
+	name := strings.TrimSpace(value)
+	if len(name) > 512 || strings.ContainsFunc(name, unicode.IsControl) {
+		return ""
+	}
+	return name
+}
+
 type BatchItem struct {
-	ItemID           string        `json:"item_id"`
-	Line             int           `json:"line"`
-	IdentifierMasked string        `json:"identifier_masked"`
-	State            string        `json:"state"`
-	Error            *Error        `json:"error"`
-	ReceiptID        *string       `json:"receipt_id"`
-	Progress         *ItemProgress `json:"progress,omitempty"`
+	ItemID           string               `json:"item_id"`
+	Line             int                  `json:"line"`
+	IdentifierMasked string               `json:"identifier_masked"`
+	State            string               `json:"state"`
+	Error            *Error               `json:"error"`
+	ReceiptID        *string              `json:"receipt_id"`
+	Progress         *ItemProgress        `json:"progress,omitempty"`
+	SuccessSummary   *BatchSuccessSummary `json:"success_summary,omitempty"`
 }
 type Batch struct {
 	BatchID   string      `json:"batch_id"`
@@ -327,6 +354,14 @@ func ValidateDelivery(result Result, batch Batch) ([]json.RawMessage, error) {
 			return bad()
 		}
 		ids[m.ItemID] = true
+		if item.SuccessSummary != nil && item.SuccessSummary.WorkspaceName != "" {
+			// Carry only the matched item's name through the shared import/recovery path.
+			account, err := sjson.SetBytes(bundle.Accounts[m.AccountIndex], "workspace_name", item.SuccessSummary.WorkspaceName)
+			if err != nil {
+				return bad()
+			}
+			bundle.Accounts[m.AccountIndex] = account
+		}
 		indices[m.AccountIndex] = true
 	}
 	for _, id := range d.ExpiredItemIDs {

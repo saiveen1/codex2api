@@ -142,9 +142,9 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	var submissions atomic.Int32
 	var requestID string
 	batch := func() upstream.Batch {
-		return upstream.Batch{BatchID: "gb_00000000000000000000000000000001", RequestID: requestID, State: "completed", Total: 1, Succeeded: 1, Items: []upstream.BatchItem{{ItemID: "gi_00000000000000000000000000000001", Line: 1, IdentifierMasked: "f***@example.invalid", State: "succeeded"}}}
+		return upstream.Batch{BatchID: "gb_00000000000000000000000000000001", RequestID: requestID, State: "completed", Total: 1, Succeeded: 1, Items: []upstream.BatchItem{{ItemID: "gi_00000000000000000000000000000001", Line: 1, IdentifierMasked: "f***@example.invalid", State: "succeeded", SuccessSummary: &upstream.BatchSuccessSummary{WorkspaceName: "  研发团队  "}}}}
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","workspace_name":"  研发团队  ","plan_type":"plus"}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","workspace_name":"Legacy export name","plan_type":"plus"}}`)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Header.Get("Authorization") != "Bearer synthetic-CDK" || req.Header.Get("X-Admin-Key") != "" {
