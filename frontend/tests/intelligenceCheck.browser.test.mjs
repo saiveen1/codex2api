@@ -139,6 +139,8 @@ test('configuration and questions share one page and preserve their save flow', 
  const page = await fixture(t)
  assert.deepEqual(await page.getByRole('tab').allTextContents(), ['配置', '独立策略', '检测历史', '批量操作'])
  const config = page.getByRole('region', {name:'检测配置'}), questions = page.getByRole('region', {name:'检测题库'})
+ assert.equal(await config.getByRole('spinbutton', {name:/全局检测并发/}).inputValue(), '4')
+ await config.getByText('手动和自动检测共享的同时运行上限。自动检测按各账号的到期时间发起，不会凑成一批。', {exact:true}).waitFor()
  await questions.getByRole('button', {name:'编辑',exact:true}).click()
  assert.equal(await page.getByLabel('题目正文').inputValue(),question.prompt)
  const left=await config.boundingBox(),right=await questions.boundingBox()

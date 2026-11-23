@@ -608,13 +608,15 @@ func (db *DB) ListIntelligenceCheckPausedAccountIDs(ctx context.Context) ([]int6
 	return ids, rows.Err()
 }
 
-// intelligenceManualMutationTx records manual intent before enabled/group writes.
-// Scheduling writes revoke every action. Group-only writes revoke restoration
-// ownership, while preserving a quality pause unrelated to group membership.
-// The singleton lock orders these mutations against configuration and results.
-func (db *DB) intelligenceManualMutationTx(ctx context.Context, tx *sql.Tx, ids []int64, schedulingWrite bool) error {
+// The singleton lock orders manual updates against configuration and results.
+// An enabled write revokes every action; a changed group set only revokes restoration.
+func (db *DB) intelligenceManualMutationTx(ctx context.Context, tx *sql.Tx, ids []int64, schedulingWrite bool, groupIDs []int64) error {
 	if _, err := db.intelligenceSettingsTx(ctx, tx); err != nil {
 		return err
+	}
+	if !schedulingWrite {
+		groupIDs = normalizeIDSlice(groupIDs)
+		slices.Sort(groupIDs)
 	}
 	for _, id := range normalizeIDSlice(ids) {
 		var raw string
@@ -625,6 +627,15 @@ func (db *DB) intelligenceManualMutationTx(ctx context.Context, tx *sql.Tx, ids 
 		}
 		if err != nil {
 			return err
+		}
+		if !schedulingWrite {
+			current, err := db.accountGroupIDs(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if slices.Equal(current, groupIDs) {
+				continue
+			}
 		}
 		var state ic.State
 		if err = json.Unmarshal([]byte(raw), &state); err != nil {

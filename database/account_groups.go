@@ -378,7 +378,7 @@ func containsInt64(slice []int64, target int64) bool {
 
 func (db *DB) SetAccountGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
 	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
-		if err := db.intelligenceManualMutationTx(ctx, tx, []int64{accountID}, false); err != nil {
+		if err := db.intelligenceManualMutationTx(ctx, tx, []int64{accountID}, false, groupIDs); err != nil {
 			return err
 		}
 
@@ -423,7 +423,7 @@ func (db *DB) BatchSetAccountGroups(ctx context.Context, accountIDs []int64, gro
 		return nil
 	}
 	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
-		if err := db.intelligenceManualMutationTx(ctx, tx, accountIDs, false); err != nil {
+		if err := db.intelligenceManualMutationTx(ctx, tx, accountIDs, false, groupIDs); err != nil {
 			return err
 		}
 
@@ -436,11 +436,17 @@ func (db *DB) BatchSetAccountGroups(ctx context.Context, accountIDs []int64, gro
 }
 
 func (db *DB) GetAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
+	return db.accountGroupIDs(ctx, db.conn, accountID)
+}
+
+func (db *DB) accountGroupIDs(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, accountID int64) ([]int64, error) {
 	query := "SELECT group_id FROM account_group_members WHERE account_id = $1 ORDER BY group_id"
 	if db.isSQLite() {
 		query = "SELECT group_id FROM account_group_members WHERE account_id = ? ORDER BY group_id"
 	}
-	rows, err := db.conn.QueryContext(ctx, query, accountID)
+	rows, err := q.QueryContext(ctx, query, accountID)
 	if err != nil {
 		return nil, err
 	}

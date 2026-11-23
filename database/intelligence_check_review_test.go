@@ -19,7 +19,7 @@ func TestIntelligenceCheckManualGroupOwnershipIntents(t *testing.T) {
 			return db.BatchSetAccountGroups(context.Background(), []int64{id}, []int64{g})
 		}},
 		"scheduler": {false, func(db *DB, id, g int64) error {
-			return db.UpdateAccountSchedulerMetadata(context.Background(), id, OptionalNullInt64{}, OptionalNullInt64{}, OptionalBool{}, OptionalInt64Slice{}, OptionalStringSlice{}, OptionalInt64Slice{Set: true, Values: []int64{g}}, OptionalString{}, nil)
+			return db.UpdateAccountSchedulerMetadata(context.Background(), id, OptionalNullInt64{}, OptionalNullInt64{}, OptionalBool{}, OptionalInt64Slice{}, OptionalStringSlice{Set: true, Values: []string{"edited"}}, OptionalInt64Slice{Set: true, Values: []int64{g, g}}, OptionalString{}, nil)
 		}},
 		"batch_metadata": {false, func(db *DB, id, g int64) error {
 			_, e := db.BatchUpdateAccountMetadata(context.Background(), []int64{id}, BatchAccountMetadataUpdate{GroupIDs: OptionalInt64Slice{Set: true, Values: []int64{g}}})
@@ -76,16 +76,17 @@ func TestIntelligenceCheckManualGroupOwnershipIntents(t *testing.T) {
 			if paused == edit.enabled {
 				t.Fatal("stale run altered pause after manual group edit")
 			}
-			// A manual group write revokes restoration even when it repeats the target.
-			db.SetAccountEnabled(ctx, id, true)
-			db.SetAccountGroups(ctx, id, []int64{group})
+			// Resaving the same group preserves an independent rule's automatic recovery.
+			if e = db.SetAccountEnabled(ctx, id, true); e != nil {
+				t.Fatal(e)
+			}
 			target, e := db.CreateAccountGroup(ctx, "target", "", "", 0, 0, sql.NullInt64{})
 			if e != nil {
 				t.Fatal(e)
 			}
 			s, _ = db.GetIntelligenceCheckSettings(ctx)
-			s.Action = "switch_group"
-			s.TargetGroupID = target
+			s.Enabled, s.RulesOnly = true, true
+			s.Rules = []ic.Rule{{ID: "team", Name: "Team", Channel: "codex", GroupID: group, Automatic: true, NormalOnly: true, Action: "switch_group", TargetGroupID: target}}
 			if _, e = db.SaveIntelligenceCheckSettings(ctx, s); e != nil {
 				t.Fatal(e)
 			}
@@ -93,10 +94,30 @@ func TestIntelligenceCheckManualGroupOwnershipIntents(t *testing.T) {
 			if e = edit.fn(db, id, target); e != nil {
 				t.Fatal(e)
 			}
-			intelligenceRun(t, db, id, now.Add(3*time.Minute), "21")
+			due := now.Add(10 * time.Minute)
+			n, err := db.EnqueueDueIntelligenceChecks(ctx, due, 1)
+			if edit.enabled {
+				if err != nil || n != 0 {
+					t.Fatalf("explicit enable write should cancel recovery: enqueued %d: %v", n, err)
+				}
+				return
+			}
+			if err != nil || n != 1 {
+				t.Fatalf("unchanged group stopped recovery: enqueued %d: %v", n, err)
+			}
+			run, err = db.ClaimIntelligenceCheck(ctx, "worker", due, time.Minute)
+			if err != nil || run == nil || run.Source != "automatic" || run.RuleID != "team" {
+				t.Fatal(run, err)
+			}
+			if e = edit.fn(db, id, target); e != nil {
+				t.Fatal(e)
+			}
+			if ok, err := db.FinishIntelligenceCheck(ctx, run.ID, "worker", ic.Observation{Complete: true, Output: "21"}, due.Add(time.Second)); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
 			groups, e := db.GetAccountGroupIDs(ctx, id)
-			if e != nil || len(groups) != 1 || groups[0] != target {
-				t.Fatal(groups, e)
+			if e != nil || len(groups) != 1 || groups[0] != group {
+				t.Fatalf("automatic pass did not restore original group: %v (%v)", groups, e)
 			}
 		})
 	}

@@ -264,11 +264,13 @@ func TestIntelligenceCheckRestoreSurvivingGroups(t *testing.T) {
 	s.Action = "switch_group"
 	db.SaveIntelligenceCheckSettings(ctx, s)
 	intelligenceRun(t, db, id, now.Add(2*time.Minute), "29")
-	db.SetAccountGroups(ctx, id, []int64{target})
+	if err := db.SetAccountGroups(ctx, id, []int64{target}); err != nil {
+		t.Fatal(err)
+	}
 	intelligenceRun(t, db, id, now.Add(3*time.Minute), "21")
 	groups, _ = db.GetAccountGroupIDs(ctx, id)
-	if len(groups) != 1 || groups[0] != target {
-		t.Fatal("manual same-value overwritten", groups)
+	if len(groups) != 1 || groups[0] != g1 {
+		t.Fatal("unchanged groups cancelled recovery", groups)
 	}
 }
 

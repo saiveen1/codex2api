@@ -7658,7 +7658,7 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 		}
 
 		if groupIDs.Set {
-			if err := db.intelligenceManualMutationTx(ctx, tx, []int64{id}, false); err != nil {
+			if err := db.intelligenceManualMutationTx(ctx, tx, []int64{id}, false, groupIDs.Values); err != nil {
 				return err
 			}
 		}
@@ -7782,7 +7782,7 @@ func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, updat
 		defer tx.Rollback()
 
 		if update.Enabled.Set || update.GroupIDs.Set {
-			if err := db.intelligenceManualMutationTx(ctx, tx, ids, update.Enabled.Set); err != nil {
+			if err := db.intelligenceManualMutationTx(ctx, tx, ids, update.Enabled.Set, update.GroupIDs.Values); err != nil {
 				return err
 			}
 		}
@@ -8025,7 +8025,7 @@ func nullableInt64Value(v sql.NullInt64) interface{} {
 // SetAccountEnabled 设置账号是否参与调度选择
 func (db *DB) SetAccountEnabled(ctx context.Context, id int64, enabled bool) error {
 	return db.withWriteTx(ctx, func(tx *sql.Tx) error {
-		if err := db.intelligenceManualMutationTx(ctx, tx, []int64{id}, true); err != nil {
+		if err := db.intelligenceManualMutationTx(ctx, tx, []int64{id}, true, nil); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE accounts SET enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, enabled, id)

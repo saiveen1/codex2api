@@ -178,6 +178,7 @@ export default function IntelligenceCheck() {
     label: string,
     min: number,
     max: number,
+    hint?: string,
   ) =>
     field(
       label,
@@ -188,6 +189,7 @@ export default function IntelligenceCheck() {
         value={settings?.[key] ?? ""}
         onChange={(e) => change(key, Number(e.target.value))}
       />,
+      hint,
     );
   return (
     <>
@@ -353,7 +355,7 @@ export default function IntelligenceCheck() {
               {numeric("interval_seconds", "正常间隔（秒）", 1, 86400)}
               {numeric("retry_seconds", "异常重试间隔（秒）", 1, 86400)}
               {numeric("timeout_seconds", "请求超时（秒）", 1, 3600)}
-              {numeric("concurrency", "全局检测并发", 1, 100)}
+              {numeric("concurrency", "全局检测并发", 1, 100, "手动和自动检测共享的同时运行上限。自动检测按各账号的到期时间发起，不会凑成一批。")}
               {numeric("retention", "每账号保留记录", 1, 10000)}
               <div className="sm:col-span-2">
                 {field("自适应检测", <Switch aria-label="自适应检测" checked={settings.adaptive_enabled ?? false} onCheckedChange={v => change("adaptive_enabled", v)} />,
