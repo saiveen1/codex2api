@@ -104,7 +104,11 @@ func TestCodexPoolAuthorizationOSPreviewMatchesOutbound(t *testing.T) {
 		if account == nil || account.GetOAuthGatewayEnvironment() != environment {
 			t.Fatal("binding not loaded")
 		}
-		config := fmt.Sprintf(`{"mode":"pool","account_kinds":{"%d":"codex-vscode"}}`, id)
+		selection, expected := "codex-desktop@windows", "Windows"
+		if environment == "chrome_windows" {
+			selection, expected = "codex-tui@macos", "Mac OS"
+		}
+		config := fmt.Sprintf(`{"mode":"pool","account_kinds":{"%d":%q}}`, id, selection)
 		ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModeForce, CodexUserAgentConfig: config})
 		identity, err := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account})
 		if err != nil {
@@ -114,8 +118,8 @@ func TestCodexPoolAuthorizationOSPreviewMatchesOutbound(t *testing.T) {
 		if err != nil || len(preview.Samples) != 1 || identity.UserAgent != preview.Samples[0].UserAgent || identity.Version != preview.Samples[0].Version {
 			t.Fatalf("preview differs: %+v / %+v / %v", identity, preview, err)
 		}
-		if !strings.HasPrefix(identity.UserAgent, "codex_vscode/") {
-			t.Fatal("pinned client changed")
+		if !strings.Contains(identity.UserAgent, " ("+expected+" ") {
+			t.Fatalf("explicit OS lost: %s", identity.UserAgent)
 		}
 	}
 }
@@ -136,6 +140,53 @@ func TestCodexPoolAuthorizationOSMissingCandidateFallsBack(t *testing.T) {
 		got, gotVersion, ok, err := codexPoolPersona(cfg, id, "", "chrome_macos")
 		if err != nil || !ok || got != baseline || gotVersion != version {
 			t.Fatalf("missing candidate must preserve original selection: %q / %q, %v", got, baseline, err)
+		}
+	}
+	cfg.AccountKinds = map[int64]CodexClientKind{1: "codex-tui@macos"}
+	if _, _, _, err := codexPoolPersona(cfg, 1, "", "chrome_windows"); err == nil {
+		t.Fatal("explicit OS without a candidate must not fall back")
+	}
+}
+
+func TestCodexPoolExplicitOS(t *testing.T) {
+	codexTestIdentityCache(t)
+	for _, tc := range []struct{ selection, osName, environment string }{
+		{"codex-tui@macos", "Mac OS", "chrome_windows"},
+		{"codex-desktop@windows", "Windows", "chrome_macos"},
+		{"codex-vscode@linux", "Ubuntu", "chrome_macos"},
+	} {
+		config := fmt.Sprintf(`{"mode":"pool","account_kinds":{"1":%q}}`, tc.selection)
+		if _, err := NormalizeCodexUserAgentConfigJSON(config); err != nil {
+			t.Fatal(err)
+		}
+		ApplyRuntimeSettings(RuntimeSettings{ClientCompatMode: ClientCompatModeForce, CodexUserAgentConfig: config})
+		preview, err := PreviewCodexUserAgentConfig(config, "", []int64{1}, map[int64]string{1: tc.environment})
+		if err != nil || len(preview.Samples) != 1 {
+			t.Fatalf("%s: preview %+v: %v", tc.selection, preview, err)
+		}
+		ua, version, ok, err := codexUserAgentFromConfigChecked(config, 1, "", tc.environment)
+		if err != nil || !ok || ua != preview.Samples[0].UserAgent || version != preview.Samples[0].Version {
+			t.Fatalf("%s: outbound %q preview %+v: %v", tc.selection, ua, preview, err)
+		}
+		kind, os, _ := parseCodexPreset(tc.selection)
+		matched := false
+		for _, platform := range codexPresetPlatforms(codexUACatalog[kind], os) {
+			if strings.Contains(ua, fmt.Sprintf(" (%s %s; %s)", platform.OSName, platform.OSVersion, platform.Arch)) {
+				matched = true
+				cli, app, e := resolveCodexCurrentVersions(codexUACatalog[kind], codexVersionSelection{OSName: platform.OSName, Arch: platform.Arch})
+				if e != nil || version != cli || !strings.HasSuffix(ua, "; "+app+")") {
+					t.Fatalf("wrong version pair: %q %v", ua, e)
+				}
+			}
+		}
+		if !matched || (os != "linux" && !strings.Contains(ua, " ("+tc.osName+" ")) {
+			t.Fatalf("wrong platform for %s: %s", tc.selection, ua)
+		}
+	}
+	for _, selection := range []string{"codex-desktop@linux", "codex-tui@", "codex-tui@freebsd", "custom@macos", "codex-tui@macos@windows"} {
+		config := fmt.Sprintf(`{"mode":"pool","account_kinds":{"1":%q}}`, selection)
+		if _, err := NormalizeCodexUserAgentConfigJSON(config); err == nil {
+			t.Fatalf("accepted %s", selection)
 		}
 	}
 }

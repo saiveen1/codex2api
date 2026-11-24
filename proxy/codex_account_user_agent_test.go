@@ -50,3 +50,39 @@ func TestAccountCodexUserAgentOverridesIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountCodexUserAgentExplicitOS(t *testing.T) {
+	codexTestIdentityCache(t)
+	for _, tc := range []struct{ selection, osName string }{
+		{"codex-tui@macos", "Mac OS"},
+		{"codex-desktop@windows", "Windows"},
+		{"codex-vscode@linux", "Ubuntu"},
+	} {
+		account := &auth.Account{DBID: 1, CodexUserAgent: tc.selection}
+		identity, err := ResolveCodexOutboundClientIdentity(CodexClientIdentityInput{Account: account})
+		if err != nil || !strings.Contains(identity.UserAgent, " ("+tc.osName+" ") {
+			t.Fatalf("%s: %+v %v", tc.selection, identity, err)
+		}
+		kind, os, _ := parseCodexPreset(tc.selection)
+		spec := codexUACatalog[kind]
+		matched := false
+		for _, platform := range codexPresetPlatforms(spec, os) {
+			if strings.Contains(identity.UserAgent, " ("+platform.OSName+" "+platform.OSVersion+"; "+platform.Arch+")") {
+				cli, app, e := resolveCodexCurrentVersions(spec, codexVersionSelection{OSName: platform.OSName, Arch: platform.Arch, VersionFloor: codexIdentityVersionFloor(CurrentRuntimeSettings())})
+				if e != nil || identity.Version != cli || !strings.HasSuffix(identity.UserAgent, "; "+app+")") {
+					t.Fatalf("wrong pair: %+v %v", identity, e)
+				}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("platform not in catalog: %+v", identity)
+		}
+	}
+	for _, value := range []string{"codex-desktop@linux", "codex-tui@", "codex-tui@Macos", "codex-tui@macos@windows"} {
+		if ValidateAccountCodexUserAgent(value) == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+}

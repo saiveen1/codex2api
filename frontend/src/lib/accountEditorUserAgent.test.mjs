@@ -50,7 +50,8 @@ test('account dialog saves preset, manual and inherit only against the edited ac
 test('screenshot dialog hosts both UA controls, opens from the account, and cancel discards the draft', () => {
   const section = block('{/* 绑定时区 */}', '{/* 自定义请求头 */}')
   assert.match(section, /id="account-codex-ua"/)
-  assert.match(section, /onValueChange=\{setEditCodexUA\}/)
+  assert.match(section, /setEditCodexUA\(bindCodexPreset\(kind,/)
+  assert.match(section, /<CodexPresetSystemSelect binding=\{editCodexUA\} onChange=\{setEditCodexUA\}/)
   assert.match(section, /setEditCodexUA\(`raw:\$\{event.target.value\}`\)/)
   assert.doesNotMatch(section, /api\./)
   assert.match(block('const populateSchedulerEditor =', 'const openSchedulerEditor ='), /setEditCodexUA\(account.codex_user_agent \?\? ""\)/)

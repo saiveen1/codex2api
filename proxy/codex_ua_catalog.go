@@ -210,6 +210,38 @@ func codexUAKindSpecFor(kind CodexClientKind) (*codexUAKindSpec, bool) {
 	return spec, ok
 }
 
+// parseCodexPreset accepts only catalog presets and supported OS bindings.
+func parseCodexPreset(value string) (CodexClientKind, string, bool) {
+	parts := strings.Split(value, "@")
+	if len(parts) > 2 {
+		return "", "", false
+	}
+	kind := CodexClientKind(parts[0])
+	spec, ok := codexUAKindSpecFor(kind)
+	if !ok {
+		return "", "", false
+	}
+	if len(parts) == 1 {
+		return kind, "", true
+	}
+	os := parts[1]
+	if os != "macos" && os != "windows" && os != "linux" {
+		return "", "", false
+	}
+	return kind, os, len(codexPresetPlatforms(spec, os)) > 0
+}
+
+func codexPresetPlatforms(spec *codexUAKindSpec, os string) []codexUAPlatform {
+	var platforms []codexUAPlatform
+	for _, platform := range spec.Platforms {
+		matches := os == "macos" && platform.OSName == "Mac OS" || os == "windows" && platform.OSName == "Windows" || os == "linux" && (platform.OSName == "Ubuntu" || platform.OSName == "NixOS" || platform.OSName == "CentOS")
+		if matches && platform.Weight > 0 {
+			platforms = append(platforms, platform)
+		}
+	}
+	return platforms
+}
+
 // normalizeCodexClientKind 规范化配置里的 client_kind;空串表示"未指定,按 client_name 推断"。
 func normalizeCodexClientKind(value string) (CodexClientKind, bool) {
 	kind := CodexClientKind(strings.ToLower(strings.TrimSpace(value)))
@@ -350,12 +382,21 @@ func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor, e
 	if !pinned {
 		kind = CodexClientKind(pickCodexUAWeighted(codexPoolMix(cfg), "kind:"+seed))
 	}
-	spec, found := codexUAKindSpecFor(kind)
-	if !found {
-		return "", "", false, nil
+	kind, explicitOS, valid := parseCodexPreset(string(kind))
+	if !valid {
+		if !pinned {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf("invalid codex User-Agent preset %q", cfg.AccountKinds[accountID])
 	}
+	spec, _ := codexUAKindSpecFor(kind)
 	platforms := spec.Platforms
-	if cfg.AutoMatchOS == nil || *cfg.AutoMatchOS {
+	if explicitOS != "" {
+		platforms = codexPresetPlatforms(spec, explicitOS)
+		if len(platforms) == 0 {
+			return "", "", false, fmt.Errorf("no codex User-Agent platform for %s@%s", kind, explicitOS)
+		}
+	} else if cfg.AutoMatchOS == nil || *cfg.AutoMatchOS {
 		osName := ""
 		switch environment {
 		case "chrome_macos":

@@ -6,6 +6,8 @@ import { formatBeijingTime } from '../utils/time'
 import DisplayTimezoneSelect from '../components/DisplayTimezoneSelect'
 import PageHeader from '../components/PageHeader'
 import CodexClientVersionsPanel from '../components/CodexClientVersionsPanel'
+import CodexPresetSystemSelect from '../components/CodexPresetSystemSelect'
+import { bindCodexPreset, readCodexPreset } from '../lib/codexPresetSystem'
 import BackgroundQuietHoursEditor from '../components/BackgroundQuietHoursEditor'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
@@ -170,7 +172,7 @@ type CodexUserAgentConfig = {
   app_version?: string
   mode?: string
   pool_mix?: Record<string, number>
-  account_kinds?: Record<string, CodexUAKind>
+  account_kinds?: Record<string, string>
   account_user_agents?: Record<string, string>
   auto_match_os?: boolean
 }
@@ -3994,7 +3996,7 @@ export default function Settings() {
   const codexUAAppFollowsCLI = codexUAKindSpec ? codexUAKindSpec.app_follows_cli : codexUAKind === 'codex-tui' || codexUAKind === 'codex-exec'
   const codexUARawActive = Boolean(codexUserAgentConfig.raw_user_agent?.trim())
   const codexUADefaultPoolMix = codexUACatalog?.default_pool_mix ?? CODEX_UA_FALLBACK_POOL_MIX
-  const codexUAKindLabel = useCallback((kind: CodexUAKind) => {
+  const codexUAKindLabel = useCallback((kind: string) => {
     switch (kind) {
       case 'codex-desktop': return t('settings.codexUAKindDesktop')
       case 'codex-vscode': return t('settings.codexUAKindVscode')
@@ -4008,6 +4010,12 @@ export default function Settings() {
   const accountUAs = codexUserAgentConfig.account_user_agents ?? {}
   const savedAccountUA = validUAAccountID ? accountUAs[codexUAAccountID] : undefined
   const manualAccountUA = accountUADraft ?? savedAccountUA
+  const accountBinding = validUAAccountID ? accountKinds[codexUAAccountID] ?? '' : ''
+  const accountPreset = readCodexPreset(accountBinding)
+  const accountPresetLabel = (binding: string) => {
+    const { kind, systemLabel } = readCodexPreset(binding)
+    return [systemLabel, codexUAKindLabel(kind)].filter(Boolean).join(' · ')
+  }
   const selectUAAccount = (id: string) => {
     setCodexUAAccountID(id)
     setAccountUADraft(null)
@@ -4020,7 +4028,7 @@ export default function Settings() {
     delete kinds[codexUAAccountID]
     delete uas[codexUAAccountID]
     if (rawUA) uas[codexUAAccountID] = rawUA
-    else if (kind) kinds[codexUAAccountID] = kind as CodexUAKind
+    else if (kind) kinds[codexUAAccountID] = kind
     patchAndSaveCodexUserAgentConfig({ account_kinds: kinds, account_user_agents: uas })
     if (!rawUA) setAccountUADraft(null)
   }
@@ -5351,12 +5359,13 @@ export default function Settings() {
                         <Input className="w-40 tabular-nums" inputMode="numeric" placeholder={t('settings.codexUAAccountID')} aria-label={t('settings.codexUAAccountID')}
                           value={codexUAAccountID} onChange={(e) => selectUAAccount(e.target.value.trim())} aria-invalid={!!codexUAAccountID && !validUAAccountID} />
                         <select className="h-9 rounded-lg border bg-background px-2 text-sm disabled:opacity-50" aria-label={t('settings.codexUAAccountKind')}
-                          disabled={!validUAAccountID} value={manualAccountUA !== undefined ? 'manual' : (validUAAccountID && accountKinds[codexUAAccountID]) || ''}
-                          onChange={(e) => e.target.value === 'manual' ? setAccountUADraft(savedAccountUA ?? '') : saveAccountBinding(e.target.value)}>
+                          disabled={!validUAAccountID} value={manualAccountUA !== undefined ? 'manual' : accountPreset.kind}
+                          onChange={(e) => e.target.value === 'manual' ? setAccountUADraft(savedAccountUA ?? '') : saveAccountBinding(bindCodexPreset(e.target.value, accountPreset.system))}>
                           <option value="">{t('settings.codexUAFollowPool')}</option>
                           {CODEX_UA_POOL_KINDS.map((kind) => <option key={kind} value={kind}>{codexUAKindLabel(kind)}</option>)}
                           <option value="manual">{t('settings.codexUAManual')}</option>
                         </select>
+                        {accountBinding && manualAccountUA === undefined && <CodexPresetSystemSelect binding={accountBinding} onChange={saveAccountBinding} />}
                         {manualAccountUA !== undefined && <>
                           <Input className="min-w-48 flex-1 font-mono" aria-label="User-Agent" placeholder="User-Agent" value={manualAccountUA}
                             onChange={(e) => setAccountUADraft(e.target.value)} />
@@ -5366,7 +5375,7 @@ export default function Settings() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {[...Object.keys(accountKinds), ...Object.keys(accountUAs)].map((id) => <button type="button" key={id} onClick={() => selectUAAccount(id)}
-                          className="rounded border px-2 py-1 text-xs hover:bg-muted">#{id} · {accountUAs[id] ? t('settings.codexUAManual') : codexUAKindLabel(accountKinds[id])}</button>)}
+                          className="rounded border px-2 py-1 text-xs hover:bg-muted">#{id} · {accountUAs[id] ? t('settings.codexUAManual') : accountPresetLabel(accountKinds[id])}</button>)}
                       </div>
                     </SettingField>
                   )}

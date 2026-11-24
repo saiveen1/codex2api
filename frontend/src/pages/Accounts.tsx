@@ -272,6 +272,8 @@ import AccountQuotaDistributionChart from "../components/AccountQuotaDistributio
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
 import AccountQuickConfigSheet from "../components/AccountQuickConfigSheet";
+import CodexPresetSystemSelect from "../components/CodexPresetSystemSelect";
+import { bindCodexPreset, readCodexPreset } from "../lib/codexPresetSystem";
 import ChannelMonitorConfigDialog from "../components/ChannelMonitorConfigDialog";
 import { useImportGroupIds } from "../hooks/useImportGroupIds";
 import AccountGroupFilterSelect, {
@@ -10485,7 +10487,8 @@ export default function Accounts() {
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
                             <label htmlFor="account-codex-ua" className="text-sm font-semibold">User-Agent</label>
                             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("accounts.codexUAHint")}</p>
-                            <Select id="account-codex-ua" className="mt-3" value={manualCodexUA ? "raw:" : editCodexUA} onValueChange={setEditCodexUA}
+                            <Select id="account-codex-ua" className="mt-3" value={manualCodexUA ? "raw:" : readCodexPreset(editCodexUA).kind}
+                              onValueChange={(kind) => setEditCodexUA(bindCodexPreset(kind, readCodexPreset(editCodexUA).system))}
                               options={[
                                 { value: "", label: t("accounts.codexUAInherit") },
                                 { value: "codex-desktop", label: t("settings.codexUAKindDesktop") },
@@ -10494,6 +10497,9 @@ export default function Accounts() {
                                 { value: "codex-exec", label: t("settings.codexUAKindExec") },
                                 { value: "raw:", label: t("settings.codexUAManual") },
                               ]} />
+                            {editCodexUA && !manualCodexUA && <div className="mt-2">
+                              <CodexPresetSystemSelect binding={editCodexUA} onChange={setEditCodexUA} />
+                            </div>}
                             {manualCodexUA && <Input className="mt-2 font-mono" aria-label={t("settings.codexUAManual")}
                               placeholder="ExampleClient/1.0" value={rawCodexUA} aria-invalid={editCodexUAInvalid}
                               onChange={(event) => setEditCodexUA(`raw:${event.target.value}`)} />}

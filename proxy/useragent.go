@@ -268,7 +268,7 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 		return errors.New("codex User-Agent mode must be single or pool")
 	}
 	for id, kind := range cfg.AccountKinds {
-		if _, ok := codexUAKindSpecFor(kind); id <= 0 || !ok {
+		if _, _, ok := parseCodexPreset(string(kind)); id <= 0 || !ok {
 			return fmt.Errorf("invalid codex User-Agent account_kinds entry: %d = %q", id, kind)
 		}
 	}
@@ -321,7 +321,7 @@ func ValidateAccountCodexUserAgent(value string) error {
 	if value == "" {
 		return nil
 	}
-	if _, ok := codexUAKindSpecFor(CodexClientKind(value)); ok {
+	if _, _, ok := parseCodexPreset(value); ok {
 		return nil
 	}
 	if strings.HasPrefix(value, "raw:") {

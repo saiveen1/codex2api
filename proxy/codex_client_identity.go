@@ -36,7 +36,21 @@ func ResolveCodexOutboundClientIdentity(input CodexClientIdentityInput) (CodexOu
 				ua := strings.TrimPrefix(selection, "raw:")
 				return CodexOutboundClientIdentity{UserAgent: ua, Version: codexVersionFromUserAgent(ua, ""), Generated: true}, nil
 			}
-			ua, version, _, err := buildCodexStructuredUserAgent(CodexUserAgentConfig{ClientKind: selection}, codexIdentityVersionFloor(settings))
+			kind, os, _ := parseCodexPreset(selection)
+			cfg := CodexUserAgentConfig{ClientKind: string(kind)}
+			if os != "" {
+				spec, _ := codexUAKindSpecFor(kind)
+				platforms := codexPresetPlatforms(spec, os)
+				platform := platforms[0]
+				for _, candidate := range platforms {
+					if candidate.OSName == spec.DefaultPlatform.OSName && candidate.OSVersion == spec.DefaultPlatform.OSVersion && candidate.Arch == spec.DefaultPlatform.Arch {
+						platform = candidate
+						break
+					}
+				}
+				cfg.OSName, cfg.OSVersion, cfg.Arch = platform.OSName, platform.OSVersion, platform.Arch
+			}
+			ua, version, _, err := buildCodexStructuredUserAgent(cfg, codexIdentityVersionFloor(settings))
 			return CodexOutboundClientIdentity{UserAgent: ua, Version: version, Generated: true}, err
 		}
 	}

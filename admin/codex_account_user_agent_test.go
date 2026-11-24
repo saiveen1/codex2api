@@ -39,16 +39,16 @@ func TestSchedulerCodexUserAgentRoundTrip(t *testing.T) {
 			t.Fatalf("patch %s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
-	patch(`{"codex_user_agent":"codex-vscode","timezone":"UTC"}`, http.StatusOK)
+	patch(`{"codex_user_agent":"codex-vscode@linux","timezone":"UTC"}`, http.StatusOK)
 	patch(`{"force_fast":true}`, http.StatusOK)
-	for _, body := range []string{`{"codex_user_agent":"raw: "}`, `{"codex_user_agent":"raw:agent\r\nX: y"}`, `{"codex_user_agent":"raw:agent "}`, `{"codex_user_agent":"CODEX-TUI"}`, `{"codex_user_agent":3}`} {
+	for _, body := range []string{`{"codex_user_agent":"raw: "}`, `{"codex_user_agent":"raw:agent\r\nX: y"}`, `{"codex_user_agent":"raw:agent "}`, `{"codex_user_agent":"CODEX-TUI"}`, `{"codex_user_agent":"codex-desktop@linux"}`, `{"codex_user_agent":3}`} {
 		patch(body, http.StatusBadRequest)
 	}
 	row, err := db.GetAccountByID(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.GetCredential(auth.CodexUserAgentCredentialKey) != "codex-vscode" || row.GetCredential("timezone") != "UTC" || row.GetCredential("refresh_token") != "synthetic-refresh" || !row.GetCredentialBool(auth.ForceFastCredentialKey) {
+	if row.GetCredential(auth.CodexUserAgentCredentialKey) != "codex-vscode@linux" || row.GetCredential("timezone") != "UTC" || row.GetCredential("refresh_token") != "synthetic-refresh" || !row.GetCredentialBool(auth.ForceFastCredentialKey) {
 		t.Fatalf("credentials not preserved: %+v", row.ID)
 	}
 	account := store.FindByID(id)
@@ -58,11 +58,11 @@ func TestSchedulerCodexUserAgentRoundTrip(t *testing.T) {
 	account.Mu().RLock()
 	value := account.CodexUserAgent
 	account.Mu().RUnlock()
-	if value != "codex-vscode" {
+	if value != "codex-vscode@linux" {
 		t.Fatalf("runtime value = %q", value)
 	}
 	w := invokeListAccounts(t, h, "/api/admin/accounts?view=page&channel=codex&page=1&page_size=20")
-	if w.Code != http.StatusOK || gjson.Get(w.Body.String(), "accounts.0.codex_user_agent").String() != "codex-vscode" {
+	if w.Code != http.StatusOK || gjson.Get(w.Body.String(), "accounts.0.codex_user_agent").String() != "codex-vscode@linux" {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
 	patch(`{"codex_user_agent":"raw:example/1.2 (test)"}`, http.StatusOK)

@@ -23,6 +23,8 @@ test('authorization OS matching defaults on and preserves an explicit off switch
   assert.equal(saved.auto_match_os, undefined)
   assert.equal(parse(JSON.stringify(saved)).auto_match_os, true)
   assert.deepEqual(saved.account_user_agents, raw.account_user_agents)
+  const combined = { ...raw, account_kinds: { 12: 'codex-tui@macos', 13: 'codex-desktop@windows' } }
+  assert.deepEqual(JSON.parse(serialize(parse(JSON.stringify(combined)))), combined)
 })
 
 test('automatic OS matching switch is bound to the persisted setting', () => {
