@@ -81,7 +81,12 @@ async function fixture(t, options = {}) {
    if (name === 'getChannelMonitorBillingRates') return { rates: [] }
    if (name === 'getIntelligenceSettings') return window.__config
    if (name === 'listAccountGroups') return { groups: [{ id: 1, name: '隔离分组', channel: 'codex' }, { id: 2, name: 'Claude 隔离', channel: 'claude' }, { id: 3, name: 'Grok 隔离', channel: 'grok' }] }
-   if (name === 'getIntelligenceRuleParticipants') return { items: window.__participants, total: window.__participants.length, page: args[1], page_size: 20, checked_at: new Date().toISOString() }
+   if (name === 'getIntelligenceRuleParticipants') {
+    if (options.participantError && window.__participantReadError) throw new Error('名单读取出错')
+    const rows = window.__participants.filter(row => !!row.paused === !!args[3]).map(row => row.paused ? {...row, state:'paused'} : row)
+    const size = options.participantPageSize || 20
+    return { items: rows.slice((args[1]-1)*size,args[1]*size), total: rows.length, page: args[1], page_size: size, checked_at: new Date().toISOString() }
+   }
    if (name === 'getIntelligenceAccounts') {
     if (options.error) throw new Error('本地模拟读取失败')
     if (options.bulk) {
@@ -108,7 +113,7 @@ async function fixture(t, options = {}) {
     if (args[1] === true) return { runs: args[0].slice(1).map(account_id => ({ ...historicalRun, account_id, status:'queued' })), skipped_account_ids:[args[0][0]] }
     window.__bar = {...window.__bar,active_run_id:99,active_status:'queued'}; return { runs: [{...run,id:99,status:'queued'}] }
    }
-   if (name === 'setIntelligenceAccounts') { if (options.toggleError) throw new Error('保存开关失败'); if (args[0].includes(68876) && !args[1]) window.__conflictActive=false; window.__bar.enabled=args[1]; return { updated: args[0].length } }
+   if (name === 'setIntelligenceAccounts') { if (options.toggleError || window.__toggleError) throw new Error('保存开关失败'); if (options.togglePending) await new Promise(resolve => { window.__finishToggle = resolve }); if (options.participantPreview) window.__participants.filter(row => args[0].includes(row.account_id)).forEach(row => { row.paused = !args[1] }); if (args[0].includes(68876) && !args[1]) window.__conflictActive=false; window.__bar.enabled=args[1]; return { updated: args[0].length } }
    throw new Error(`unexpected API ${name}`)
   }
  }, { settings, accounts, run, options })
@@ -134,6 +139,51 @@ test('rule participant preview refreshes new accounts and explains moved recover
  assert.deepEqual(await page.evaluate(() => window.__calls.filter(c => c.name === 'getIntelligenceRuleParticipants').map(c => c.args.slice(0,2))), [['scope',1],['scope',1]])
  assert.equal(await page.evaluate(() => window.__calls.some(c => c.name === 'createIntelligenceRuns')), false)
  await page.screenshot({path:path.join(artifactDir,'rule-participants-mobile.png'),fullPage:true})
+})
+
+test('participant pause and resume use one account, refresh pages and preserve visibility', async t => {
+ const page = await fixture(t, {participantPreview:true, participantPageSize:1, togglePending:true})
+ await page.evaluate(() => window.__participants.push({account_id:2,account_name:'第二个账号',groups:[],recovery:false,state:'running'}))
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ await page.getByRole('button', {name:'下轮参与账号', exact:true}).click()
+ const preview = page.getByRole('region', {name:'下轮参与账号名单'})
+ await preview.getByRole('button', {name:'下一页'}).click()
+ await preview.getByText('第二个账号', {exact:true}).waitFor()
+ await preview.getByRole('button', {name:'暂停 第二个账号 后续自动检测'}).click()
+ await preview.getByText('保存中…', {exact:true}).waitFor()
+ assert.equal(await preview.getByRole('button', {name:'已暂停检测'}).isDisabled(), true)
+ await page.evaluate(() => { const finish = window.__finishToggle; window.__finishToggle = null; finish() })
+ await preview.getByText('转组后的原号', {exact:true}).waitFor()
+ await preview.getByRole('button', {name:'已暂停检测'}).click()
+ await preview.getByText('第二个账号', {exact:true}).waitFor()
+ await preview.getByText('已暂停检测', {exact:true}).waitFor()
+ await preview.getByRole('button', {name:'恢复 第二个账号 后续自动检测'}).click()
+ await page.waitForFunction(() => window.__calls.filter(c => c.name === 'setIntelligenceAccounts').length === 2 && !!window.__finishToggle)
+ await page.evaluate(() => window.__finishToggle())
+ await preview.getByText('当前没有已暂停检测的匹配账号。').waitFor()
+ await preview.getByRole('button', {name:'下轮参与账号'}).click()
+ await preview.getByRole('button', {name:'下一页'}).click()
+ await preview.getByText('第二个账号', {exact:true}).waitFor()
+ assert.deepEqual(await page.evaluate(() => window.__calls.filter(c => c.name === 'setIntelligenceAccounts').map(c => c.args)), [[[2],false],[[2],true]])
+ assert.ok(await page.evaluate(() => window.__calls.some(c => c.name === 'getIntelligenceRuleParticipants' && c.args[3] === true)))
+ assert.equal(await page.evaluate(() => window.__calls.some(c => c.name === 'createIntelligenceRuns')), false)
+})
+
+test('participant toggle and list errors are visible and retryable', async t => {
+ const page = await fixture(t, {participantPreview:true, participantError:true})
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ await page.getByRole('button', {name:'下轮参与账号', exact:true}).click()
+ const preview = page.getByRole('region', {name:'下轮参与账号名单'})
+ await preview.getByText('转组后的原号', {exact:true}).waitFor()
+ await page.evaluate(() => { window.__toggleError = true })
+ await preview.getByRole('button', {name:'暂停 转组后的原号 后续自动检测'}).click()
+ await preview.getByText('检测开关保存失败：保存开关失败').waitFor()
+ await page.evaluate(() => { window.__toggleError = false; window.__participantReadError = true })
+ await preview.getByRole('button', {name:'刷新名单'}).click()
+ await preview.getByText('名单读取失败：名单读取出错').waitFor()
+ await page.evaluate(() => { window.__participantReadError = false })
+ await preview.getByRole('button', {name:'刷新名单'}).click()
+ await preview.getByText('转组后的原号', {exact:true}).waitFor()
 })
 
 test('configuration and questions share one page and preserve their save flow', async t => {

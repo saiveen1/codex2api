@@ -203,7 +203,7 @@ export interface IntelligenceRuleParticipant {
   original_group_ids?: number[];
   recovery: boolean;
   next_due_at?: string;
-  state: "due" | "scheduled" | "queued" | "running" | "quota_wait" | "not_dispatchable" | "config_error" | "skipped";
+  state: "due" | "scheduled" | "queued" | "running" | "quota_wait" | "not_dispatchable" | "config_error" | "skipped" | "paused";
   available_after?: string;
 }
 export interface IntelligencePage<T> {

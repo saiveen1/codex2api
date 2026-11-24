@@ -60,7 +60,7 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 				return step == 0
 			},
 		}
-		participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, preflight)
+		participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, false, preflight)
 		if err != nil || total != 1 || len(participants) != 1 || participants[0].AccountID != pro || participants[0].State != "due" || participants[0].Recovery != (step == 1) {
 			t.Fatalf("preview step %d: %+v, total=%d, err=%v", step, participants, total, err)
 		}
@@ -72,9 +72,26 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 		if err != nil || queued != 1 || checkedModel != "gpt-6-sol" || availabilityChecks != 1-step {
 			t.Fatalf("queue step %d: %d %q availability checks=%d err=%v", step, queued, checkedModel, availabilityChecks, err)
 		}
-		participants, _, err = db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, preflight)
+		participants, _, err = db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, false, preflight)
 		if err != nil || len(participants) != 1 || participants[0].State != "queued" {
 			t.Fatalf("queued preview step %d: %+v %v", step, participants, err)
+		}
+		// Pause after enqueue, including when this account is in isolation for recovery.
+		if err := db.SetIntelligenceCheckEnabled(ctx, []int64{pro}, false); err != nil {
+			t.Fatal(err)
+		}
+		paused, count, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, true, preflight)
+		if err != nil || count != 1 || len(paused) != 1 || paused[0].AccountID != pro || paused[0].State != "paused" || paused[0].NextDueAt != nil || paused[0].Recovery != (step == 1) {
+			t.Fatalf("paused preview step %d: %+v %d %v", step, paused, count, err)
+		}
+		if _, count, err = db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 20, at, false, preflight); err != nil || count != 0 {
+			t.Fatal("paused account counted as participating", count, err)
+		}
+		if r, err := db.ClaimIntelligenceCheck(ctx, "worker", at, time.Minute); err != nil || r != nil {
+			t.Fatal("paused automatic check was claimable", r, err)
+		}
+		if err := db.SetIntelligenceCheckEnabled(ctx, []int64{pro}, true); err != nil {
+			t.Fatal(err)
 		}
 		run, err := db.ClaimIntelligenceCheck(ctx, "worker", at, time.Minute)
 		if err != nil || run == nil || run.AccountID != pro || run.RuleID != "specific" || run.Model != "gpt-6-sol" || run.Plan != "pro" {
@@ -104,7 +121,7 @@ func TestIntelligenceCheckScopedRecoveryAndHistory(t *testing.T) {
 	if err := db.UpdateCredentials(ctx, newID, map[string]any{"plan_type": "pro"}); err != nil {
 		t.Fatal(err)
 	}
-	participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 1, now.Add(21*time.Second), IntelligenceCheckPreflight{
+	participants, total, err := db.ListIntelligenceRuleParticipants(ctx, "specific", 0, 1, now.Add(21*time.Second), false, IntelligenceCheckPreflight{
 		QuotaHold: func(id int64, _ string) (time.Time, bool) { return now.Add(time.Hour), id == newID },
 	})
 	if err != nil || total != 2 || len(participants) != 1 || participants[0].AccountID != newID || participants[0].State != "quota_wait" || participants[0].AvailableAfter == nil {

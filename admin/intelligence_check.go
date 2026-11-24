@@ -118,7 +118,12 @@ func (h *Handler) ListIntelligenceRuleParticipants(c *gin.Context) {
 	}
 	page, size := intelligencePagination(c)
 	now := time.Now().UTC()
-	items, total, err := h.db.ListIntelligenceRuleParticipants(c.Request.Context(), id, (page-1)*size, size, now, h.intelligencePreflight())
+	view := c.DefaultQuery("paused", "false")
+	if view != "true" && view != "false" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "paused 必须为 true 或 false"})
+		return
+	}
+	items, total, err := h.db.ListIntelligenceRuleParticipants(c.Request.Context(), id, (page-1)*size, size, now, view == "true", h.intelligencePreflight())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "规则尚未保存或已删除，请刷新配置。"})
