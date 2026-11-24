@@ -90,7 +90,7 @@ func TestProxyAccessValidationConflictAndAtomicAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ids := range [][]int64{nil, {}, {0}, {-1}, {99999999}} {
+	for _, ids := range [][]int64{{0}, {-1}, {99999999}} {
 		if _, err := db.UpdateProxyAccess(ctx, id, true, ids); !errors.Is(err, ErrProxyAccessInvalid) {
 			t.Fatalf("IDs %v: %v", ids, err)
 		}
@@ -101,8 +101,20 @@ func TestProxyAccessValidationConflictAndAtomicAssignments(t *testing.T) {
 	if row, err := db.GetProxy(ctx, id); err != nil || row.Exclusive {
 		t.Fatalf("conflict changed row: %#v %v", row, err)
 	}
+	if _, err := db.UpdateProxyAccess(ctx, id, true, nil); !errors.Is(err, ErrProxyAccessConflict) {
+		t.Fatalf("empty allowlist must not displace existing pin: %v", err)
+	}
 	if err := db.SetAccountProxyURLs(ctx, map[int64]string{b: ""}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := db.UpdateProxyAccess(ctx, id, true, nil); err != nil {
+		t.Fatalf("reserve unbound proxy: %v", err)
+	}
+	if row, err := db.GetProxy(ctx, id); err != nil || !row.Exclusive || len(row.AllowedAccountIDs) != 0 || row.AllowsAccount(a) {
+		t.Fatalf("empty reservation: %#v %v", row, err)
+	}
+	if rows, err := db.ListEnabledProxies(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("reserved proxy entered pool: %v %v", rows, err)
 	}
 	if _, err := db.UpdateProxyAccess(ctx, id, true, []int64{a}); err != nil {
 		t.Fatal(err)
@@ -114,7 +126,7 @@ func TestProxyAccessValidationConflictAndAtomicAssignments(t *testing.T) {
 	if err := db.conn.QueryRowContext(ctx, `SELECT COALESCE(proxy_url,'') FROM accounts WHERE id = $1`, a).Scan(&bound); err != nil || bound != "" {
 		t.Fatalf("assignment was not atomic: %q %v", bound, err)
 	}
-	if err := db.SetAccountProxyURLs(ctx, map[int64]string{a: proxyURL}); err != nil {
+	if err := db.UpdateAccountProxyURL(ctx, a, proxyURL); err != nil {
 		t.Fatal(err)
 	}
 	newURL := "http://new-private.example:8080"
@@ -216,5 +228,165 @@ func TestProxyAccessGlobalConflictAndPinSaveGuards(t *testing.T) {
 	}
 	if _, err := db.BatchUpdateAccountMetadata(ctx, []int64{a, b}, BatchAccountMetadataUpdate{ProxyURL: OptionalString{Set: true, Value: url}}); !errors.Is(err, ErrProxyAccessDenied) {
 		t.Fatalf("batch save accepted: %v", err)
+	}
+}
+
+func TestManualProxyBindingReservationAndAtomicBatch(t *testing.T) {
+	db := newProxyTestDB(t)
+	ctx := context.Background()
+	url := "http://manual-binding.example:8080"
+	id, err := db.InsertProxy(ctx, url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := db.InsertAccount(ctx, "a", "a", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.InsertAccount(ctx, "b", "b", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := db.InsertAccount(ctx, "c", "c", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ValidateManualProxyBinding(ctx, []int64{b}, url); err != nil {
+		t.Fatal(err)
+	}
+	row, err := db.GetProxy(ctx, id)
+	if err != nil || row.Exclusive {
+		t.Fatalf("preflight mutated policy: %#v %v", row, err)
+	}
+	if err := db.UpdateAccountProxyURL(ctx, b, url); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.GetProxy(ctx, id)
+	if err != nil || !row.Exclusive || !row.AllowsAccount(a) || !row.AllowsAccount(b) || row.AllowsAccount(c) {
+		t.Fatalf("legacy pins lost: %#v %v", row, err)
+	}
+	if _, err := db.UpdateProxyAccess(ctx, id, false, nil); !errors.Is(err, ErrProxyAccessConflict) {
+		t.Fatalf("reopened bound proxy: %v", err)
+	}
+	if err := db.ValidateManualProxyBinding(ctx, []int64{b, c}, url); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("preflight foreign: %v", err)
+	}
+	if _, err := db.BatchUpdateAccountMetadata(ctx, []int64{b, c}, BatchAccountMetadataUpdate{ProxyURL: OptionalString{Set: true, Value: url}}); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("batch foreign: %v", err)
+	}
+	if err := db.UpdateAccountProxyURL(ctx, b, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateAccountProxyURL(ctx, a, ""); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.GetProxy(ctx, id)
+	if err != nil || !row.Exclusive {
+		t.Fatalf("unbind reopened: %#v %v", row, err)
+	}
+	if _, err := db.UpdateProxyAccess(ctx, id, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateOAuthAccountCredentials(ctx, b, nil, url); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("credential merge claimed a reservation: %v", err)
+	}
+	if _, err := db.BatchUpdateAccountMetadata(ctx, []int64{b, c}, BatchAccountMetadataUpdate{ProxyURL: OptionalString{Set: true, Value: url}}); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.GetProxy(ctx, id)
+	if err != nil || !row.Exclusive || !row.AllowsAccount(b) || !row.AllowsAccount(c) || row.AllowsAccount(a) {
+		t.Fatalf("reserved batch: %#v %v", row, err)
+	}
+}
+
+func TestAutomaticProxyBindingAndReconcile(t *testing.T) {
+	db := newProxyTestDB(t)
+	ctx := context.Background()
+	url := "http://auto-binding.example:8080"
+	id, err := db.InsertProxy(ctx, url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := db.InsertAccount(ctx, "a", "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.InsertAccount(ctx, "b", "b", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservedID, err := db.InsertProxy(ctx, "http://reserved-auto.example:8080", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpdateProxyAccess(ctx, reservedID, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountProxyURLs(ctx, map[int64]string{a: "http://reserved-auto.example:8080", b: url}); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("auto claimed reservation: %v", err)
+	}
+	row, err := db.GetProxy(ctx, id)
+	if err != nil || row.Exclusive {
+		t.Fatalf("failed batch changed policy: %#v %v", row, err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `CREATE TRIGGER fail_proxy_assignment BEFORE UPDATE OF proxy_url ON accounts BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountProxyURLs(ctx, map[int64]string{a: url}); err == nil {
+		t.Fatal("expected assignment failure")
+	}
+	row, err = db.GetProxy(ctx, id)
+	if err != nil || row.Exclusive {
+		t.Fatalf("failed write changed policy: %#v %v", row, err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `DROP TRIGGER fail_proxy_assignment`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountProxyURLs(ctx, map[int64]string{a: url, b: url}); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.GetProxy(ctx, id)
+	if err != nil || !row.Exclusive || !row.AllowsAccount(a) || !row.AllowsAccount(b) {
+		t.Fatalf("auto policy: %#v %v", row, err)
+	}
+	if err := db.SetAccountProxyURLs(ctx, map[int64]string{a: url}); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("auto accepted exclusive: %v", err)
+	}
+	legacy := "http://legacy-binding.example:8080"
+	legacyID, err := db.InsertProxy(ctx, legacy, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := db.InsertAccount(ctx, "old", "old", legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := "http://global-binding.example:8080"
+	globalID, err := db.InsertProxy(ctx, global, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertAccount(ctx, "global", "global", global); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `INSERT INTO system_settings (id,proxy_url) VALUES (1,$1) ON CONFLICT(id) DO UPDATE SET proxy_url = excluded.proxy_url`, global); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ValidateManualProxyBinding(ctx, []int64{a}, global); !errors.Is(err, ErrProxyAccessConflict) {
+		t.Fatalf("global preflight: %v", err)
+	}
+	if err := db.ReconcileBoundProxyAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReconcileBoundProxyAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, err = db.GetProxy(ctx, legacyID)
+	if err != nil || !row.Exclusive || !row.AllowsAccount(old) {
+		t.Fatalf("reconcile: %#v %v", row, err)
+	}
+	row, err = db.GetProxy(ctx, globalID)
+	if err != nil || row.Exclusive {
+		t.Fatalf("global changed: %#v %v", row, err)
 	}
 }

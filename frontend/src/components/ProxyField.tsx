@@ -154,7 +154,7 @@ export function ProxyField({
         </Button>
       </div>
       {proxies.length > 0 ? (
-        <ProxyPoolSelect className="w-full" proxies={proxies} value={value} onSelect={onChange} disabled={disabled} accountId={accountId} />
+        <ProxyPoolSelect className="w-full" proxies={proxies} value={value} onSelect={onChange} disabled={disabled} accountId={accountId} manualBinding={accountId !== undefined} />
       ) : (
         // 代理池为空时仍显示一个禁用占位下拉 + 引导,让"从代理池选择"始终可见,
         // 避免让用户误以为该功能缺失(池条目来自「代理」页)。

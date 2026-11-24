@@ -54,8 +54,8 @@ func (db *DB) UpdateProxyAccess(ctx context.Context, id int64, exclusive bool, a
 	ids := append([]int64{}, allowed...)
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
-	if (exclusive && len(ids) == 0) || (len(ids) > 0 && ids[0] <= 0) {
-		return nil, fmt.Errorf("%w: exclusive requires nonempty positive account IDs", ErrProxyAccessInvalid)
+	if len(ids) > 0 && ids[0] <= 0 {
+		return nil, fmt.Errorf("%w: account IDs must be positive", ErrProxyAccessInvalid)
 	}
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -84,6 +84,15 @@ func (db *DB) UpdateProxyAccess(ctx context.Context, id int64, exclusive bool, a
 		}
 		if err != nil {
 			return nil, err
+		}
+	}
+	if !exclusive {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE TRIM(COALESCE(proxy_url,'')) = $1 AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'`, strings.TrimSpace(p.URL)).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			return nil, ErrProxyAccessConflict
 		}
 	}
 	p.Exclusive, p.AllowedAccountIDs = exclusive, ids
@@ -157,4 +166,161 @@ func (db *DB) ValidateProxyAccountAccess(ctx context.Context, accountID int64, p
 	}
 	defer tx.Rollback()
 	return checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), accountID, proxyURL)
+}
+
+// manualProxyBindingTx checks the complete assignment before reserving a managed proxy.
+// The caller must roll back on any later failure. write=false is a read-only preflight.
+func manualProxyBindingTx(ctx context.Context, tx *sql.Tx, sqlite bool, accountIDs []int64, proxyURL string, write, automatic bool) error {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" || len(accountIDs) == 0 {
+		return nil
+	}
+	for _, id := range accountIDs {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM accounts WHERE id = $1 AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'`, id).Scan(&exists); err != nil {
+			return err
+		}
+	}
+	if sqlite && write {
+		if _, err := tx.ExecContext(ctx, `UPDATE proxies SET exclusive = exclusive WHERE TRIM(url) = $1`, proxyURL); err != nil {
+			return err
+		}
+	}
+	query := `SELECT ` + proxySelectColumns + ` FROM proxies WHERE TRIM(url) = $1`
+	if !sqlite && write {
+		query += ` FOR UPDATE`
+	}
+	p, err := scanProxyAccessRow(tx.QueryRowContext(ctx, query, proxyURL))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if automatic && p.Exclusive {
+		return ErrProxyAccessDenied
+	}
+	var globalProxy string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(proxy_url,'') FROM system_settings WHERE id = 1`).Scan(&globalProxy); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if strings.TrimSpace(globalProxy) == proxyURL {
+		return fmt.Errorf("%w: proxy is configured as the global proxy", ErrProxyAccessConflict)
+	}
+	if p.Exclusive && len(p.AllowedAccountIDs) > 0 {
+		for _, id := range accountIDs {
+			if !p.AllowsAccount(id) {
+				return ErrProxyAccessDenied
+			}
+		}
+		return nil
+	}
+	if !write {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM accounts WHERE TRIM(COALESCE(proxy_url,'')) = $1 AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'`, proxyURL)
+	if err != nil {
+		return err
+	}
+	ids := append([]int64{}, p.AllowedAccountIDs...)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	ids = append(ids, accountIDs...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE proxies SET exclusive = $1, allowed_account_ids = $2 WHERE id = $3`, true, string(encoded), p.ID)
+	return err
+}
+
+// ValidateManualProxyBinding is a non-mutating preflight; the write rechecks under lock.
+func (db *DB) ValidateManualProxyBinding(ctx context.Context, accountIDs []int64, proxyURL string) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return manualProxyBindingTx(ctx, tx, db.isSQLite(), accountIDs, proxyURL, false, false)
+}
+
+// ReconcileBoundProxyAccess reserves shared managed proxies with existing active pins.
+// Global proxies are deliberately left untouched; callers publish runtime changes.
+func (db *DB) ReconcileBoundProxyAccess(ctx context.Context) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	aggregate := "json_agg(id)"
+	if db.isSQLite() {
+		aggregate = "json_group_array(id)"
+		if _, err := tx.ExecContext(ctx, `UPDATE proxies SET exclusive = exclusive WHERE 1 = 0`); err != nil {
+			return err
+		}
+	}
+	query := `WITH pins AS (
+		SELECT TRIM(proxy_url) AS url, ` + aggregate + ` AS ids FROM accounts
+		WHERE TRIM(COALESCE(proxy_url,'')) <> '' AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'
+		GROUP BY TRIM(proxy_url)
+	) SELECT p.id, p.allowed_account_ids, pins.ids FROM proxies p JOIN pins ON pins.url = TRIM(p.url)
+	WHERE NOT p.exclusive AND pins.url <> COALESCE((SELECT TRIM(proxy_url) FROM system_settings WHERE id = 1), '')
+	ORDER BY p.id`
+	if !db.isSQLite() {
+		query += ` FOR UPDATE OF p`
+	}
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	type policy struct {
+		id            int64
+		allowed, pins []byte
+	}
+	var policies []policy
+	for rows.Next() {
+		var p policy
+		if err := rows.Scan(&p.id, &p.allowed, &p.pins); err != nil {
+			rows.Close()
+			return err
+		}
+		policies = append(policies, p)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, p := range policies {
+		var allowed, pins []int64
+		if err := json.Unmarshal(p.allowed, &allowed); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(p.pins, &pins); err != nil {
+			return err
+		}
+		ids := append(allowed, pins...)
+		slices.Sort(ids)
+		encoded, err := json.Marshal(slices.Compact(ids))
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE proxies SET exclusive = true, allowed_account_ids = $1 WHERE id = $2`, string(encoded), p.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

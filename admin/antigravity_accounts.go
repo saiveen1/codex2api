@@ -844,6 +844,9 @@ func (h *Handler) UpdateAntigravityAccount(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "仅 Antigravity 账号支持该设置")
 		return
 	}
+	if req.ProxyURL != nil && !h.validateManualProxyBinding(c, ctx, []int64{id}, *req.ProxyURL) {
+		return
+	}
 	groupUpdate, err := parseOptionalIntegerSliceField(req.GroupIDs, "group_ids")
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -1011,7 +1014,9 @@ func (h *Handler) UpdateAntigravityAccount(c *gin.Context) {
 		}
 	}
 	if req.ProxyURL != nil {
-		if err := h.db.UpdateAccountProxyURL(ctx, id, *req.ProxyURL); err != nil {
+		if err := h.commitProxyBindings([]string{*req.ProxyURL}, func() error {
+			return h.db.UpdateAccountProxyURL(ctx, id, *req.ProxyURL)
+		}); err != nil {
 			reloadAfterPartialMutation()
 			writeInternalError(c, err)
 			return
@@ -1193,7 +1198,9 @@ func (h *Handler) updateAntigravityAPIKeyAccount(c *gin.Context, ctx context.Con
 		}
 	}
 	if req.ProxyURL != nil {
-		if err := h.db.UpdateAccountProxyURL(ctx, row.ID, *req.ProxyURL); err != nil {
+		if err := h.commitProxyBindings([]string{*req.ProxyURL}, func() error {
+			return h.db.UpdateAccountProxyURL(ctx, row.ID, *req.ProxyURL)
+		}); err != nil {
 			if runtimeMutationPersisted {
 				h.removeAntigravityRuntimeAccount(row.ID)
 			}

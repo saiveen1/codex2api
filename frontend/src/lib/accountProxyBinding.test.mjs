@@ -248,3 +248,27 @@ test("selector rejects disabled, failed and unauthorized nodes, not occupied sha
   assert.equal(formatProxyIdentity(healthy), "#1 · HK-01");
   assert.equal(formatProxyIdentity({ ...healthy, label: "", url: "http://user:secret@proxy.example:8080" }), "#1 · proxy.example:8080");
 });
+
+test("reserved exclusive proxies are selectable only for explicit binding, never runtime", () => {
+  const reserved = { ...healthy, exclusive: true, allowed_account_ids: [], bound_count: 0 };
+  assert.equal(proxyIsSelectable(reserved, 11, true), true);
+  assert.equal(proxyIsSelectable(reserved, 11), false);
+  assert.equal(proxyIsSelectable(reserved, undefined, true), false);
+  assert.equal(proxyIsSelectable({ ...reserved, bound_count: 1 }, 11, true), false);
+  assert.equal(proxyIsSelectable({ ...reserved, allowed_account_ids: [12] }, 11, true), false);
+  const ctx = ctxWith({ proxies: [reserved] });
+  const account = { id: 11, proxy_url: reserved.url };
+  assert.equal(resolveAccountProxyBinding(account, ctx, true).kind, "bound");
+  assert.equal(resolveAccountProxyBinding(account, ctx).kind, "bound_unusable");
+});
+
+test("exclusive proxies cannot be inherited and unauthorized pins fail closed", () => {
+  const exclusive = { ...healthy, exclusive: true, allowed_account_ids: [11] };
+  const ctx = ctxWith({ proxies: [exclusive], groups: [{ id: 1, name: "private", proxy_urls: [exclusive.url] }] });
+  assert.equal(resolveAccountProxyBinding({ id: 11, proxy_url: exclusive.url }, ctx).kind, "bound");
+  assert.equal(resolveAccountProxyBinding({ id: 12, proxy_url: exclusive.url }, ctx).kind, "bound_unusable");
+  assert.equal(resolveAccountProxyBinding({ id: 11, group_ids: [1] }, ctx).kind, "direct_blocked");
+  assert.equal(resolveAccountProxyBinding({ id: 12 }, { ...ctx, resinEnabled: true }).kind, "resin");
+  assert.equal(resolveAccountProxyBinding({ id: 12, proxy_url: exclusive.url }, { ...ctx, resinEnabled: true }).kind, "bound_unusable");
+  assert.equal(resolveAccountProxyBinding({}, { ...ctx, poolEnabled: false, globalProxy: exclusive.url }).kind, "direct_blocked");
+});

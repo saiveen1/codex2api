@@ -39,6 +39,7 @@ interface AccountProxyBadgeProps {
   onClick?: () => void;
   className?: string;
   details?: boolean;
+  previewManualBinding?: boolean;
 }
 
 export default function AccountProxyBadge({
@@ -47,9 +48,10 @@ export default function AccountProxyBadge({
   onClick,
   className,
   details = false,
+  previewManualBinding = false,
 }: AccountProxyBadgeProps) {
   const { t } = useTranslation();
-  const binding = resolveAccountProxyBinding(account, ctx);
+  const binding = resolveAccountProxyBinding(account, ctx, previewManualBinding);
   const shortName = formatProxyShortName(binding.proxy, binding.url);
   const egress = formatProxyEgressSummary(binding.proxy);
   const latency = binding.proxy?.test_latency_ms ?? 0;

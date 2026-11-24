@@ -474,6 +474,7 @@ export default function Proxies() {
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [accessFilter, setAccessFilter] = useState("all");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
 
   const [riskProfiles, setRiskProfiles] = useState<ProxyRiskScoringProfile[]>([]);
@@ -605,6 +606,7 @@ export default function Proxies() {
   const filteredProxies = useMemo(() => {
     const q = query.trim().toLowerCase();
     return proxies.filter((p) => {
+      if (accessFilter !== "all" && p.exclusive !== (accessFilter === "exclusive")) return false;
       if (statusFilter === "enabled" && !p.enabled) return false;
       if (statusFilter === "disabled" && p.enabled) return false;
       if (statusFilter === "bound" && (p.bound_count ?? 0) === 0) return false;
@@ -628,7 +630,7 @@ export default function Proxies() {
       }
       return true;
     });
-  }, [proxies, query, riskFilter, statusFilter]);
+  }, [proxies, query, riskFilter, statusFilter, accessFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProxies.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -1494,7 +1496,7 @@ export default function Proxies() {
             icon={<Users className="size-4" />}
             tone="info"
             active={statusFilter === "bound"}
-            onClick={() => { setStatusFilter("bound"); setRiskFilter("all"); setQuery(""); setPage(1); }}
+            onClick={() => { setStatusFilter("bound"); setRiskFilter("all"); setAccessFilter("all"); setQuery(""); setPage(1); }}
           />
           <StatTile
             label={t("proxies.untestedCount")}
@@ -1559,6 +1561,18 @@ export default function Proxies() {
               );
             })}
           </div>
+          <Select
+            compact
+            value={accessFilter}
+            onValueChange={(value) => { setAccessFilter(value); setPage(1); }}
+            className="w-auto shrink-0"
+            triggerClassName="h-8 shrink-0 text-xs font-medium"
+            options={[
+              { value: "all", label: t("proxySubscriptions.allAccess") },
+              { value: "exclusive", label: t("proxySubscriptions.exclusive") },
+              { value: "shared", label: t("proxySubscriptions.shared") },
+            ]}
+          />
           <Select
             compact
             value={riskFilter}
@@ -1665,6 +1679,9 @@ export default function Proxies() {
 
                           <div className="mt-2.5 flex flex-wrap items-center gap-2">
                             <ProxyStatusBadge proxy={p} />
+                            <button type="button" onClick={() => setAccessProxy(p)} className="rounded-full border px-2 py-0.5 text-xs hover:bg-muted" title={t("proxySubscriptions.accessTitle")}>
+                              {t(p.exclusive ? "proxySubscriptions.exclusive" : "proxySubscriptions.shared")}
+                            </button>
                             <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs font-medium text-muted-foreground">
                               <Users className="size-3" />
                               {t("proxies.boundCount", {

@@ -5792,7 +5792,10 @@ func (s *Store) SetProxyPoolEnabled(enabled bool) {
 func (s *Store) ReloadProxyPool() error {
 	s.proxyPoolReloadMu.Lock()
 	defer s.proxyPoolReloadMu.Unlock()
+	return s.reloadProxyPoolLocked()
+}
 
+func (s *Store) reloadProxyPoolLocked() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	loader := s.proxyPoolLoader
@@ -8231,6 +8234,40 @@ func (s *Store) proxyAllowedForAccountLocked(accountID int64, proxyURL string) b
 		}
 	}
 	return false
+}
+
+// CommitProxyBindings serializes a database-only binding write with pool selection and reload.
+// A failed post-commit refresh must not let callers keep using a now-private shared exit.
+func (s *Store) CommitProxyBindings(proxyURLs []string, write func() error) error {
+	targets := buildProxyPoolSet(proxyURLs)
+	if s == nil || len(targets) == 0 {
+		return write()
+	}
+	s.proxyPoolReloadMu.Lock()
+	defer s.proxyPoolReloadMu.Unlock()
+	s.mu.Lock()
+	err := write()
+	needsReload := false
+	if err == nil {
+		for url := range targets {
+			if _, managed := s.managedProxySet[url]; !managed {
+				continue // Custom URLs do not acquire a managed access policy.
+			}
+			if s.exclusiveProxyAccounts == nil {
+				s.exclusiveProxyAccounts = make(map[string][]int64)
+			}
+			s.exclusiveProxyAccounts[url] = []int64{}
+			needsReload = true
+		}
+	}
+	s.mu.Unlock()
+	if needsReload {
+		if err := s.reloadProxyPoolLocked(); err != nil {
+			s.invalidateExclusiveProxyAffinity()
+			return fmt.Errorf("绑定已保存，代理暂时停用；请刷新代理池：%w", err)
+		}
+	}
+	return err
 }
 
 // UpdateProxyAccess commits and publishes under the selection/reload locks. Even if a

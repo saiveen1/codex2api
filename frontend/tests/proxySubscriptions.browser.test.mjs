@@ -18,7 +18,7 @@ before(async () => {
       import ${JSON.stringify(path.join(root, 'src/i18n.ts'))};
       function App(){ const [open,setOpen]=React.useState(true); return React.createElement(React.Fragment,null,
         React.createElement(ProxySubscriptions,{onChanged:()=>{window.poolReloaded=(window.poolReloaded||0)+1}}),
-        React.createElement(ProxyAccessModal,{proxy:open?{id:7,exclusive:true,allowed_account_ids:[11],bound_count:99}:null,onClose:()=>setOpen(false),onSaved:()=>{}})) }
+        React.createElement(ProxyAccessModal,{proxy:open?{id:7,url:'http://proxy.test:20007',exclusive:true,allowed_account_ids:[11],bound_count:0}:null,onClose:()=>setOpen(false),onSaved:()=>{}})) }
       createRoot(document.getElementById('root')).render(React.createElement(App));` },
   }], resolve: { alias: { '@': path.join(root, 'src') } }, define: { 'process.env.NODE_ENV': '"production"' }, build: { write: false, minify: false, rollupOptions: { input: 'virtual:proxy-harness' }, lib: { entry: 'virtual:proxy-harness', formats: ['iife'], name: 'ProxyHarness' } } })
   script = (Array.isArray(result) ? result[0] : result).output.find(item => item.type === 'chunk').code
@@ -41,6 +41,7 @@ test('subscription edits preserve a masked URL and regex fields; access keeps se
       let body = {}
       if (u.pathname.endsWith('/proxy-subscriptions')) body = { engine: { binary_path: '', auto_install: true, controller_port: 19090, port_start: 20000 }, subscriptions: [{ id: '3', name: 'Synthetic', url: '', url_set: true, enabled: true, include_regex: 'US', exclude_regex: 'HK', dedupe_regex: '(.*)', prefer_regex: 'direct', refresh_minutes: 60, total_nodes: 2, kept_nodes: 1 }], nodes: [], running: false, version: '', last_error: '', operation: { running: false, stage: '', error: '', started_at: '', finished_at: '' } }
       if (u.pathname.endsWith('/accounts')) { const p = Number(u.searchParams.get('page')); body = { total: 21, accounts: [{ id: p === 1 ? 11 : 22, email: `account${p}@example.invalid`, name: '' }] } }
+      if (u.searchParams.get('proxy_filter') === 'this') body = { total: 0, accounts: [] }
       return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } })
     }
   })

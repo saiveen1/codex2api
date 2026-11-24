@@ -218,10 +218,11 @@ export default function AccountProxyQuickEditor({
             proxies={proxies}
             value={value}
             accountId={account?.id}
+            manualBinding
             disabled={busy}
             onSelect={setValue}
           />
-          {dirty && trimmed && <div className="rounded-md border bg-muted/20 p-3"><AccountProxyBadge account={{ proxy_url: trimmed }} ctx={ctx} details /></div>}
+          {dirty && trimmed && <div className="rounded-md border bg-muted/20 p-3"><AccountProxyBadge account={{ id: account?.id, proxy_url: trimmed }} ctx={ctx} previewManualBinding details /></div>}
         </div>
       </div>
     </Modal>

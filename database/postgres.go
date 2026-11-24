@@ -3765,9 +3765,24 @@ func (db *DB) SetAccountProxyURLs(ctx context.Context, assignments map[int64]str
 	}
 	defer tx.Rollback()
 
-	query := `UPDATE accounts SET proxy_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
+	groups := make(map[string][]int64)
+	for id, url := range assignments {
+		url = strings.TrimSpace(url)
+		groups[url] = append(groups[url], id)
+	}
+	urls := make([]string, 0, len(groups))
+	for url := range groups {
+		urls = append(urls, url)
+	}
+	sort.Strings(urls)
+	for _, url := range urls {
+		if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), groups[url], url, true, true); err != nil {
+			return err
+		}
+	}
+	query := `UPDATE accounts SET proxy_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'`
 	if db.isSQLite() {
-		query = `UPDATE accounts SET proxy_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+		query = `UPDATE accounts SET proxy_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'deleted' AND COALESCE(error_message,'') <> 'deleted'`
 	}
 	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -3775,11 +3790,14 @@ func (db *DB) SetAccountProxyURLs(ctx context.Context, assignments map[int64]str
 	}
 	defer stmt.Close()
 	for id, proxyURL := range assignments {
-		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+		result, err := stmt.ExecContext(ctx, strings.TrimSpace(proxyURL), id)
+		if err != nil {
 			return err
 		}
-		if _, err := stmt.ExecContext(ctx, strings.TrimSpace(proxyURL), id); err != nil {
+		if n, err := result.RowsAffected(); err != nil {
 			return err
+		} else if n != 1 {
+			return sql.ErrNoRows
 		}
 	}
 	return tx.Commit()
@@ -7664,7 +7682,7 @@ func (db *DB) UpdateAccountSchedulerMetadata(ctx context.Context, id int64, scor
 		}
 		defer tx.Rollback()
 		if proxyURL.Set {
-			if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL.Value); err != nil {
+			if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), []int64{id}, proxyURL.Value, true, false); err != nil {
 				return err
 			}
 		}
@@ -7816,10 +7834,8 @@ func (db *DB) BatchUpdateAccountMetadata(ctx context.Context, ids []int64, updat
 		}
 
 		if update.ProxyURL.Set {
-			for _, accountID := range active.ids {
-				if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), accountID, update.ProxyURL.Value); err != nil {
-					return err
-				}
+			if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), active.ids, update.ProxyURL.Value, true, false); err != nil {
+				return err
 			}
 		}
 		if updateErr := db.batchUpdateAccountColumns(ctx, tx, active.ids, update); updateErr != nil {
@@ -8329,7 +8345,7 @@ func (db *DB) UpdateOpenAIResponsesAccount(ctx context.Context, id int64, name s
 		return err
 	}
 	defer tx.Rollback()
-	if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+	if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), []int64{id}, proxyURL, true, false); err != nil {
 		return err
 	}
 
@@ -8384,7 +8400,11 @@ func (db *DB) UpdateOAuthAccountCredentials(ctx context.Context, id int64, crede
 		return err
 	}
 	defer tx.Rollback()
+	// Credential merges can carry an imported proxy, not an explicit admin claim.
 	if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+		return err
+	}
+	if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), []int64{id}, proxyURL, true, false); err != nil {
 		return err
 	}
 

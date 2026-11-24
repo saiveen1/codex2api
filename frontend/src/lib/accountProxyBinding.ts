@@ -50,6 +50,7 @@ export interface ProxyBindingGroup {
 }
 
 export interface ProxyBindingAccount {
+  id?: number;
   proxy_url?: string | null;
   group_ids?: number[] | null;
 }
@@ -91,8 +92,12 @@ export function proxyIsUsable(
   return proxy.enabled && (proxy.test_status || "untested") !== "error";
 }
 
-export function proxyIsSelectable(proxy: ProxyBindingProxy, accountId?: number): boolean {
-  return proxyIsUsable(proxy) && (!proxy.exclusive || (accountId !== undefined && Boolean(proxy.allowed_account_ids?.includes(accountId))));
+export function proxyIsSelectable(proxy: ProxyBindingProxy, accountId?: number, manualBinding = false): boolean {
+  if (!proxyIsUsable(proxy)) return false;
+  if (!proxy.exclusive) return true;
+  if (accountId === undefined) return false;
+  return Boolean(proxy.allowed_account_ids?.includes(accountId)) ||
+    (manualBinding && proxy.allowed_account_ids?.length === 0 && proxy.bound_count === 0);
 }
 
 export function formatProxyIdentity(proxy: ProxyBindingProxy): string {
@@ -125,7 +130,7 @@ export function buildProxyBindingContext(input: {
     resinEnabled: Boolean(input.resinEnabled),
     poolEnabled: Boolean(input.poolEnabled),
     globalProxy: trimValue(input.globalProxy),
-    poolSize: usable.size,
+    poolSize: [...usable].filter((url) => !managed.get(url)?.exclusive).length,
     managed,
     usable,
     groups,
@@ -148,10 +153,16 @@ export function isManagedProxyUnavailable(
 export function resolveAccountProxyBinding(
   account: ProxyBindingAccount | null | undefined,
   ctx: ProxyBindingContext,
+  previewManualBinding = false,
 ): AccountProxyBinding {
   const base = { url: "", proxy: null, groupName: "", usable: true } as const;
 
   const accountProxy = trimValue(account?.proxy_url);
+  const pinned = accountProxy ? ctx.managed.get(accountProxy) : undefined;
+  if (pinned?.exclusive && !pinned.allowed_account_ids?.includes(account?.id ?? 0) &&
+      !(previewManualBinding && proxyIsSelectable(pinned, account?.id, true))) {
+    return { ...base, kind: "bound_unusable", url: accountProxy, proxy: pinned, usable: false };
+  }
   // Resin 整层覆盖:出口由 Resin 提供,池空/绑定失效都不再让账号被跳过。
   // 带上自绑 URL 只为提示"这条配置已被覆盖",不代表它在生效。
   if (ctx.resinEnabled) {
@@ -182,7 +193,7 @@ export function resolveAccountProxyBinding(
     if (!group) continue;
     const hasUsable = (group.proxy_urls ?? []).some((raw) => {
       const url = trimValue(raw);
-      return Boolean(url) && !isManagedProxyUnavailable(url, ctx);
+      return Boolean(url) && !ctx.managed.get(url)?.exclusive && !isManagedProxyUnavailable(url, ctx);
     });
     if (!hasUsable) continue;
     return { ...base, kind: "group", groupName: group.name };
@@ -191,11 +202,11 @@ export function resolveAccountProxyBinding(
   if (ctx.poolEnabled && ctx.poolSize > 0) {
     return { ...base, kind: "pool" };
   }
-  if (ctx.globalProxy) {
+  if (ctx.globalProxy && !ctx.managed.get(ctx.globalProxy)?.exclusive) {
     return { ...base, kind: "global" };
   }
   // 池开着却无处可走：后端此时不允许直连，账号被 AccountHasUsableEgress 过滤掉。
-  if (ctx.poolEnabled) {
+  if (ctx.poolEnabled || (ctx.globalProxy && ctx.managed.get(ctx.globalProxy)?.exclusive)) {
     return { ...base, kind: "direct_blocked", usable: false };
   }
   return { ...base, kind: "direct" };

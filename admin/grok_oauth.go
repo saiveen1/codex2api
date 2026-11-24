@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
 )
@@ -425,7 +426,18 @@ func (h *Handler) reauthorizeGrokOAuthAccount(ctx context.Context, accountID int
 		delete(overlay, "email")
 	}
 
-	reauth, err := h.db.ReauthGrokAccount(ctx, accountID, overlay, strings.TrimSpace(in.Name), strings.TrimSpace(in.ProxyURL))
+	var reauth database.GrokReauthResult
+	write := func() error {
+		var err error
+		reauth, err = h.db.ReauthGrokAccount(ctx, accountID, overlay, strings.TrimSpace(in.Name), strings.TrimSpace(in.ProxyURL))
+		return err
+	}
+	var err error
+	if strings.TrimSpace(in.ProxyURL) != "" {
+		err = h.commitProxyBindings([]string{in.ProxyURL}, write)
+	} else {
+		err = write()
+	}
 	if err != nil {
 		return createGrokOAuthAccountResult{}, fmt.Errorf("重授权更新账号 %d 失败: %w", accountID, err)
 	}

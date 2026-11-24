@@ -14,6 +14,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// commitProxyBindings serializes proxy policy publication with durable bindings.
+func (h *Handler) commitProxyBindings(urls []string, write func() error) error {
+	if h.store == nil {
+		return write()
+	}
+	return h.store.CommitProxyBindings(urls, write)
+}
+
+func (h *Handler) validateManualProxyBinding(c *gin.Context, ctx context.Context, ids []int64, url string) bool {
+	if err := h.db.ValidateManualProxyBinding(ctx, ids, url); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(c, http.StatusNotFound, "账号不存在")
+		} else if errors.Is(err, database.ErrProxyAccessDenied) || errors.Is(err, database.ErrProxyAccessConflict) || errors.Is(err, database.ErrProxyAccessInvalid) {
+			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
+		} else {
+			writeInternalError(c, err)
+		}
+		return false
+	}
+	return true
+}
+
 // UpdateProxyAccess replaces access policy. Wire PATCH /proxies/:id/access on the authenticated admin group.
 // Both fields are required so an omitted/null allowlist cannot accidentally erase a restriction.
 func (h *Handler) UpdateProxyAccess(c *gin.Context) {

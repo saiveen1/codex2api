@@ -407,10 +407,14 @@ func main() {
 
 	// 5. 初始化账号管理器
 	auth.CodexOAuthIdentityHeaders = proxy.CodexOAuthIdentityHeaders
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	if err := db.ReconcileBoundProxyAccess(ctx); err != nil {
+		cancel()
+		log.Fatalf("已绑定代理的权限初始化失败: %v", err)
+	}
 	store := auth.NewStore(db, tc, settings)
 	store.SetSchedulerWaitLimits(cfg.SchedulerMaxWaiters, cfg.SchedulerMaxWaitersPerKey)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	if accountDefaults, err := db.LoadAccountDefaultsConfig(ctx); err != nil {
 		log.Printf("读取账号默认值失败，保留原有并发与时区行为: %v", err)
 	} else {

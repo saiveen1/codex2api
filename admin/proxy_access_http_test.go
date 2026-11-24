@@ -56,3 +56,59 @@ func TestProxyAccessBindingValidationHTTPStatus(t *testing.T) {
 		t.Fatal("denied assignment changed the account proxy")
 	}
 }
+
+func TestManualProxyBindingClaimsAndPromotesHTTP(t *testing.T) {
+	for _, reserved := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reserved=%t", reserved), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			db := newAdminProxyTestDB(t)
+			ctx := context.Background()
+			owner, err := db.InsertAccount(ctx, "owner", "claim-owner", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := db.InsertAccount(ctx, "other", "claim-other", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const url = "http://claim.example:8080"
+			proxyID, err := db.InsertProxy(ctx, url, "claim")
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := newAdminProxyTestStore(t, db)
+			if reserved {
+				if _, err := store.UpdateProxyAccess(ctx, proxyID, true, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h := &Handler{db: db, store: store}
+			router := gin.New()
+			router.PATCH("/accounts/:id/scheduler", h.UpdateAccountScheduler)
+			bind := func(id int64) *httptest.ResponseRecorder {
+				r := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/accounts/%d/scheduler", id), strings.NewReader(fmt.Sprintf(`{"proxy_url":%q}`, url)))
+				req.Header.Set("Content-Type", "application/json")
+				router.ServeHTTP(r, req)
+				return r
+			}
+			if r := bind(owner); r.Code != http.StatusOK {
+				t.Fatalf("claim: %d %s", r.Code, r.Body.String())
+			}
+			proxy, err := db.GetProxy(ctx, proxyID)
+			if err != nil || !proxy.Exclusive || len(proxy.AllowedAccountIDs) != 1 || proxy.AllowedAccountIDs[0] != owner {
+				t.Fatalf("proxy=%+v err=%v", proxy, err)
+			}
+			if !store.ProxyAllowedForAccount(owner, url) || store.ProxyAllowedForAccount(other, url) || store.NextProxy() == url {
+				t.Fatal("runtime policy not published after claim")
+			}
+			if r := bind(other); r.Code != http.StatusBadRequest {
+				t.Fatalf("conflict: %d %s", r.Code, r.Body.String())
+			}
+			row, err := db.GetAccountByID(ctx, other)
+			if err != nil || row.ProxyURL != "" {
+				t.Fatalf("other=%+v err=%v", row, err)
+			}
+		})
+	}
+}

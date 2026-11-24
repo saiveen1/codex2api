@@ -110,6 +110,27 @@ func TestProxyAccessReloadToggleAndHealth(t *testing.T) {
 	}
 }
 
+func TestCommitProxyBindingsPublishesOrQuarantines(t *testing.T) {
+	const url = "http://reserved.example:8080"
+	row := &database.ProxyRow{URL: url}
+	s := &Store{proxyPoolEnabled: true}
+	s.proxyPoolLoader = func(context.Context) ([]*database.ProxyRow, error) { return []*database.ProxyRow{row}, nil }
+	if err := s.ReloadProxyPool(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CommitProxyBindings([]string{url}, func() error {
+		row.Exclusive, row.AllowedAccountIDs = true, []int64{7}
+		return nil
+	}); err != nil || s.NextProxy() != "" || !s.ProxyAllowedForAccount(7, url) || s.ProxyAllowedForAccount(8, url) {
+		t.Fatalf("binding not published: %v", err)
+	}
+	s.proxyPoolLoader = func(context.Context) ([]*database.ProxyRow, error) { return nil, errors.New("offline") }
+	s.sessionBindings = map[string]sessionAffinity{"stale": {accountID: 7, proxyURL: url}}
+	if err := s.CommitProxyBindings([]string{url}, func() error { return nil }); err == nil || s.ProxyAllowedForAccount(7, url) || s.NextProxy() != "" || len(s.sessionBindings) != 0 {
+		t.Fatal("failed refresh did not quarantine committed binding")
+	}
+}
+
 func TestProxyAccessUpdatePublishesBeforeReloadFailure(t *testing.T) {
 	db, err := database.New("sqlite", filepath.Join(t.TempDir(), "access.sqlite"))
 	if err != nil {

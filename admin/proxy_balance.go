@@ -249,7 +249,13 @@ func (h *Handler) AutoBalanceProxies(c *gin.Context) {
 	result := computeProxyAssignments(targets, candidates, baseline, int64(req.MaxPerProxy))
 
 	if len(result.assignments) > 0 {
-		if err := h.db.SetAccountProxyURLs(ctx, result.assignments); err != nil {
+		urls := make([]string, 0, len(result.assignments))
+		for _, url := range result.assignments {
+			urls = append(urls, url)
+		}
+		if err := h.commitProxyBindings(urls, func() error {
+			return h.db.SetAccountProxyURLs(ctx, result.assignments)
+		}); err != nil {
 			writeInternalError(c, err)
 			return
 		}
@@ -295,9 +301,14 @@ func (h *Handler) candidateProxiesForBalance(ctx context.Context, ids []int64) (
 	if err != nil {
 		return nil, err
 	}
+	global := ""
+	if h.store != nil {
+		global = strings.TrimSpace(h.store.GetProxyURL())
+	}
 	out := make([]*database.ProxyRow, 0, len(proxies))
 	for _, p := range proxies {
-		if p.Exclusive || !p.Enabled || p.TestStatus == "error" || strings.TrimSpace(p.URL) == "" {
+		url := strings.TrimSpace(p.URL)
+		if p.Exclusive || !p.Enabled || p.TestStatus == "error" || url == "" || url == global {
 			continue
 		}
 		out = append(out, p)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ProxyRow } from '../api'
 import type { AccountRow } from '../types'
@@ -25,12 +25,9 @@ function ProxyAccessEditor({ proxy, onClose, onSaved }: Omit<Props, 'proxy'> & {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [loadingBound, setLoadingBound] = useState(false)
+  const [loadingBound, setLoadingBound] = useState(true)
   const [boundError, setBoundError] = useState(false)
-  const initialized = useRef(Boolean(proxy.exclusive))
-  const boundRequest = useRef<AbortController | null>(null)
-
-  useEffect(() => () => boundRequest.current?.abort(), [])
+  const [boundAttempt, setBoundAttempt] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -42,12 +39,10 @@ function ProxyAccessEditor({ proxy, onClose, onSaved }: Omit<Props, 'proxy'> & {
     return () => controller.abort()
   }, [page, search])
 
-  async function preselectBoundAccounts() {
-    if (initialized.current || boundRequest.current) return
+  useEffect(() => {
     const controller = new AbortController()
-    boundRequest.current = controller
-    setLoadingBound(true); setBoundError(false)
-    try {
+    async function loadBoundAccounts() {
+      setLoadingBound(true); setBoundError(false)
       if (!proxy.url) throw new Error('Missing proxy URL')
       const bound: AccountRow[] = []
       const ids = new Set<number>()
@@ -65,40 +60,36 @@ function ProxyAccessEditor({ proxy, onClose, onSaved }: Omit<Props, 'proxy'> & {
         if (bound.length === expectedTotal) break
         if (bound.length > expectedTotal || result.accounts.length === 0) throw new Error('Incomplete binding pages')
       }
-      // Apply only a complete snapshot, once per editor. Later manual deselection
-      // must survive search, paging, and switching shared/exclusive back and forth.
+      // Apply only a complete snapshot; a partial read must not drop a binding.
       setBoundAccounts(bound)
       setSelected(current => new Set([...current, ...ids]))
-      initialized.current = true
-    } catch {
-      if (!controller.signal.aborted) setBoundError(true)
-    } finally {
-      if (!controller.signal.aborted) {
-        boundRequest.current = null
-        setLoadingBound(false)
-      }
+      if (bound.length > 0) setExclusive(true)
     }
-  }
+    void loadBoundAccounts().catch(() => {
+      if (!controller.signal.aborted) setBoundError(true)
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoadingBound(false)
+    })
+    return () => controller.abort()
+  }, [proxy.url, boundAttempt])
 
-  function toggleExclusive(checked: boolean) {
-    setExclusive(checked)
-    if (checked) void preselectBoundAccounts()
-  }
-
-  const selectionBlocked = saving || loadingBound || (exclusive && boundError)
-  const saveBlocked = saving || loadingBound || (exclusive && (boundError || selected.size === 0))
+  const selectionBlocked = saving || loadingBound || boundError
   async function save() {
-    if (saveBlocked) return
+    if (selectionBlocked) return
     setSaving(true); setError('')
     try {
-      await api.updateProxyAccess(proxy.id, { exclusive, allowed_account_ids: Array.from(selected) })
+      await api.updateProxyAccess(proxy.id, { exclusive, allowed_account_ids: exclusive ? Array.from(selected) : [] })
       onSaved(); onClose()
     } catch (err) { setError(getErrorMessage(err)) } finally { setSaving(false) }
   }
 
   function accountChoice(account: AccountRow) {
     return <label key={account.id} className="flex items-center gap-2 rounded p-1.5 text-sm hover:bg-muted">
-      <input type="checkbox" disabled={selectionBlocked} checked={selected.has(account.id)} onChange={e => { const checked = e.target.checked; setSelected(current => { const next = new Set(current); if (checked) next.add(account.id); else next.delete(account.id); return next }) }} />
+      <input type="checkbox" disabled={selectionBlocked || boundIDs.has(account.id)} checked={selected.has(account.id)} onChange={e => {
+        const checked = e.target.checked
+        if (checked) setExclusive(true)
+        setSelected(current => { const next = new Set(current); if (checked) next.add(account.id); else next.delete(account.id); return next })
+      }} />
       <span className="break-all">{account.email || account.name || `#${account.id}`} <span className="text-muted-foreground">#{account.id}</span></span>
     </label>
   }
@@ -106,14 +97,17 @@ function ProxyAccessEditor({ proxy, onClose, onSaved }: Omit<Props, 'proxy'> & {
 
   return <Modal show title={t('proxySubscriptions.accessTitle')} onClose={onClose} footer={<>
     <Button variant="outline" onClick={onClose} disabled={saving}>{t('proxySubscriptions.cancel')}</Button>
-    <Button onClick={() => void save()} disabled={saveBlocked}>{t('proxySubscriptions.save')}</Button>
+    <Button onClick={() => void save()} disabled={selectionBlocked}>{t('proxySubscriptions.save')}</Button>
   </>}>
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">{t('proxySubscriptions.accessHint')}</p>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={exclusive} disabled={saving || loadingBound} onChange={e => toggleExclusive(e.target.checked)} />{t('proxySubscriptions.exclusive')}</label>
-      {exclusive && <>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={exclusive} disabled={selectionBlocked || boundIDs.size > 0} onChange={e => {
+        setExclusive(e.target.checked)
+        if (!e.target.checked) setSelected(new Set())
+      }} />{t('proxySubscriptions.exclusive')}</label>
+      <div className="space-y-3">
         {loadingBound && <p role="status" className="text-sm text-muted-foreground">{t('proxySubscriptions.loadingBound')}</p>}
-        {boundError && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{t('proxySubscriptions.boundLoadFailed')}</p><Button variant="outline" size="sm" onClick={() => void preselectBoundAccounts()} disabled={loadingBound}>{t('proxySubscriptions.retryBound')}</Button></div>}
+        {boundError && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{t('proxySubscriptions.boundLoadFailed')}</p><Button variant="outline" size="sm" onClick={() => setBoundAttempt(n => n + 1)} disabled={loadingBound}>{t('proxySubscriptions.retryBound')}</Button></div>}
         <p className="text-sm">{t('proxySubscriptions.selectedCount', { count: selected.size })}</p>
         {boundAccounts.length > 0 && <div className="space-y-1">
           <p className="text-xs text-muted-foreground">{t('proxySubscriptions.boundAccounts')}</p>
@@ -125,8 +119,8 @@ function ProxyAccessEditor({ proxy, onClose, onSaved }: Omit<Props, 'proxy'> & {
           {!loading && accounts.length === 0 && <p className="p-2 text-sm text-muted-foreground">{t('proxySubscriptions.noAccounts')}</p>}
         </div>
         <div className="flex items-center justify-between gap-2 text-sm"><Button variant="outline" size="sm" disabled={page <= 1 || loading || saving} onClick={() => setPage(page - 1)}>{t('proxySubscriptions.previous')}</Button><span>{t('proxySubscriptions.page', { page, total })}</span><Button variant="outline" size="sm" disabled={page * 20 >= total || loading || saving} onClick={() => setPage(page + 1)}>{t('proxySubscriptions.next')}</Button></div>
-        {!loadingBound && !boundError && selected.size === 0 && <p className="text-sm text-destructive">{t('proxySubscriptions.requireAccount')}</p>}
-      </>}
+        {exclusive && !selectionBlocked && selected.size === 0 && <p className="text-sm text-muted-foreground">{t('proxySubscriptions.reservedHint')}</p>}
+      </div>
       {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
     </div>
   </Modal>

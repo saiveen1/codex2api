@@ -80,12 +80,13 @@ const save = page => page.getByRole('button', { name: 'Save', exact: true })
 const bound = (page, id = 10000) => page.getByRole('checkbox', { name: `bound${id}@example.invalid #${id}`, exact: true })
 const other = (page, id = 200) => page.getByRole('checkbox', { name: `other${id}@example.invalid #${id}`, exact: true })
 
-test('shared to exclusive preselects the bound account even when the cached count is zero', async t => {
+test('a bound account automatically makes the proxy exclusive even when the cached count is zero', async t => {
   const page = await fixture(t)
-  assert.deepEqual(await page.evaluate(() => window.boundRequests), [])
-  await exclusive(page).check()
   await page.getByText('1 selected', { exact: true }).waitFor()
   assert.equal(await bound(page).isChecked(), true)
+  assert.equal(await bound(page).isDisabled(), true)
+  assert.equal(await exclusive(page).isChecked(), true)
+  assert.equal(await exclusive(page).isDisabled(), true)
   assert.equal(await save(page).isEnabled(), true)
   assert.deepEqual(await page.evaluate(() => window.writes), [])
   await save(page).click()
@@ -95,7 +96,6 @@ test('shared to exclusive preselects the bound account even when the cached coun
 
 test('all bound pages are included and an existing saved allowlist is preserved', async t => {
   const page = await fixture(t, { count: 101, allowed: [42, 10000] })
-  await exclusive(page).check()
   await page.getByText('102 selected', { exact: true }).waitFor()
   await save(page).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
@@ -105,17 +105,14 @@ test('all bound pages are included and an existing saved allowlist is preserved'
   assert.equal(actual.ids.includes(42) && actual.ids.includes(10100), true)
 })
 
-test('manual deselection survives search, pagination, and toggling modes', async t => {
-  const page = await fixture(t)
-  await exclusive(page).check()
-  await page.getByText('1 selected', { exact: true }).waitFor()
-  await bound(page).uncheck(); await other(page).check()
+test('selecting an account sets exclusive without a separate toggle; choices survive search and pagination', async t => {
+  const page = await fixture(t, { count: 0 })
+  await other(page).check()
+  assert.equal(await exclusive(page).isChecked(), true)
   await page.getByRole('button', { name: 'Next', exact: true }).click()
   await other(page, 220).waitFor(); await other(page, 220).check()
   await page.getByRole('textbox', { name: 'Search accounts' }).fill('fixture')
   await other(page).waitFor()
-  await exclusive(page).uncheck(); await exclusive(page).check()
-  assert.equal(await bound(page).isChecked(), false)
   assert.equal(await other(page).isChecked(), true)
   assert.equal(await page.evaluate(() => window.boundRequests.length), 1)
   await save(page).click()
@@ -123,18 +120,15 @@ test('manual deselection survives search, pagination, and toggling modes', async
   assert.deepEqual(await page.evaluate(() => window.writes[0].body.allowed_account_ids.sort((a, b) => a - b)), [200, 220])
 })
 
-test('empty bindings require manual selection and existing exclusive access never auto-expands', async t => {
+test('an empty exclusive proxy can be reserved, and existing access remains intact', async t => {
   const empty = await fixture(t, { count: 0 })
   await exclusive(empty).check()
-  await empty.getByText('Select at least one account for exclusive access.', { exact: true }).waitFor()
-  assert.equal(await save(empty).isDisabled(), true)
-  await other(empty).check()
-  assert.equal(await save(empty).isEnabled(), true)
-  const existing = await fixture(t, { exclusive: true, allowed: [200] })
+  await save(empty).click()
+  await empty.getByRole('dialog').waitFor({ state: 'hidden' })
+  assert.deepEqual(await empty.evaluate(() => window.writes[0].body), { exclusive: true, allowed_account_ids: [] })
+  const existing = await fixture(t, { count: 0, exclusive: true, allowed: [200] })
   await other(existing).waitFor()
   assert.equal(await other(existing).isChecked(), true)
-  await exclusive(existing).uncheck(); await exclusive(existing).check()
-  assert.deepEqual(await existing.evaluate(() => window.boundRequests), [])
   await save(existing).click()
   await existing.getByRole('dialog').waitFor({ state: 'hidden' })
   assert.deepEqual(await existing.evaluate(() => window.writes[0].body.allowed_account_ids), [200])
@@ -142,7 +136,6 @@ test('empty bindings require manual selection and existing exclusive access neve
 
 test('loading blocks save and edits; partial failure applies nothing and can be retried', async t => {
   const page = await fixture(t, { count: 101, allowed: [42], hold: true, failPage: 2 })
-  await exclusive(page).check()
   await page.getByRole('status').waitFor()
   assert.equal(await save(page).isDisabled(), true)
   assert.equal(await other(page).isDisabled(), true)
@@ -161,7 +154,6 @@ test('loading blocks save and edits; partial failure applies nothing and can be 
 
 test('incomplete binding pagination fails closed rather than saving a partial selection', async t => {
   const page = await fixture(t, { count: 101, incomplete: true })
-  await exclusive(page).check()
   await page.getByRole('alert').waitFor()
   assert.equal(await save(page).isDisabled(), true)
   assert.equal(await bound(page).count(), 0)
@@ -170,14 +162,10 @@ test('incomplete binding pagination fails closed rather than saving a partial se
 
 test('closing or switching proxies discards late binding responses and resets the editor', async t => {
   const page = await fixture(t, { hold: true })
-  await exclusive(page).check()
   await page.waitForFunction(() => Boolean(window.releaseBound))
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
   await page.evaluate(() => { window.setFixtureProxy({ id: 8, url: 'http://proxy.test:20008', exclusive: false, allowed_account_ids: [] }); window.holdBound = false; window.releaseBound() })
-  await exclusive(page).waitFor()
-  assert.equal(await exclusive(page).isChecked(), false)
-  await exclusive(page).check()
   await page.getByText('2 selected', { exact: true }).waitFor()
   await save(page).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })

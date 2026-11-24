@@ -45,7 +45,7 @@ func TestProxyAccessEndpointValidationConflictAndReload(t *testing.T) {
 		return r
 	}
 	path := fmt.Sprintf("/proxies/%d/access", id)
-	for _, body := range []string{`{}`, `{"exclusive":true}`, `{"exclusive":true,"allowed_account_ids":null}`, `{"exclusive":true,"allowed_account_ids":[]}`, `{"exclusive":true,"allowed_account_ids":[0]}`, `{"exclusive":true,"allowed_account_ids":[99999999]}`} {
+	for _, body := range []string{`{}`, `{"exclusive":true}`, `{"exclusive":true,"allowed_account_ids":null}`, `{"exclusive":true,"allowed_account_ids":[0]}`, `{"exclusive":true,"allowed_account_ids":[99999999]}`} {
 		if r := patch(path, body); r.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d response=%s", body, r.Code, r.Body.String())
 		}
@@ -58,6 +58,9 @@ func TestProxyAccessEndpointValidationConflictAndReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.ApplyAccountProxyURL(b, "")
+	if r := patch(path, `{"exclusive":true,"allowed_account_ids":[]}`); r.Code != http.StatusOK || store.NextProxy() != "" || store.ProxyAllowedForAccount(a, url) {
+		t.Fatalf("empty reservation status=%d response=%s", r.Code, r.Body.String())
+	}
 	r := patch(path, body)
 	var row database.ProxyRow
 	if err := json.Unmarshal(r.Body.Bytes(), &row); err != nil || r.Code != http.StatusOK || !row.Exclusive || len(row.AllowedAccountIDs) != 1 {

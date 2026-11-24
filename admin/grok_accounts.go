@@ -307,6 +307,9 @@ func (h *Handler) UpdateGrokAccount(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !h.validateManualProxyBinding(c, ctx, []int64{id}, req.ProxyURL) {
+		return
+	}
 	apiKey := strings.TrimSpace(req.APIKey)
 
 	credentials := map[string]interface{}{
@@ -325,7 +328,13 @@ func (h *Handler) UpdateGrokAccount(c *gin.Context) {
 	// proxy_url 是独立列，不在 credentials 里；UpdateCredentials 不会写它。
 	// 编辑是整体重写语义（空值即清空代理），须单独持久化，否则代理只落到内存
 	// store，重载 / 重启 / 后台刷新后被 DB 旧值覆盖，表现为"添加代理不生效"。
-	if err := h.db.UpdateAccountProxyURL(ctx, id, req.ProxyURL); err != nil {
+	if err := h.commitProxyBindings([]string{req.ProxyURL}, func() error {
+		return h.db.UpdateAccountProxyURL(ctx, id, req.ProxyURL)
+	}); err != nil {
+		if errors.Is(err, database.ErrProxyAccessDenied) {
+			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
+			return
+		}
 		writeInternalError(c, err)
 		return
 	}
@@ -749,7 +758,18 @@ func (h *Handler) BatchImportGrokAccounts(c *gin.Context) {
 			if fileProxyURL != "" && h.accountHasProxyBinding(ctx, duplicateID) {
 				reauthProxyURL = ""
 			}
-			reauth, reauthErr := h.db.ReauthGrokAccount(ctx, duplicateID, credentials, "", reauthProxyURL)
+			var reauth database.GrokReauthResult
+			write := func() error {
+				var err error
+				reauth, err = h.db.ReauthGrokAccount(ctx, duplicateID, credentials, "", reauthProxyURL)
+				return err
+			}
+			var reauthErr error
+			if reauthProxyURL != "" {
+				reauthErr = h.commitProxyBindings([]string{reauthProxyURL}, write)
+			} else {
+				reauthErr = write()
+			}
 			if reauthErr != nil {
 				item.Error = fmt.Sprintf("合并到既有账号 %d 失败: %v", duplicateID, reauthErr)
 				items = append(items, item)

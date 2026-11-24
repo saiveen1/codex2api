@@ -447,7 +447,9 @@ func (h *Handler) upsertOAuthIdentityAccountWithRuntime(ctx context.Context, nam
 		if effectiveProxyURL == "" || (proxyPolicy == preserveAccountProxy && existingProxyURL != "") {
 			effectiveProxyURL = existingProxyURL
 		}
-		if err := h.db.UpdateOAuthAccountCredentials(ctx, duplicateID, tokenCredentialMap(seed), effectiveProxyURL); err != nil {
+		if err := h.commitProxyBindings([]string{effectiveProxyURL}, func() error {
+			return h.db.UpdateOAuthAccountCredentials(ctx, duplicateID, tokenCredentialMap(seed), effectiveProxyURL)
+		}); err != nil {
 			return 0, false, nil, err
 		}
 		// 重新导入有效凭证时，若该账号此前处于错误/封禁（401）态，清除错误状态，
@@ -694,7 +696,9 @@ func (h *Handler) UpdateOAuthAccountCode(c *gin.Context) {
 		writeError(c, http.StatusConflict, oauthIdentityDuplicateMessage(duplicateID))
 		return
 	}
-	if err := h.db.UpdateOAuthAccountCredentials(ctx, id, tokenCredentialMap(seed), proxyURL); err != nil {
+	if err := h.commitProxyBindings([]string{proxyURL}, func() error {
+		return h.db.UpdateOAuthAccountCredentials(ctx, id, tokenCredentialMap(seed), proxyURL)
+	}); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return

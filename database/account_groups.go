@@ -614,7 +614,7 @@ func (db *DB) UpdateAccountProxyURL(ctx context.Context, id int64, proxyURL stri
 			return err
 		}
 		defer tx.Rollback()
-		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), id, proxyURL); err != nil {
+		if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), []int64{id}, proxyURL, true, false); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE accounts SET proxy_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, strings.TrimSpace(proxyURL), id)

@@ -705,6 +705,12 @@ func (db *DB) ReauthGrokAccount(ctx context.Context, accountID int64, credential
 				return updateErr
 			}
 		}
+		if proxyURL != "" {
+			// Import merges may promote an accepted shared exit, but may not claim a reservation.
+			if err := manualProxyBindingTx(ctx, tx, db.isSQLite(), []int64{accountID}, proxyURL, true, false); err != nil {
+				return err
+			}
+		}
 		return tx.Commit()
 	})
 	return result, err

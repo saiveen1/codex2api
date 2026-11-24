@@ -934,7 +934,9 @@ func (h *Handler) mergeRefreshedDuplicateIntoExistingContext(parent context.Cont
 	if proxyURL == "" {
 		proxyURL = strings.TrimSpace(oldRow.ProxyURL)
 	}
-	if err := h.db.UpdateOAuthAccountCredentials(ctx, oldID, updates, proxyURL); err != nil {
+	if err := h.commitProxyBindings([]string{proxyURL}, func() error {
+		return h.db.UpdateOAuthAccountCredentials(ctx, oldID, updates, proxyURL)
+	}); err != nil {
 		log.Printf("合并导入账号 %d 凭证到已有账号 %d 失败: %v", newID, oldID, err)
 		return false
 	}
@@ -2914,12 +2916,23 @@ func (h *Handler) UpdateAccountScheduler(c *gin.Context) {
 		}
 	}
 
-	if err := h.db.UpdateAccountSchedulerMetadata(ctx, id, update.ScoreBiasOverride, update.BaseConcurrencyOverride, update.SkipWarmTier, update.AllowedAPIKeyIDs, database.OptionalStringSlice{Set: update.Tags.Set, Values: update.Tags.Values}, update.GroupIDs, update.ProxyURL, update.CredentialUpdates); err != nil {
+	if update.ProxyURL.Set && !h.validateManualProxyBinding(c, ctx, []int64{id}, update.ProxyURL.Value) {
+		return
+	}
+	write := func() error {
+		return h.db.UpdateAccountSchedulerMetadata(ctx, id, update.ScoreBiasOverride, update.BaseConcurrencyOverride, update.SkipWarmTier, update.AllowedAPIKeyIDs, database.OptionalStringSlice{Set: update.Tags.Set, Values: update.Tags.Values}, update.GroupIDs, update.ProxyURL, update.CredentialUpdates)
+	}
+	if update.ProxyURL.Set {
+		err = h.commitProxyBindings([]string{update.ProxyURL.Value}, write)
+	} else {
+		err = write()
+	}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		if errors.Is(err, database.ErrProxyAccessDenied) {
+		if errors.Is(err, database.ErrProxyAccessDenied) || errors.Is(err, database.ErrProxyAccessConflict) {
 			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
 			return
 		}
@@ -4765,7 +4778,16 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 		return
 	}
 
-	if err := h.db.UpdateOpenAIResponsesAccount(ctx, id, name, credentials, req.ProxyURL); err != nil {
+	if !h.validateManualProxyBinding(c, ctx, []int64{id}, req.ProxyURL) {
+		return
+	}
+	if err := h.commitProxyBindings([]string{req.ProxyURL}, func() error {
+		return h.db.UpdateOpenAIResponsesAccount(ctx, id, name, credentials, req.ProxyURL)
+	}); err != nil {
+		if errors.Is(err, database.ErrProxyAccessDenied) || errors.Is(err, database.ErrProxyAccessConflict) {
+			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
+			return
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
@@ -7159,20 +7181,31 @@ func (h *Handler) BatchUpdateAccounts(c *gin.Context) {
 		}
 	}
 
-	updatedIDs, err := h.db.BatchUpdateAccountMetadata(ctx, ids, database.BatchAccountMetadataUpdate{
-		Enabled:                 enabled,
-		Locked:                  locked,
-		ScoreBiasOverride:       schedulerUpdate.ScoreBiasOverride,
-		BaseConcurrencyOverride: schedulerUpdate.BaseConcurrencyOverride,
-		SkipWarmTier:            schedulerUpdate.SkipWarmTier,
-		AllowedAPIKeyIDs:        schedulerUpdate.AllowedAPIKeyIDs,
-		Tags:                    database.OptionalStringSlice{Set: schedulerUpdate.Tags.Set, Values: schedulerUpdate.Tags.Values},
-		GroupIDs:                schedulerUpdate.GroupIDs,
-		ProxyURL:                schedulerUpdate.ProxyURL,
-		CredentialUpdates:       schedulerUpdate.CredentialUpdates,
-	})
+	// The database checks the active subset together; stale IDs remain skippable.
+	var updatedIDs []int64
+	write := func() error {
+		var writeErr error
+		updatedIDs, writeErr = h.db.BatchUpdateAccountMetadata(ctx, ids, database.BatchAccountMetadataUpdate{
+			Enabled:                 enabled,
+			Locked:                  locked,
+			ScoreBiasOverride:       schedulerUpdate.ScoreBiasOverride,
+			BaseConcurrencyOverride: schedulerUpdate.BaseConcurrencyOverride,
+			SkipWarmTier:            schedulerUpdate.SkipWarmTier,
+			AllowedAPIKeyIDs:        schedulerUpdate.AllowedAPIKeyIDs,
+			Tags:                    database.OptionalStringSlice{Set: schedulerUpdate.Tags.Set, Values: schedulerUpdate.Tags.Values},
+			GroupIDs:                schedulerUpdate.GroupIDs,
+			ProxyURL:                schedulerUpdate.ProxyURL,
+			CredentialUpdates:       schedulerUpdate.CredentialUpdates,
+		})
+		return writeErr
+	}
+	if schedulerUpdate.ProxyURL.Set {
+		err = h.commitProxyBindings([]string{schedulerUpdate.ProxyURL.Value}, write)
+	} else {
+		err = write()
+	}
 	if err != nil {
-		if errors.Is(err, database.ErrProxyAccessDenied) {
+		if errors.Is(err, database.ErrProxyAccessDenied) || errors.Is(err, database.ErrProxyAccessConflict) {
 			writeError(c, http.StatusBadRequest, "该代理仅允许指定账号使用，请先调整节点账号权限")
 			return
 		}
@@ -13833,7 +13866,12 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 		newURL = strings.TrimSpace(*req.URL)
 	}
 	if newURL != "" && newURL != oldURL {
-		reboundIDs, rebindErr := h.db.RebindAccountProxyURLs(ctx, oldURL, newURL)
+		var reboundIDs []int64
+		rebindErr := h.commitProxyBindings([]string{newURL}, func() error {
+			var err error
+			reboundIDs, err = h.db.RebindAccountProxyURLs(ctx, oldURL, newURL)
+			return err
+		})
 		if rebindErr != nil {
 			writeError(c, http.StatusInternalServerError, "更新代理绑定失败")
 			return

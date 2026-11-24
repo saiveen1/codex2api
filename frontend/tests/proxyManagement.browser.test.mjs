@@ -52,9 +52,9 @@ async function fixture(t, empty = false) {
       if (method !== 'GET') throw new Error('Unexpected production mutation in read-only fixture')
       let body = {}
       if (u.pathname.endsWith('/proxies')) body = { proxies: [
-        { id: 1, label: 'Shared bound node', url: 'http://proxy-one.example:8080', enabled: true, test_status: 'untested', bound_count: empty ? 0 : 2 },
-        { id: 2, label: 'Free node', url: 'http://proxy-two.example:8080', enabled: true, test_status: 'untested', bound_count: 0 },
-        { id: 3, label: 'Disabled bound node', url: 'http://proxy-three.example:8080', enabled: false, test_status: 'untested', bound_count: empty ? 0 : 1 },
+        { id: 1, label: 'Shared bound node', url: 'http://proxy-one.example:8080', enabled: true, exclusive: false, test_status: 'untested', bound_count: empty ? 0 : 2 },
+        { id: 2, label: 'Free node', url: 'http://proxy-two.example:8080', enabled: true, exclusive: true, test_status: 'untested', bound_count: 0 },
+        { id: 3, label: 'Disabled bound node', url: 'http://proxy-three.example:8080', enabled: false, exclusive: true, test_status: 'untested', bound_count: empty ? 0 : 1 },
       ] }
       if (u.pathname.endsWith('/settings')) body = { proxy_pool_enabled: false }
       if (u.pathname.endsWith('/profiles')) body = { profiles: [] }
@@ -95,4 +95,18 @@ test('bound filter remains usable with no bound accounts', async t => {
   assert.equal(await tile.getAttribute('aria-pressed'), 'true')
   assert.equal(await page.getByRole('table').count(), 0)
   assert.equal(await page.getByText('Free node', { exact: true }).count(), 0)
+})
+
+test('access filter treats a reserved zero-binding proxy as exclusive, not shared', async t => {
+  const page = await fixture(t)
+  const table = page.getByRole('table')
+  const filter = page.locator('button[aria-haspopup="listbox"]').filter({ hasText: /全部用途|专用|共享/ })
+  await filter.click()
+  await page.getByRole('option', { name: '专用', exact: true }).click()
+  await table.getByText('Free node', { exact: true }).waitFor()
+  assert.equal(await table.getByText('Shared bound node', { exact: true }).count(), 0)
+  await filter.click()
+  await page.getByRole('option', { name: '共享', exact: true }).click()
+  await table.getByText('Shared bound node', { exact: true }).waitFor()
+  assert.equal(await table.getByText('Free node', { exact: true }).count(), 0)
 })
