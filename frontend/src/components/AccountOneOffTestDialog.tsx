@@ -17,6 +17,7 @@ export default function AccountOneOffTestDialog({ account, kind, onClose }: {
   const { showToast } = useToast()
   const [options, setOptions] = useState<Awaited<ReturnType<typeof api.getQualityTestOptions>>>()
   const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const busy = useRef(false)
@@ -29,6 +30,7 @@ export default function AccountOneOffTestDialog({ account, kind, onClose }: {
       if (controller.signal.aborted) return
       setOptions(result)
       setModel(result.models.includes(preferredOneOffModel) ? preferredOneOffModel : '')
+      setEffort(result.reasoning_efforts.includes('high') ? 'high' : result.reasoning_efforts[0] ?? '')
     }).catch(e => { if (!controller.signal.aborted) setError(getErrorMessage(e)) })
     return () => controller.abort()
   }, [account.id])
@@ -39,7 +41,7 @@ export default function AccountOneOffTestDialog({ account, kind, onClose }: {
     setSubmitting(true)
     setError('')
     try {
-      const id = await submitAccountOneOffTest(account.id, kind, model, options.reasoning_efforts, preset)
+      const id = await submitAccountOneOffTest(account.id, kind, model, effort, preset)
       showToast(t(intelligence ? 'accounts.onceIntelligenceStarted' : 'accounts.onceQualityStarted', { id }))
       onClose()
     } catch (e) { setError(getErrorMessage(e)) }
@@ -62,6 +64,13 @@ export default function AccountOneOffTestDialog({ account, kind, onClose }: {
           placeholder={t(!options && !error ? 'qualityTest.loadingModels' : 'accounts.onceChooseModel')} />
         {options?.models.length === 0 && <p className="text-muted-foreground">{t('qualityTest.noModels')}</p>}
       </div>
+      {!intelligence && options && <div className="space-y-1.5">
+        <label htmlFor="once-test-effort">{t('qualityTest.effort')}</label>
+        <Select id="once-test-effort" value={effort} onValueChange={setEffort}
+          disabled={options.reasoning_efforts.length < 2 || submitting}
+          options={options.reasoning_efforts.map(value => ({ value, label: t(`qualityTest.efforts.${value || 'default'}`) }))} />
+        {options.reasoning_efforts.length === 1 && <p className="text-muted-foreground">{t('qualityTest.fixedEffort')}</p>}
+      </div>}
       <p className="text-muted-foreground">{t('qualityTest.runHint')}</p>
       {error && <p role="alert" className="text-destructive">{error}</p>}
     </div>
