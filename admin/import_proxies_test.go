@@ -539,6 +539,48 @@ func TestImportAccountsCommonBindsAndRegistersFileProxy(t *testing.T) {
 	}
 }
 
+func TestImportAccountsCommonClaimsManagedProxyImmediately(t *testing.T) {
+	handler, store, db := newImportEndToEndHandler(t)
+	store.SetLazyMode(true)
+	ctx := context.Background()
+	const proxyURL = "http://claim-import.example:8080"
+	proxyID, err := db.InsertProxy(ctx, proxyURL, "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReloadProxyPool(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.NextProxy(); got != proxyURL {
+		t.Fatalf("initial shared pool = %q, want %q", got, proxyURL)
+	}
+	settings := importSettings{defaultProxyURL: proxyURL}
+	first := runImportAccountsCommon(t, handler, []importToken{{refreshToken: "claim-import-1"}}, settings)
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"success":1`) {
+		t.Fatalf("first import: %d %s", first.Code, first.Body.String())
+	}
+	owner := accountRowByRefreshToken(t, db, "claim-import-1")
+	proxy, err := db.GetProxy(ctx, proxyID)
+	if err != nil || !proxy.Exclusive || !reflect.DeepEqual(proxy.AllowedAccountIDs, []int64{owner.ID}) || owner.ProxyURL != proxyURL {
+		t.Fatalf("claimed proxy=%+v owner=%+v err=%v", proxy, owner, err)
+	}
+	if !store.ProxyAllowedForAccount(owner.ID, proxyURL) || store.ProxyAllowedForAccount(owner.ID+1, proxyURL) || store.NextProxy() != "" {
+		t.Fatal("claim was not immediately published to runtime policy and shared pool")
+	}
+	second := runImportAccountsCommon(t, handler, []importToken{{refreshToken: "claim-import-2"}}, settings)
+	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"type":"complete"`) || !strings.Contains(second.Body.String(), `"success":0`) || !strings.Contains(second.Body.String(), `"failed":1`) {
+		t.Fatalf("second import: %d %s", second.Code, second.Body.String())
+	}
+	rows, err := db.ListActive(ctx)
+	if err != nil || len(rows) != 1 || rows[0].ID != owner.ID {
+		t.Fatalf("accounts after denied import=%+v err=%v", rows, err)
+	}
+	proxy, err = db.GetProxy(ctx, proxyID)
+	if err != nil || !proxy.Exclusive || !reflect.DeepEqual(proxy.AllowedAccountIDs, []int64{owner.ID}) || store.NextProxy() != "" {
+		t.Fatalf("policy changed after denied import: proxy=%+v err=%v", proxy, err)
+	}
+}
+
 // 开关关闭时文件内代理完全不生效:不注册、不绑定,表单代理照常生效。
 func TestImportAccountsCommonIgnoresFileProxyWhenSwitchOff(t *testing.T) {
 	handler, _, db := newImportEndToEndHandler(t)

@@ -171,6 +171,10 @@ func (db *DB) ValidateProxyAccountAccess(ctx context.Context, accountID int64, p
 // manualProxyBindingTx checks the complete assignment before reserving a managed proxy.
 // The caller must roll back on any later failure. write=false is a read-only preflight.
 func manualProxyBindingTx(ctx context.Context, tx *sql.Tx, sqlite bool, accountIDs []int64, proxyURL string, write, automatic bool) error {
+	return applyProxyBindingTx(ctx, tx, sqlite, accountIDs, proxyURL, write, automatic, nil)
+}
+
+func applyProxyBindingTx(ctx context.Context, tx *sql.Tx, sqlite bool, accountIDs []int64, proxyURL string, write, automatic bool, promoted *ProxyRow) error {
 	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" || len(accountIDs) == 0 {
 		return nil
@@ -244,6 +248,10 @@ func manualProxyBindingTx(ctx context.Context, tx *sql.Tx, sqlite bool, accountI
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE proxies SET exclusive = $1, allowed_account_ids = $2 WHERE id = $3`, true, string(encoded), p.ID)
+	if err == nil && promoted != nil {
+		p.Exclusive, p.AllowedAccountIDs = true, ids
+		*promoted = *p
+	}
 	return err
 }
 

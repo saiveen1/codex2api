@@ -131,6 +131,32 @@ func TestCommitProxyBindingsPublishesOrQuarantines(t *testing.T) {
 	}
 }
 
+func TestDuplicateGrokImportDoesNotPublishRolledBackProxy(t *testing.T) {
+	db := newProxyPoolReloadTestDB(t)
+	ctx := t.Context()
+	const url = "http://duplicate-import.example:8080"
+	proxyID, err := db.InsertProxy(ctx, url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(db, nil, nil)
+	t.Cleanup(s.Stop)
+	s.SetProxyPoolEnabled(true)
+	credentials := map[string]any{"grok_principal_id": "synthetic-duplicate"}
+	owner, _, err := db.InsertGrokAccountIfAbsent(ctx, "first", credentials, "", true)
+	if err != nil || owner <= 0 {
+		t.Fatalf("initial import: id=%d err=%v", owner, err)
+	}
+	id, duplicate, err := db.InsertGrokAccountIfAbsent(ctx, "duplicate", credentials, url, true)
+	if err != nil || id != 0 || duplicate != owner {
+		t.Fatalf("duplicate import: id=%d duplicate=%d err=%v", id, duplicate, err)
+	}
+	row, err := db.GetProxy(ctx, proxyID)
+	if err != nil || row.Exclusive || s.NextProxy() != url || !s.ProxyAllowedForAccount(0, url) {
+		t.Fatalf("rolled back reservation reached the pool: %#v %v", row, err)
+	}
+}
+
 func TestProxyAccessUpdatePublishesBeforeReloadFailure(t *testing.T) {
 	db, err := database.New("sqlite", filepath.Join(t.TempDir(), "access.sqlite"))
 	if err != nil {

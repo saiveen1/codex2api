@@ -86,8 +86,12 @@ func TestProxyAccessValidationConflictAndAtomicAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := db.InsertAccount(ctx, "b", "rt-b", " "+proxyURL+" ")
+	b, err := db.InsertAccount(ctx, "b", "rt-b", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Synthetic legacy shared pin, predating automatic reservation.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id=$2`, " "+proxyURL+" ", b); err != nil {
 		t.Fatal(err)
 	}
 	for _, ids := range [][]int64{{0}, {-1}, {99999999}} {
@@ -239,8 +243,12 @@ func TestManualProxyBindingReservationAndAtomicBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := db.InsertAccount(ctx, "a", "a", url)
+	a, err := db.InsertAccount(ctx, "a", "a", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Synthetic legacy shared pin, predating automatic reservation.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id=$2`, url, a); err != nil {
 		t.Fatal(err)
 	}
 	b, err := db.InsertAccount(ctx, "b", "b", "")
@@ -357,8 +365,12 @@ func TestAutomaticProxyBindingAndReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := db.InsertAccount(ctx, "old", "old", legacy)
+	old, err := db.InsertAccount(ctx, "old", "old", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Reconciliation operates on synthetic historical shared pins.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id=$2`, legacy, old); err != nil {
 		t.Fatal(err)
 	}
 	global := "http://global-binding.example:8080"
@@ -366,7 +378,11 @@ func TestAutomaticProxyBindingAndReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.InsertAccount(ctx, "global", "global", global); err != nil {
+	globalAccount, err := db.InsertAccount(ctx, "global", "global", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id=$2`, global, globalAccount); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.ExecContext(ctx, `INSERT INTO system_settings (id,proxy_url) VALUES (1,$1) ON CONFLICT(id) DO UPDATE SET proxy_url = excluded.proxy_url`, global); err != nil {
@@ -387,6 +403,115 @@ func TestAutomaticProxyBindingAndReconcile(t *testing.T) {
 	}
 	row, err = db.GetProxy(ctx, globalID)
 	if err != nil || row.Exclusive {
+		t.Fatalf("global changed: %#v %v", row, err)
+	}
+}
+
+func TestImportedProxyBinding(t *testing.T) {
+	ctx := context.Background()
+	inserts := map[string]func(*DB, string) (int64, error){
+		"refresh":     func(db *DB, url string) (int64, error) { return db.InsertAccount(ctx, "new", "rt", url) },
+		"access":      func(db *DB, url string) (int64, error) { return db.InsertATAccount(ctx, "new", "at", url) },
+		"credentials": func(db *DB, url string) (int64, error) { return db.InsertAccountWithCredentials(ctx, "new", nil, url) },
+		"pending": func(db *DB, url string) (int64, error) {
+			return db.InsertPendingAccountWithCredentials(ctx, "new", nil, url, "", nil)
+		},
+		"responses": func(db *DB, url string) (int64, error) { return db.InsertOpenAIResponsesAccount(ctx, "new", nil, url) },
+		"upstream": func(db *DB, url string) (int64, error) {
+			return db.InsertAccountWithUpstream(ctx, "new", "xai", "api", nil, url)
+		},
+		"gateway": func(db *DB, url string) (int64, error) {
+			return db.InsertOAuthGatewayAccount(ctx, "new", nil, url, nil)
+		},
+		"grok": func(db *DB, url string) (int64, error) {
+			id, _, err := db.InsertGrokAccountIfAbsent(ctx, "new", map[string]any{"refresh_token": "rt"}, url, true)
+			return id, err
+		},
+	}
+	for name, insert := range inserts {
+		t.Run(name, func(t *testing.T) {
+			db := newProxyTestDB(t)
+			const url = "http://import.example:8080"
+			proxyID, err := db.InsertProxy(ctx, url, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, err := insert(db, url)
+			if err != nil || id <= 0 {
+				t.Fatalf("first import: id=%d err=%v", id, err)
+			}
+			row, err := db.GetProxy(ctx, proxyID)
+			if err != nil || !row.Exclusive || !slices.Equal(row.AllowedAccountIDs, []int64{id}) {
+				t.Fatalf("binding: %#v %v", row, err)
+			}
+			if _, err := insert(db, url); !errors.Is(err, ErrProxyAccessDenied) {
+				t.Fatalf("second import: %v", err)
+			}
+			if count, err := db.CountAll(ctx); err != nil || count != 1 {
+				t.Fatalf("rollback: %d %v", count, err)
+			}
+		})
+	}
+}
+
+func TestImportedProxyBindingRollback(t *testing.T) {
+	db := newProxyTestDB(t)
+	ctx := context.Background()
+	const url = "http://rollback-import.example:8080"
+	id, err := db.InsertProxy(ctx, url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `CREATE TRIGGER fail_import_family BEFORE UPDATE OF credential_family_id ON accounts BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertAccount(ctx, "new", "rt", url); err == nil {
+		t.Fatal("expected failure")
+	}
+	row, err := db.GetProxy(ctx, id)
+	if err != nil || row.Exclusive || len(row.AllowedAccountIDs) != 0 {
+		t.Fatalf("proxy not rolled back: %#v %v", row, err)
+	}
+	if count, err := db.CountAll(ctx); err != nil || count != 0 {
+		t.Fatalf("account not rolled back: %d %v", count, err)
+	}
+}
+
+func TestImportedProxyBindingConflictsAndCustomURL(t *testing.T) {
+	db := newProxyTestDB(t)
+	ctx := context.Background()
+	const reserved = "http://reserved-import.example:8080"
+	const global = "http://global-import.example:8080"
+	reservedID, err := db.InsertProxy(ctx, reserved, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpdateProxyAccess(ctx, reservedID, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	globalID, err := db.InsertProxy(ctx, global, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `INSERT INTO system_settings (id,proxy_url) VALUES (1,$1) ON CONFLICT(id) DO UPDATE SET proxy_url=excluded.proxy_url`, global); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertAccount(ctx, "reserved", "rt1", reserved); !errors.Is(err, ErrProxyAccessDenied) {
+		t.Fatalf("reserved: %v", err)
+	}
+	if _, err := db.InsertAccount(ctx, "global", "rt2", global); !errors.Is(err, ErrProxyAccessConflict) {
+		t.Fatalf("global: %v", err)
+	}
+	if count, err := db.CountAll(ctx); err != nil || count != 0 {
+		t.Fatalf("failed imports persisted: %d %v", count, err)
+	}
+	for _, url := range []string{"", "http://custom-import.example:8080"} {
+		if _, err := db.InsertAccount(ctx, "custom", "rt", url); err != nil {
+			t.Fatalf("custom %q: %v", url, err)
+		}
+	}
+	row, err := db.GetProxy(ctx, globalID)
+	if err != nil || row.Exclusive || len(row.AllowedAccountIDs) != 0 {
 		t.Fatalf("global changed: %#v %v", row, err)
 	}
 }

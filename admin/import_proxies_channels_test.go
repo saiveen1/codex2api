@@ -299,7 +299,7 @@ func TestBatchImportGrokProxyOverwriteSemantics(t *testing.T) {
 	})
 }
 
-// 一批文件里的重复代理只注册一条,非法的跳过并让对应账号退回表单代理。
+// 一批文件里的重复代理只注册一条；第二个新账号不得认领，非法代理退回表单代理。
 func TestBatchImportGrokDedupsAndFallsBackOnInvalidProxy(t *testing.T) {
 	handler, _, db := newGrokProxyImportHandler(t)
 
@@ -312,8 +312,8 @@ func TestBatchImportGrokDedupsAndFallsBackOnInvalidProxy(t *testing.T) {
 		"proxy_url":    "http://127.0.0.1:7070",
 		"import_proxy": true,
 	})
-	if resp.Imported != 3 {
-		t.Fatalf("imported = %d, want 3 (items=%+v)", resp.Imported, resp.Items)
+	if resp.Imported != 2 || len(resp.Items) != 3 || !resp.Items[0].OK || resp.Items[1].OK || !strings.Contains(resp.Items[1].Error, database.ErrProxyAccessDenied.Error()) || !resp.Items[2].OK {
+		t.Fatalf("imported = %d, want first and fallback accounts only (items=%+v)", resp.Imported, resp.Items)
 	}
 	if resp.ProxiesImported == nil || *resp.ProxiesImported != 1 {
 		t.Fatalf("proxies_imported = %v, want 1 after dedup", resp.ProxiesImported)
@@ -326,7 +326,6 @@ func TestBatchImportGrokDedupsAndFallsBackOnInvalidProxy(t *testing.T) {
 	}
 	for _, tc := range []struct{ token, want string }{
 		{"rt-a", "http://127.0.0.1:8080"},
-		{"rt-b", "http://127.0.0.1:8080"},
 		// 非法代理被清空后必须退回表单值，而不是绑着一个没进池的 URL。
 		{"rt-c", "http://127.0.0.1:7070"},
 	} {

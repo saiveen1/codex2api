@@ -558,52 +558,64 @@ func (db *DB) InsertGrokAccountIfAbsent(ctx context.Context, name string, creden
 		return 0, 0, err
 	}
 
-	err = db.withSQLiteWriteLock(ctx, func() error {
-		tx, beginErr := db.conn.BeginTx(ctx, nil)
-		if beginErr != nil {
-			return beginErr
-		}
-		defer tx.Rollback()
+	err = db.withImportedProxyBinding(proxyURL, func(promoted *ProxyRow) error {
+		return db.withSQLiteWriteLock(ctx, func() error {
+			tx, beginErr := db.conn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				return beginErr
+			}
+			defer tx.Rollback()
 
-		if accessErr := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), 0, proxyURL); accessErr != nil {
-			return accessErr
-		}
-		if db.isSQLite() {
-			result, insertErr := tx.ExecContext(ctx, `INSERT INTO accounts(name,platform,type,credentials,proxy_url,enabled) VALUES($1,'xai','grok',$2,$3,$4)`, name, encoded, proxyURL, enabled)
-			if insertErr != nil {
+			if db.isSQLite() {
+				result, insertErr := tx.ExecContext(ctx, `INSERT INTO accounts(name,platform,type,credentials,proxy_url,enabled) VALUES($1,'xai','grok',$2,$3,$4)`, name, encoded, proxyURL, enabled)
+				if insertErr != nil {
+					return insertErr
+				}
+				accountID, insertErr = result.LastInsertId()
+				if insertErr != nil {
+					return insertErr
+				}
+			} else if insertErr := tx.QueryRowContext(ctx, `INSERT INTO accounts(name,platform,type,credentials,proxy_url,enabled) VALUES($1,'xai','grok',$2::jsonb,$3,$4) RETURNING id`, name, encoded, proxyURL, enabled).Scan(&accountID); insertErr != nil {
 				return insertErr
 			}
-			accountID, insertErr = result.LastInsertId()
-			if insertErr != nil {
-				return insertErr
+			var policy ProxyRow
+			if bindingErr := applyProxyBindingTx(ctx, tx, db.isSQLite(), []int64{accountID}, proxyURL, true, true, &policy); bindingErr != nil {
+				return bindingErr
 			}
-		} else if insertErr := tx.QueryRowContext(ctx, `INSERT INTO accounts(name,platform,type,credentials,proxy_url,enabled) VALUES($1,'xai','grok',$2::jsonb,$3,$4) RETURNING id`, name, encoded, proxyURL, enabled).Scan(&accountID); insertErr != nil {
-			return insertErr
-		}
-		if _, updateErr := tx.ExecContext(ctx, `UPDATE accounts SET credential_family_id=$1 WHERE id=$2`, familyID, accountID); updateErr != nil {
-			return updateErr
-		}
+			if _, updateErr := tx.ExecContext(ctx, `UPDATE accounts SET credential_family_id=$1 WHERE id=$2`, familyID, accountID); updateErr != nil {
+				return updateErr
+			}
 
-		for _, identityKey := range identityKeys {
-			result, claimErr := tx.ExecContext(ctx, `INSERT INTO grok_credential_identity_claims(identity_key,account_id) VALUES($1,$2) ON CONFLICT(identity_key) DO NOTHING`, identityKey, accountID)
-			if claimErr != nil {
-				return claimErr
+			for _, identityKey := range identityKeys {
+				result, claimErr := tx.ExecContext(ctx, `INSERT INTO grok_credential_identity_claims(identity_key,account_id) VALUES($1,$2) ON CONFLICT(identity_key) DO NOTHING`, identityKey, accountID)
+				if claimErr != nil {
+					return claimErr
+				}
+				claimed, rowsErr := result.RowsAffected()
+				if rowsErr != nil {
+					return rowsErr
+				}
+				if claimed != 0 {
+					continue
+				}
+				if queryErr := tx.QueryRowContext(ctx, `SELECT account_id FROM grok_credential_identity_claims WHERE identity_key=$1`, identityKey).Scan(&duplicateAccountID); queryErr != nil {
+					return queryErr
+				}
+				accountID = 0
+				return nil
 			}
-			claimed, rowsErr := result.RowsAffected()
-			if rowsErr != nil {
-				return rowsErr
+			if err := tx.Commit(); err != nil {
+				return err
 			}
-			if claimed != 0 {
-				continue
+			if promoted != nil {
+				*promoted = policy
 			}
-			if queryErr := tx.QueryRowContext(ctx, `SELECT account_id FROM grok_credential_identity_claims WHERE identity_key=$1`, identityKey).Scan(&duplicateAccountID); queryErr != nil {
-				return queryErr
-			}
-			accountID = 0
 			return nil
-		}
-		return tx.Commit()
+		})
 	})
+	if err != nil {
+		accountID = 0
+	}
 	return accountID, duplicateAccountID, err
 }
 

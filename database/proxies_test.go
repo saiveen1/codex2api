@@ -330,13 +330,17 @@ func TestCleanErrorProxiesReturnsOnlyActuallyUnboundAccounts(t *testing.T) {
 	if err := db.UpdateProxyTestResult(ctx, errorID, errorURL, ProxyTestStatusError, "", "", 0); err != nil {
 		t.Fatalf("mark proxy error: %v", err)
 	}
-	unboundID, err := db.InsertAccount(ctx, "unbound", "rt-unbound", errorURL)
+	unboundID, err := db.InsertAccount(ctx, "unbound", "rt-unbound", "")
 	if err != nil {
 		t.Fatalf("InsertAccount(unbound) returned error: %v", err)
 	}
-	protectedID, err := db.InsertAccount(ctx, "protected", "rt-protected", errorURL)
+	protectedID, err := db.InsertAccount(ctx, "protected", "rt-protected", "")
 	if err != nil {
 		t.Fatalf("InsertAccount(protected) returned error: %v", err)
+	}
+	// Synthetic historical shared pins for the cleanup test.
+	if _, err := db.conn.ExecContext(ctx, `UPDATE accounts SET proxy_url=$1 WHERE id IN ($2,$3)`, errorURL, unboundID, protectedID); err != nil {
+		t.Fatal(err)
 	}
 
 	trigger := fmt.Sprintf(`

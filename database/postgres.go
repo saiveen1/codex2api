@@ -200,6 +200,7 @@ type sqlExecer interface {
 
 // DB PostgreSQL 数据库操作
 type DB struct {
+	importProxyCommit atomic.Pointer[ImportProxyCommitter]
 	conn              *sql.DB
 	driver            string
 	authCacheScope    string
@@ -8845,7 +8846,7 @@ func (db *DB) InsertAccount(ctx context.Context, name string, refreshToken strin
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
-		credentials,
+		credentials, proxyURL,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8892,7 +8893,7 @@ func (db *DB) InsertATAccount(ctx context.Context, name string, accessToken stri
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
-		credentials,
+		credentials, proxyURL,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8910,7 +8911,7 @@ func (db *DB) InsertAccountWithCredentials(ctx context.Context, name string, cre
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
-		credentials,
+		credentials, proxyURL,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8928,7 +8929,7 @@ func (db *DB) InsertPendingAccountWithCredentials(ctx context.Context, name stri
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url, enabled, note, tags) VALUES ($1, $2, $3, FALSE, $4, $5::jsonb) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url, enabled, note, tags) VALUES ($1, $2, $3, FALSE, $4, $5)`,
-		credentials,
+		credentials, proxyURL,
 		name, credJSON, proxyURL, note, encodeTagsJSON(tags),
 	)
 }
@@ -8945,7 +8946,7 @@ func (db *DB) InsertOpenAIResponsesAccount(ctx context.Context, name string, cre
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, 'openai', 'responses_api', $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, 'openai', 'responses_api', $2, $3)`,
-		credentials,
+		credentials, proxyURL,
 		name, credJSON, proxyURL,
 	)
 }
@@ -8969,56 +8970,54 @@ func (db *DB) InsertAccountWithUpstream(ctx context.Context, name, platform, acc
 	return db.insertAccountRowWithFamily(ctx,
 		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, $2, $3, $4, $5)`,
-		credentials,
+		credentials, proxyURL,
 		name, platform, accountType, credJSON, proxyURL,
 	)
 }
 
 // insertAccountRowWithFamily keeps legacy insert SQL untouched while ensuring
 // every newly-created account immediately receives its stable family key.
-func (db *DB) insertAccountRowWithFamily(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, args ...interface{}) (int64, error) {
-	return db.insertAccountRowWithFamilyGroups(ctx, postgresQuery, sqliteQuery, credentials, nil, args...)
+func (db *DB) insertAccountRowWithFamily(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, proxyURL string, args ...interface{}) (int64, error) {
+	return db.insertAccountRowWithFamilyGroups(ctx, postgresQuery, sqliteQuery, credentials, proxyURL, nil, args...)
 }
 
-func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, groupIDs []int64, args ...interface{}) (int64, error) {
+func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, proxyURL string, groupIDs []int64, args ...interface{}) (int64, error) {
 	candidate := credentialFamilyCandidate(credentials)
 	returnID := int64(0)
-	err := db.withSQLiteWriteLock(ctx, func() error {
-		tx, err := db.conn.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if db.isSQLite() {
-			query := strings.TrimSpace(sqliteQuery)
-			if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+	err := db.withImportedProxyBinding(proxyURL, func(promoted *ProxyRow) error {
+		return db.withSQLiteWriteLock(ctx, func() error {
+			tx, err := db.conn.BeginTx(ctx, nil)
+			if err != nil {
 				return err
 			}
-			if err = tx.QueryRowContext(ctx, "SELECT last_insert_rowid()").Scan(&returnID); err != nil {
+			defer tx.Rollback()
+			if db.isSQLite() {
+				query := strings.TrimSpace(sqliteQuery)
+				if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+					return err
+				}
+				if err = tx.QueryRowContext(ctx, "SELECT last_insert_rowid()").Scan(&returnID); err != nil {
+					return err
+				}
+			} else if err = tx.QueryRowContext(ctx, strings.TrimSpace(postgresQuery), args...).Scan(&returnID); err != nil {
 				return err
 			}
-		} else if err = tx.QueryRowContext(ctx, strings.TrimSpace(postgresQuery), args...).Scan(&returnID); err != nil {
-			return err
-		}
-		var insertedProxy string
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(proxy_url,'') FROM accounts WHERE id = $1`, returnID).Scan(&insertedProxy); err != nil {
-			return err
-		}
-		if err := checkProxyAccountAccessTx(ctx, tx, db.isSQLite(), 0, insertedProxy); err != nil {
-			return err
-		}
-		if strings.TrimSpace(candidate) == "" {
-			candidate = "cf_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE accounts SET credential_family_id=$1 WHERE id=$2 AND COALESCE(credential_family_id,'')=''`, candidate, returnID); err != nil {
-			return err
-		}
-		if len(groupIDs) > 0 {
-			if err := db.batchReplaceAccountGroups(ctx, tx, []int64{returnID}, groupIDs); err != nil {
+			if err := applyProxyBindingTx(ctx, tx, db.isSQLite(), []int64{returnID}, proxyURL, true, true, promoted); err != nil {
 				return err
 			}
-		}
-		return tx.Commit()
+			if strings.TrimSpace(candidate) == "" {
+				candidate = "cf_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE accounts SET credential_family_id=$1 WHERE id=$2 AND COALESCE(credential_family_id,'')=''`, candidate, returnID); err != nil {
+				return err
+			}
+			if len(groupIDs) > 0 {
+				if err := db.batchReplaceAccountGroups(ctx, tx, []int64{returnID}, groupIDs); err != nil {
+					return err
+				}
+			}
+			return tx.Commit()
+		})
 	})
 	if err != nil {
 		return 0, err

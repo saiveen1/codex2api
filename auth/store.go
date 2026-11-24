@@ -4868,6 +4868,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	if db != nil {
 		s.proxyPoolLoader = db.ListEnabledProxyInventory
 		s.proxyInventoryLoader = db.ListProxies
+		db.SetImportProxyCommitter(s.commitProxyPolicy)
 	}
 	s.testModel.Store(settings.TestModel)
 	s.testContent.Store(NormalizeTestContent(settings.TestContent))
@@ -8276,10 +8277,17 @@ func (s *Store) UpdateProxyAccess(ctx context.Context, id int64, exclusive bool,
 	if s == nil || s.db == nil {
 		return nil, errors.New("proxy access store is not configured")
 	}
+	return s.commitProxyPolicy(func() (*database.ProxyRow, error) {
+		return s.db.UpdateProxyAccess(ctx, id, exclusive, allowed)
+	})
+}
+
+// The database callback returns the policy from its committed transaction, or nil for no change.
+func (s *Store) commitProxyPolicy(write func() (*database.ProxyRow, error)) (*database.ProxyRow, error) {
 	s.proxyPoolReloadMu.Lock()
 	s.mu.Lock()
-	row, err := s.db.UpdateProxyAccess(ctx, id, exclusive, allowed)
-	if err == nil {
+	row, err := write()
+	if err == nil && row != nil {
 		if s.exclusiveProxyAccounts == nil {
 			s.exclusiveProxyAccounts = make(map[string][]int64)
 		}
@@ -8299,7 +8307,7 @@ func (s *Store) UpdateProxyAccess(ctx context.Context, id int64, exclusive bool,
 	}
 	s.mu.Unlock()
 	s.proxyPoolReloadMu.Unlock()
-	if err == nil {
+	if err == nil && row != nil {
 		s.invalidateExclusiveProxyAffinity()
 	}
 	return row, err

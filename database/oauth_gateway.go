@@ -257,7 +257,7 @@ func (db *DB) InsertOAuthGatewayAccount(ctx context.Context, name string, creden
 	return db.insertAccountRowWithFamilyGroups(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
-		credentials, normalizeIDSlice(groupIDs), name, credJSON, proxyURL,
+		credentials, proxyURL, normalizeIDSlice(groupIDs), name, credJSON, proxyURL,
 	)
 }
 
