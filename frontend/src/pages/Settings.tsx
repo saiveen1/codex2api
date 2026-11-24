@@ -171,6 +171,7 @@ type CodexUserAgentConfig = {
   mode?: string
   pool_mix?: Record<string, number>
   account_kinds?: Record<string, CodexUAKind>
+  account_user_agents?: Record<string, string>
 }
 type CodexUAKind = 'codex-tui' | 'codex-desktop' | 'codex-vscode' | 'codex-exec' | 'custom'
 const CODEX_UA_KINDS: CodexUAKind[] = ['codex-tui', 'codex-desktop', 'codex-vscode', 'codex-exec', 'custom']
@@ -239,6 +240,7 @@ const DEFAULT_CODEX_UA_CONFIG: Required<CodexUserAgentConfig> = {
   mode: '',
   pool_mix: {},
   account_kinds: {},
+  account_user_agents: {},
 }
 
 type SettingsTabKey = 'codex' | 'claude' | 'antigravity' | 'grok' | 'kiro' | 'appearance' | 'general'
@@ -469,6 +471,7 @@ const parseCodexUserAgentConfig = (value?: string): CodexUserAgentConfig => {
       mode: typeof parsed.mode === 'string' ? parsed.mode : '',
       pool_mix: poolMix,
       account_kinds: parsed.account_kinds ?? {},
+      account_user_agents: parsed.account_user_agents ?? {},
     }
   } catch {
     return {}
@@ -487,6 +490,7 @@ const serializeCodexUserAgentConfig = (config: CodexUserAgentConfig) => {
   }
   if (Object.keys(poolMix).length > 0) normalized.pool_mix = poolMix
   if (config.account_kinds && Object.keys(config.account_kinds).length) normalized.account_kinds = config.account_kinds
+  if (config.account_user_agents && Object.keys(config.account_user_agents).length) normalized.account_user_agents = config.account_user_agents
   return JSON.stringify(normalized)
 }
 
@@ -3946,6 +3950,7 @@ export default function Settings() {
   const [codexUAPreview, setCodexUAPreview] = useState<CodexUserAgentPreview | null>(null)
   const [codexUAPreviewError, setCodexUAPreviewError] = useState('')
   const [codexUAAccountID, setCodexUAAccountID] = useState('')
+  const [accountUADraft, setAccountUADraft] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     api.getCodexUserAgentCatalog()
@@ -3996,12 +4001,24 @@ export default function Settings() {
   }, [t])
   const accountKinds = codexUserAgentConfig.account_kinds ?? {}
   const validUAAccountID = /^[1-9]\d{0,18}$/.test(codexUAAccountID) && (codexUAAccountID.length < 19 || codexUAAccountID <= '9223372036854775807')
-  const setAccountKind = (kind: string) => {
+  const accountUAs = codexUserAgentConfig.account_user_agents ?? {}
+  const savedAccountUA = validUAAccountID ? accountUAs[codexUAAccountID] : undefined
+  const manualAccountUA = accountUADraft ?? savedAccountUA
+  const selectUAAccount = (id: string) => {
+    setCodexUAAccountID(id)
+    setAccountUADraft(null)
+  }
+  const saveAccountBinding = (kind: string, rawUA?: string) => {
     if (!validUAAccountID) return
-    const next = { ...parseCodexUserAgentConfig(settingsFormRef.current.codex_user_agent_config).account_kinds }
-    if (kind) next[codexUAAccountID] = kind as CodexUAKind
-    else delete next[codexUAAccountID]
-    patchAndSaveCodexUserAgentConfig({ account_kinds: next })
+    const current = parseCodexUserAgentConfig(settingsFormRef.current.codex_user_agent_config)
+    const kinds = { ...current.account_kinds }
+    const uas = { ...current.account_user_agents }
+    delete kinds[codexUAAccountID]
+    delete uas[codexUAAccountID]
+    if (rawUA) uas[codexUAAccountID] = rawUA
+    else if (kind) kinds[codexUAAccountID] = kind as CodexUAKind
+    patchAndSaveCodexUserAgentConfig({ account_kinds: kinds, account_user_agents: uas })
+    if (!rawUA) setAccountUADraft(null)
   }
   const codexUAKindOptions = useMemo(() => CODEX_UA_KINDS.map((kind) => ({ label: codexUAKindLabel(kind), value: kind })), [codexUAKindLabel])
   const codexUAModeOptions = useMemo(() => [
@@ -5322,16 +5339,24 @@ export default function Settings() {
                     <SettingField label={t('settings.codexUAAccountKind')} description={t('settings.codexUAAccountKindDesc')}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Input className="w-40 tabular-nums" inputMode="numeric" placeholder={t('settings.codexUAAccountID')} aria-label={t('settings.codexUAAccountID')}
-                          value={codexUAAccountID} onChange={(e) => setCodexUAAccountID(e.target.value.trim())} aria-invalid={!!codexUAAccountID && !validUAAccountID} />
+                          value={codexUAAccountID} onChange={(e) => selectUAAccount(e.target.value.trim())} aria-invalid={!!codexUAAccountID && !validUAAccountID} />
                         <select className="h-9 rounded-lg border bg-background px-2 text-sm disabled:opacity-50" aria-label={t('settings.codexUAAccountKind')}
-                          disabled={!validUAAccountID} value={accountKinds[codexUAAccountID] ?? ''} onChange={(e) => setAccountKind(e.target.value)}>
+                          disabled={!validUAAccountID} value={manualAccountUA !== undefined ? 'manual' : (validUAAccountID && accountKinds[codexUAAccountID]) || ''}
+                          onChange={(e) => e.target.value === 'manual' ? setAccountUADraft(savedAccountUA ?? '') : saveAccountBinding(e.target.value)}>
                           <option value="">{t('settings.codexUAFollowPool')}</option>
                           {CODEX_UA_POOL_KINDS.map((kind) => <option key={kind} value={kind}>{codexUAKindLabel(kind)}</option>)}
+                          <option value="manual">{t('settings.codexUAManual')}</option>
                         </select>
+                        {manualAccountUA !== undefined && <>
+                          <Input className="min-w-48 flex-1 font-mono" aria-label="User-Agent" placeholder="User-Agent" value={manualAccountUA}
+                            onChange={(e) => setAccountUADraft(e.target.value)} />
+                          <Button type="button" size="sm" disabled={!manualAccountUA.trim() || manualAccountUA.trim() === savedAccountUA}
+                            onClick={() => saveAccountBinding('', manualAccountUA.trim())}>{t('common.save')}</Button>
+                        </>}
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {Object.entries(accountKinds).map(([id, kind]) => <button type="button" key={id} onClick={() => setCodexUAAccountID(id)}
-                          className="rounded border px-2 py-1 text-xs hover:bg-muted">#{id} · {codexUAKindLabel(kind)}</button>)}
+                        {[...Object.keys(accountKinds), ...Object.keys(accountUAs)].map((id) => <button type="button" key={id} onClick={() => selectUAAccount(id)}
+                          className="rounded border px-2 py-1 text-xs hover:bg-muted">#{id} · {accountUAs[id] ? t('settings.codexUAManual') : codexUAKindLabel(accountKinds[id])}</button>)}
                       </div>
                     </SettingField>
                   )}

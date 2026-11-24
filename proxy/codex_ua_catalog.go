@@ -342,6 +342,9 @@ func codexPoolMix(cfg CodexUserAgentConfig) []codexUAWeighted {
 // codexPoolPersona 按账号确定性地从目录抽取一套完整画像:同一账号永远得到同一画像,
 // 不同账号按配比与真实分布散开。
 func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor string) (userAgent, version string, ok bool, err error) {
+	if ua, exists := cfg.AccountUserAgents[accountID]; exists {
+		return ua, codexVersionFromUserAgent(ua, cfg.ClientVersion), true, nil
+	}
 	seed := fmt.Sprintf("%d", accountID)
 	kind, pinned := cfg.AccountKinds[accountID]
 	if !pinned {

@@ -288,6 +288,60 @@ func TestCodexPoolAccountKind(t *testing.T) {
 	}
 }
 
+func TestCodexPoolAccountUserAgents(t *testing.T) {
+	const raw = `{"mode":"pool","pool_mix":{"codex-tui":1},"client_version":"0.155.0","account_kinds":{"12":"codex-exec"},"account_user_agents":{"11":"codex-tui/0.140.0 (Linux; x86_64) terminal","13":"custom-agent"}}`
+	const baseline = `{"mode":"pool","pool_mix":{"codex-tui":1},"client_version":"0.155.0","account_kinds":{"12":"codex-exec"}}`
+	preview, err := PreviewCodexUserAgentConfig(raw, "0.200.0", []int64{11, 12, 13, 14})
+	if err != nil || len(preview.Samples) != 4 {
+		t.Fatalf("preview: %+v, %v", preview, err)
+	}
+	for _, sample := range preview.Samples {
+		ua, version, ok, err := codexUserAgentFromConfigChecked(preview.Normalized, sample.AccountID, "0.200.0")
+		if err != nil || !ok || sample.UserAgent != ua || sample.Version != version {
+			t.Fatalf("account %d: preview %+v, runtime %q %q %v %v", sample.AccountID, sample, ua, version, ok, err)
+		}
+		switch sample.AccountID {
+		case 11:
+			if ua != "codex-tui/0.140.0 (Linux; x86_64) terminal" || version != "0.140.0" || sample.Source != "custom" {
+				t.Fatalf("raw persona: %+v", sample)
+			}
+		case 13:
+			if ua != "custom-agent" || version != "0.155.0" || sample.Source != "custom" {
+				t.Fatalf("raw fallback persona: %+v", sample)
+			}
+		default:
+			original, originalVersion, _, originalErr := codexUserAgentFromConfigChecked(baseline, sample.AccountID, "0.200.0")
+			if originalErr != nil || ua != original || version != originalVersion {
+				t.Fatalf("unrelated account %d changed: %q %q", sample.AccountID, ua, original)
+			}
+		}
+	}
+	for _, invalid := range []string{
+		`{"account_user_agents":null}`, `{"account_user_agents":[]}`,
+		`{"account_user_agents":{"0":"agent"}}`, `{"account_user_agents":{"-1":"agent"}}`,
+		`{"account_user_agents":{"9223372036854775808":"agent"}}`, `{"account_user_agents":{"1":null}}`,
+		`{"account_user_agents":{"1":" "}}`, `{"account_user_agents":{"1":"agent\n"}}`,
+		`{"account_user_agents":{"1":"\ragent"}}`, `{"account_user_agents":{"1":"a\u0000b"}}`,
+		`{"account_kinds":{"1":"codex-tui"},"account_user_agents":{"1":"agent"}}`,
+	} {
+		if _, err := NormalizeCodexUserAgentConfigJSON(invalid); err == nil {
+			t.Errorf("accepted %s", invalid)
+		}
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{`{"mode":"pool","raw_user_agent":"global/1.2.3","account_user_agents":{"11":"local/2.3.4"}}`, "global/1.2.3"},
+		{`{"client_name":"codex-tui","account_user_agents":{"11":"local/2.3.4"}}`, "codex-tui/" + latestCodexCLIVersion},
+	} {
+		ua, _, ok, err := codexUserAgentFromConfigChecked(tc.raw, 11, "")
+		if err != nil || !ok || !strings.HasPrefix(ua, tc.want) {
+			t.Fatalf("legacy priority: %q, %v, %v", ua, ok, err)
+		}
+	}
+	if _, _, ok, err := codexUserAgentFromConfigChecked(`{"account_user_agents":{"11":"local/2.3.4"}}`, 11, ""); err != nil || ok {
+		t.Fatalf("dormant binding activated single mode: %v, %v", ok, err)
+	}
+}
+
 func TestPreviewCodexUserAgentConfig(t *testing.T) {
 	preview, err := PreviewCodexUserAgentConfig(`{"client_kind":"codex-desktop","terminal":"WindowsTerminal"}`, "", nil)
 	if err != nil {

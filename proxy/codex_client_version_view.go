@@ -15,7 +15,8 @@ func codexPersonaVersionSource(persona CodexUserAgentPersona, cfg CodexUserAgent
 	if platform := codexPreviewPlatformPattern.FindStringSubmatch(persona.UserAgent); len(platform) == 3 {
 		persona.TargetPlatform = codexTargetPlatform(platform[1], platform[2])
 	}
-	if codexHasManualVersionOverride(cfg) {
+	_, accountRaw := cfg.AccountUserAgents[persona.AccountID]
+	if codexHasManualVersionOverride(cfg) || (cfg.Mode == CodexUserAgentModePool && accountRaw) {
 		persona.Source, persona.Status = "custom", "custom"
 		return persona
 	}

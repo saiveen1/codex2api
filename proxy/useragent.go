@@ -57,9 +57,20 @@ type CodexUserAgentConfig struct {
 	AppName    string `json:"app_name,omitempty"`
 	AppVersion string `json:"app_version,omitempty"`
 	// Mode 为 "pool" 时忽略单画像字段,按 PoolMix 配比为每个账号确定性抽取目录画像。
-	Mode         string                    `json:"mode,omitempty"`
-	PoolMix      map[string]int            `json:"pool_mix,omitempty"`
-	AccountKinds map[int64]CodexClientKind `json:"account_kinds,omitempty"`
+	Mode              string                    `json:"mode,omitempty"`
+	PoolMix           map[string]int            `json:"pool_mix,omitempty"`
+	AccountKinds      map[int64]CodexClientKind `json:"account_kinds,omitempty"`
+	AccountUserAgents codexAccountUserAgents    `json:"account_user_agents,omitempty"`
+}
+
+type codexAccountUserAgents map[int64]string
+
+func (agents *codexAccountUserAgents) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return errors.New("account_user_agents must be a JSON object")
+	}
+	type plain codexAccountUserAgents
+	return json.Unmarshal(data, (*plain)(agents))
 }
 
 var codexOfficialClientUserAgentPrefixes = []string{
@@ -216,19 +227,20 @@ func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfi
 		poolMix[k] = v
 	}
 	return CodexUserAgentConfig{
-		RawUserAgent:  strings.TrimSpace(cfg.RawUserAgent),
-		ClientName:    normalizeCodexUserAgentClientName(cfg.ClientName),
-		ClientVersion: normalizeCodexClientVersionText(cfg.ClientVersion),
-		OSName:        strings.TrimSpace(cfg.OSName),
-		OSVersion:     strings.TrimSpace(cfg.OSVersion),
-		Arch:          strings.TrimSpace(cfg.Arch),
-		Terminal:      strings.TrimSpace(cfg.Terminal),
-		ClientKind:    strings.ToLower(strings.TrimSpace(cfg.ClientKind)),
-		AppName:       normalizeCodexUserAgentClientName(cfg.AppName),
-		AppVersion:    strings.TrimSpace(cfg.AppVersion),
-		Mode:          mode,
-		PoolMix:       poolMix,
-		AccountKinds:  cfg.AccountKinds,
+		RawUserAgent:      strings.TrimSpace(cfg.RawUserAgent),
+		ClientName:        normalizeCodexUserAgentClientName(cfg.ClientName),
+		ClientVersion:     normalizeCodexClientVersionText(cfg.ClientVersion),
+		OSName:            strings.TrimSpace(cfg.OSName),
+		OSVersion:         strings.TrimSpace(cfg.OSVersion),
+		Arch:              strings.TrimSpace(cfg.Arch),
+		Terminal:          strings.TrimSpace(cfg.Terminal),
+		ClientKind:        strings.ToLower(strings.TrimSpace(cfg.ClientKind)),
+		AppName:           normalizeCodexUserAgentClientName(cfg.AppName),
+		AppVersion:        strings.TrimSpace(cfg.AppVersion),
+		Mode:              mode,
+		PoolMix:           poolMix,
+		AccountKinds:      cfg.AccountKinds,
+		AccountUserAgents: cfg.AccountUserAgents,
 	}
 }
 
@@ -256,6 +268,14 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 	for id, kind := range cfg.AccountKinds {
 		if _, ok := codexUAKindSpecFor(kind); id <= 0 || !ok {
 			return fmt.Errorf("invalid codex User-Agent account_kinds entry: %d = %q", id, kind)
+		}
+	}
+	for id, ua := range cfg.AccountUserAgents {
+		if id <= 0 || strings.TrimSpace(ua) == "" || !validHTTPHeaderValue(ua) {
+			return fmt.Errorf("invalid codex User-Agent account_user_agents entry for account %d", id)
+		}
+		if _, exists := cfg.AccountKinds[id]; exists {
+			return fmt.Errorf("codex User-Agent account %d has both account_kinds and account_user_agents", id)
 		}
 	}
 	for kind, weight := range cfg.PoolMix {
@@ -371,7 +391,7 @@ func isEmptyCodexUserAgentConfig(cfg CodexUserAgentConfig) bool {
 		cfg.AppName == "" &&
 		cfg.AppVersion == "" &&
 		cfg.Mode == "" &&
-		len(cfg.PoolMix) == 0 && len(cfg.AccountKinds) == 0
+		len(cfg.PoolMix) == 0 && len(cfg.AccountKinds) == 0 && len(cfg.AccountUserAgents) == 0
 }
 
 func codexUserAgentConfigFromJSON(raw string) CodexUserAgentConfig {
@@ -401,6 +421,7 @@ func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor s
 	cfg := codexUserAgentConfigFromJSON(raw)
 	if cfg.Mode != CodexUserAgentModePool {
 		cfg.AccountKinds = nil // Dormant bindings do not activate a single persona.
+		cfg.AccountUserAgents = nil
 	}
 	if isEmptyCodexUserAgentConfig(cfg) {
 		return "", "", false, nil
