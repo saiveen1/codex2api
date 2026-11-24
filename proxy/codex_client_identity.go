@@ -47,11 +47,13 @@ func ResolveCodexOutboundClientIdentity(input CodexClientIdentityInput) (CodexOu
 		return CodexOutboundClientIdentity{UserAgent: userAgent, Version: version}, nil
 	}
 	accountID := int64(0)
+	environment := ""
 	if input.Account != nil {
 		accountID = input.Account.ID()
+		environment = input.Account.GetOAuthGatewayEnvironment()
 	}
 	floor := codexIdentityVersionFloor(settings)
-	ua, version, configured, err := codexUserAgentFromConfigChecked(settings.CodexUserAgentConfig, accountID, floor)
+	ua, version, configured, err := codexUserAgentFromConfigChecked(settings.CodexUserAgentConfig, accountID, floor, environment)
 	if err != nil || configured {
 		return CodexOutboundClientIdentity{UserAgent: ua, Version: version, Generated: true}, err
 	}
@@ -97,10 +99,12 @@ func codexDeviceClientIdentity(input CodexClientIdentityInput) CodexOutboundClie
 func generatedCodexClientHeadersChecked(account *auth.Account, settings RuntimeSettings) (string, string, error) {
 	floor := codexIdentityVersionFloor(settings)
 	accountID := int64(0)
+	environment := ""
 	if account != nil {
 		accountID = account.ID()
+		environment = account.GetOAuthGatewayEnvironment()
 	}
-	ua, version, configured, err := codexUserAgentFromConfigChecked(settings.CodexUserAgentConfig, accountID, floor)
+	ua, version, configured, err := codexUserAgentFromConfigChecked(settings.CodexUserAgentConfig, accountID, floor, environment)
 	if err != nil || configured {
 		return ua, version, err
 	}

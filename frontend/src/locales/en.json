@@ -5336,6 +5336,8 @@
     "codexUAPoolMix": "Pool mix",
     "codexUAAccountKind": "Per-account client",
     "codexUAAccountKindDesc": "Enter an account ID, then choose a client preset or enter a full User-Agent. Other accounts still follow the pool weights.",
+    "codexUAAutoMatchOS": "Match authorization OS automatically",
+    "codexUAAutoMatchOSDesc": "Enabled by default. Accounts authorized with macOS / Windows only draw profiles for that OS. Client weights, versions, architectures and terminals still use the existing selection logic. Missing OS metadata leaves behavior unchanged; manual full User-Agents take priority.",
     "codexUAManual": "Enter User-Agent manually",
     "codexUAAccountID": "Account ID",
     "codexUAFollowPool": "Follow pool",

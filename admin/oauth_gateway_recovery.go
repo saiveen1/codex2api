@@ -90,6 +90,7 @@ func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySn
 	if name := oauthGatewayWorkspaceName(raw, snap.Identity.ChatGPTAccountID); name != "" {
 		updates["workspace_name"] = name
 	}
+	setOAuthGatewayEnvironment(updates, raw)
 	if err := t.h.db.RecoverOAuthGatewayAccount(ctx, snap, updates, jobID, pauseAutoDetection); err != nil {
 		var known *upstream.Error
 		if errors.As(err, &known) && !known.Uncertain {

@@ -13475,18 +13475,20 @@ func (h *Handler) PreviewCodexUserAgent(c *gin.Context) {
 		versionFloor = minVersion
 	}
 	var sampleIDs []int64
+	environments := map[int64]string{}
 	if h.store != nil {
 		for _, acc := range h.store.Accounts() {
 			if acc == nil || acc.IsRelayStyle() || acc.IsOpenAIResponsesAPI() || acc.IsAntigravityAPI() {
 				continue
 			}
 			sampleIDs = append(sampleIDs, acc.ID())
+			environments[acc.ID()] = acc.GetOAuthGatewayEnvironment()
 			if len(sampleIDs) >= 6 {
 				break
 			}
 		}
 	}
-	preview, err := proxy.PreviewCodexUserAgentConfig(req.Config, versionFloor, sampleIDs)
+	preview, err := proxy.PreviewCodexUserAgentConfig(req.Config, versionFloor, sampleIDs, environments)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

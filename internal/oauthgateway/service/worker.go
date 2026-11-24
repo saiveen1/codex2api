@@ -126,6 +126,7 @@ func (a *App) advance(ctx context.Context, job Job, index int) error {
 	if err = validateBatch(g, batch); err != nil {
 		return a.failGroup(job.ID, index, "needs_review", publicError(err))
 	}
+	keepReturnedEnvironment(&batch, g.Batch)
 	// Persist status before attempting delivery; a read failure does not reauthorize.
 	if err = a.mutateGroup(job.ID, index, func(g *Group) {
 		g.Batch = batch
@@ -159,6 +160,7 @@ func (a *App) advance(ctx context.Context, job Job, index int) error {
 			if refreshErr = validateBatch(g, fresh); refreshErr != nil {
 				return a.failGroup(job.ID, index, "needs_review", publicError(refreshErr))
 			}
+			keepReturnedEnvironment(&fresh, batch)
 			accounts, e = upstream.ValidateDelivery(result, fresh)
 			if e != nil {
 				return a.failGroup(job.ID, index, "needs_review", publicError(e))
@@ -183,7 +185,7 @@ func (a *App) advance(ctx context.Context, job Job, index int) error {
 			g.Error = nil
 			for _, mapping := range result.Delivery.Items {
 				if !hasDelivery(*g, mapping.ItemID) {
-					g.Deliveries = append(g.Deliveries, Delivery{ItemID: mapping.ItemID, Line: mapping.Line, Account: accounts[mapping.AccountIndex], State: "ready"})
+					g.Deliveries = append(g.Deliveries, Delivery{ItemID: mapping.ItemID, Line: mapping.Line, Account: accounts[mapping.AccountIndex], EnvironmentChecked: true, State: "ready"})
 				}
 			}
 			for _, id := range result.Delivery.ExpiredItemIDs {
@@ -258,10 +260,24 @@ func validateBatch(g Group, b upstream.Batch) error {
 	}
 	return nil
 }
+
+// Some status replies omit options already returned for this same batch.
+func keepReturnedEnvironment(next *upstream.Batch, previous upstream.Batch) {
+	if next.BatchID == "" || next.BatchID != previous.BatchID || previous.Options == nil || upstream.KnownEnvironment(previous.Options.Environment) == "" {
+		return
+	}
+	if next.Options == nil {
+		next.Options = &upstream.BatchProfile{Environment: previous.Options.Environment}
+	} else if next.Options.Environment == "" {
+		next.Options.Environment = previous.Options.Environment
+	}
+}
+
 func (a *App) acceptBatch(job Job, index int, batch upstream.Batch) error {
 	if err := validateBatch(job.Groups[index], batch); err != nil {
 		return a.failGroup(job.ID, index, "needs_review", publicError(err))
 	}
+	keepReturnedEnvironment(&batch, job.Groups[index].Batch)
 	return a.mutateGroup(job.ID, index, func(g *Group) {
 		g.Batch = batch
 		g.Stage = "running"
@@ -399,7 +415,19 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 		}
 		runtimeProxy = proxies[delivery.Line-1]
 	}
-	if err := a.mutateGroup(job.ID, index, func(g *Group) { g.Deliveries[d].State = "importing" }); err != nil {
+	// Old pending deliveries may contain a remote-supplied field. Rebind from the saved batch only.
+	if !delivery.EnvironmentChecked {
+		bound, err := upstream.BindDeliveryEnvironment(delivery.Account, job.Groups[index].Batch.Options)
+		if err != nil {
+			return a.failGroup(job.ID, index, "needs_review", publicError(err))
+		}
+		delivery.Account = bound
+	}
+	if err := a.mutateGroup(job.ID, index, func(g *Group) {
+		g.Deliveries[d].Account = delivery.Account
+		g.Deliveries[d].EnvironmentChecked = true
+		g.Deliveries[d].State = "importing"
+	}); err != nil {
 		return err
 	}
 	var result upstream.ImportResult

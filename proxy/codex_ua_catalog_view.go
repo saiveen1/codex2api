@@ -121,15 +121,19 @@ type CodexUserAgentPreview struct {
 
 // PreviewCodexUserAgentConfig 按当前配置算出真实出站身份(UA / Originator / Version),
 // 号池模式下对给定账号逐个抽样。versionFloor 与执行链路同义(自动兼容模式下的最低 CLI 版本)。
-func PreviewCodexUserAgentConfig(raw, versionFloor string, sampleAccountIDs []int64) (CodexUserAgentPreview, error) {
+func PreviewCodexUserAgentConfig(raw, versionFloor string, sampleAccountIDs []int64, accountEnvironments ...map[int64]string) (CodexUserAgentPreview, error) {
 	normalized, err := NormalizeCodexUserAgentConfigJSON(raw)
 	if err != nil {
 		return CodexUserAgentPreview{}, err
 	}
 	cfg := codexUserAgentConfigFromJSON(normalized)
+	var environments map[int64]string
+	if len(accountEnvironments) > 0 {
+		environments = accountEnvironments[0]
+	}
 	preview := CodexUserAgentPreview{Mode: CodexUserAgentModeSingle, Normalized: normalized}
 	if cfg.Mode == CodexUserAgentModePool && cfg.RawUserAgent == "" {
-		return previewCodexPoolConfig(cfg, codexPoolPreviewInput{normalized: normalized, floor: versionFloor, accounts: sampleAccountIDs})
+		return previewCodexPoolConfig(cfg, codexPoolPreviewInput{normalized: normalized, floor: versionFloor, accounts: sampleAccountIDs, environments: environments})
 	}
 
 	ua, version, ok, err := codexUserAgentFromConfigChecked(normalized, 0, versionFloor)
@@ -209,9 +213,10 @@ func codexUAHasPlatform(items []codexUAPlatform, platform codexUAPlatform) bool 
 }
 
 type codexPoolPreviewInput struct {
-	normalized string
-	floor      string
-	accounts   []int64
+	normalized   string
+	floor        string
+	accounts     []int64
+	environments map[int64]string
 }
 
 func previewCodexPoolConfig(cfg CodexUserAgentConfig, input codexPoolPreviewInput) (CodexUserAgentPreview, error) {
@@ -221,7 +226,7 @@ func previewCodexPoolConfig(cfg CodexUserAgentConfig, input codexPoolPreviewInpu
 		sampleAccountIDs = []int64{1, 2, 3, 4, 5, 6}
 	}
 	for i, id := range sampleAccountIDs {
-		ua, version, ok, err := codexPoolPersona(cfg, id, input.floor)
+		ua, version, ok, err := codexPoolPersona(cfg, id, input.floor, input.environments[id])
 		if err != nil {
 			return CodexUserAgentPreview{}, err
 		}

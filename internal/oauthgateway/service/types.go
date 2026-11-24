@@ -89,13 +89,14 @@ type Preview struct {
 	Groups int                     `json:"groups"`
 }
 type Delivery struct {
-	ItemID     string          `json:"item_id"`
-	Line       int             `json:"line"`
-	Account    json.RawMessage `json:"account,omitempty"`
-	State      string          `json:"state"`
-	Error      *Problem        `json:"error,omitempty"`
-	CreatedIDs []int64         `json:"created_ids,omitempty"`
-	Result     *AccountResult  `json:"result,omitempty"`
+	ItemID             string          `json:"item_id"`
+	Line               int             `json:"line"`
+	Account            json.RawMessage `json:"account,omitempty"`
+	EnvironmentChecked bool            `json:"environment_checked,omitempty"`
+	State              string          `json:"state"`
+	Error              *Problem        `json:"error,omitempty"`
+	CreatedIDs         []int64         `json:"created_ids,omitempty"`
+	Result             *AccountResult  `json:"result,omitempty"`
 }
 type Group struct {
 	Request        upstream.SubmitRequest `json:"request"`

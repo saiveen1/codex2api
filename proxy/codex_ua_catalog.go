@@ -341,7 +341,7 @@ func codexPoolMix(cfg CodexUserAgentConfig) []codexUAWeighted {
 
 // codexPoolPersona 按账号确定性地从目录抽取一套完整画像:同一账号永远得到同一画像,
 // 不同账号按配比与真实分布散开。
-func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor string) (userAgent, version string, ok bool, err error) {
+func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor, environment string) (userAgent, version string, ok bool, err error) {
 	if ua, exists := cfg.AccountUserAgents[accountID]; exists {
 		return ua, codexVersionFromUserAgent(ua, cfg.ClientVersion), true, nil
 	}
@@ -354,7 +354,28 @@ func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor st
 	if !found {
 		return "", "", false, nil
 	}
-	platform := pickCodexUAPlatform(spec.Platforms, "platform:"+seed)
+	platforms := spec.Platforms
+	if cfg.AutoMatchOS == nil || *cfg.AutoMatchOS {
+		osName := ""
+		switch environment {
+		case "chrome_macos":
+			osName = "Mac OS"
+		case "chrome_windows":
+			osName = "Windows"
+		}
+		if osName != "" {
+			platforms = nil
+			for _, candidate := range spec.Platforms {
+				if candidate.OSName == osName && candidate.Weight > 0 {
+					platforms = append(platforms, candidate)
+				}
+			}
+			if len(platforms) == 0 {
+				return "", "", false, fmt.Errorf("codex User-Agent: no %s platform for %s", osName, kind)
+			}
+		}
+	}
+	platform := pickCodexUAPlatform(platforms, "platform:"+seed)
 	terminal := pickCodexUAWeighted(spec.Terminals, "terminal:"+seed)
 	appName := spec.ClientName
 	if !spec.AppFollowsCLI {

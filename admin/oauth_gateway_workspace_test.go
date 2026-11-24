@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/codex2api/internal/oauthgateway/upstream"
 )
 
 func TestOAuthGatewayLegacyWorkspaceDiscoveryKeepsDuplicateGuard(t *testing.T) {
@@ -49,5 +51,65 @@ func TestOAuthGatewayLegacyIdentityMismatchStillRejects(t *testing.T) {
 	rows, readErr := db.ListActive(ctx)
 	if readErr != nil || len(rows) != 0 {
 		t.Fatal("rejected identity changed account pool")
+	}
+}
+
+func TestOAuthGatewayReturnedEnvironmentImportAndRecovery(t *testing.T) {
+	h, _, _ := newOAuthGatewayAdminFixture(t)
+	ctx := t.Context()
+	target := oauthGatewayTarget{h}
+	result := upstream.Result{
+		Data:     json.RawMessage(`{"type":"sub2api-data","version":1,"accounts":[{"platform":"openai","type":"oauth","workspace_name":"Fixture","oauth_gateway_environment":"chrome_windows","credentials":{"email":"fixture@example.invalid","access_token":"fixture-at","refresh_token":"fixture-rt","chatgpt_user_id":"fixture-user","chatgpt_account_id":"workspace-original","oauth_gateway_environment":"chrome_windows"}}]}`),
+		Delivery: upstream.Delivery{IncludedCount: 1, Items: []upstream.DeliveryItem{{ItemID: "fixture", Line: 1, AccountIndex: 0}}},
+	}
+	deliver := func(profile *upstream.BatchProfile) json.RawMessage {
+		t.Helper()
+		accounts, err := upstream.ValidateDelivery(result, upstream.Batch{Options: profile, Items: []upstream.BatchItem{{ItemID: "fixture", State: "succeeded", Line: 1}}})
+		if err != nil || len(accounts) != 1 {
+			t.Fatalf("delivery: %v", err)
+		}
+		return accounts[0]
+	}
+	created, err := target.Import(ctx, deliver(nil), nil, "", false)
+	if err != nil || len(created.CreatedIDs) != 1 {
+		t.Fatalf("legacy import: %v", err)
+	}
+	id := created.CreatedIDs[0]
+	check := func(want string) {
+		t.Helper()
+		row, err := h.db.GetAccountByID(ctx, id)
+		if err != nil || row.GetCredential(upstream.EnvironmentCredential) != want {
+			t.Fatalf("persisted environment: want %q, err %v", want, err)
+		}
+		if acc := h.store.FindByID(id); acc == nil || acc.GetOAuthGatewayEnvironment() != want {
+			t.Fatalf("runtime environment: want %q", want)
+		}
+	}
+	check("") // Neither a top-level nor a credential-level remote field is evidence.
+	h, _, _ = newOAuthGatewayAdminFixture(t)
+	target = oauthGatewayTarget{h}
+	created, err = target.Import(ctx, deliver(&upstream.BatchProfile{Environment: "chrome_macos"}), nil, "", false)
+	if err != nil || len(created.CreatedIDs) != 1 {
+		t.Fatalf("bound import: %v", err)
+	}
+	id = created.CreatedIDs[0]
+	check("chrome_macos")
+	for _, env := range []string{"", "future_environment", "chrome_windows"} {
+		var profile *upstream.BatchProfile
+		if env != "" {
+			profile = &upstream.BatchProfile{Environment: env}
+		}
+		snap, err := target.RecoverySnapshot(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered, err := target.Recover(ctx, snap, deliver(profile), "fixture-recovery", false); err != nil || recovered.Updated != 1 {
+			t.Fatalf("recover %q: %v", env, err)
+		}
+		if env == "chrome_windows" {
+			check(env)
+		} else {
+			check("chrome_macos")
+		}
 	}
 }

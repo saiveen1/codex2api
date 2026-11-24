@@ -13,6 +13,12 @@ import (
 	"github.com/codex2api/internal/oauthgateway/service"
 )
 
+func (a *Account) GetOAuthGatewayEnvironment() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.oauthGatewayEnvironment
+}
+
 // Callbacks must be memory-only; runtime and account locks may be held by callers.
 type OAuthRecoveryHooks struct {
 	Enabled func(int64) bool

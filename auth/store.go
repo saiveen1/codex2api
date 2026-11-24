@@ -24,6 +24,7 @@ import (
 
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/oauthgateway/upstream"
 	"github.com/codex2api/internal/openaiidentity"
 	"github.com/codex2api/security/promptfilter"
 )
@@ -163,6 +164,7 @@ type Account struct {
 	codexCapabilityGeneration int64
 	codexCapabilityObservedAt int64
 	UpstreamRequestIDHeader   string
+	oauthGatewayEnvironment   string
 	mu                        sync.RWMutex
 	usageSyncMu               sync.Mutex
 	// Snapshot writes serialize per account without blocking other accounts or frame ingestion.
@@ -6332,6 +6334,7 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		ProxyURL:                     strings.TrimSpace(row.ProxyURL),
 		CustomHeaders:                row.GetCredentialStringMap("custom_headers"),
 		UpstreamRequestIDHeader:      row.GetCredential(UpstreamRequestIDHeaderCredentialKey),
+		oauthGatewayEnvironment:      upstream.KnownEnvironment(row.GetCredential(upstream.EnvironmentCredential)),
 		HealthTier:                   HealthTierWarm,
 		UpstreamType:                 upstreamType,
 		AntigravityProjectID:         strings.TrimSpace(row.GetCredential("project_id")),

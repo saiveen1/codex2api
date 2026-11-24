@@ -350,6 +350,28 @@ func (o *OAuthClient) Result(ctx context.Context, id string) (v Result, err erro
 	return
 }
 
+const EnvironmentCredential = "oauth_gateway_environment"
+
+func KnownEnvironment(value string) string {
+	switch value {
+	case "chrome_macos", "chrome_windows":
+		return value
+	}
+	return ""
+}
+
+// BindDeliveryEnvironment replaces any result-supplied value with validated batch metadata.
+func BindDeliveryEnvironment(account json.RawMessage, profile *BatchProfile) (json.RawMessage, error) {
+	var environment string
+	if profile != nil {
+		environment = KnownEnvironment(profile.Environment)
+	}
+	if environment == "" && !gjson.GetBytes(account, EnvironmentCredential).Exists() {
+		return account, nil
+	}
+	return sjson.SetBytes(account, EnvironmentCredential, environment)
+}
+
 // ValidateDelivery returns the accounts indexed exactly as this delivery's account_index.
 func ValidateDelivery(result Result, batch Batch) ([]json.RawMessage, error) {
 	bad := func() ([]json.RawMessage, error) { return nil, failure("invalid_result", false) }
@@ -393,6 +415,11 @@ func ValidateDelivery(result Result, batch Batch) ([]json.RawMessage, error) {
 			}
 			bundle.Accounts[m.AccountIndex] = account
 		}
+		bound, err := BindDeliveryEnvironment(bundle.Accounts[m.AccountIndex], batch.Options)
+		if err != nil {
+			return bad()
+		}
+		bundle.Accounts[m.AccountIndex] = bound
 		indices[m.AccountIndex] = true
 	}
 	for _, id := range d.ExpiredItemIDs {

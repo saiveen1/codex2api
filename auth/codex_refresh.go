@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/oauthgateway/upstream"
 	"github.com/codex2api/internal/openaiidentity"
 )
 
@@ -317,6 +318,9 @@ func applyCodexCredentialValues(acc *Account, credentials map[string]any, genera
 	acc.AccessToken = row.GetCredential("access_token")
 	acc.RefreshToken = row.GetCredential("refresh_token")
 	acc.SessionToken = row.GetCredential("session_token")
+	if _, present := credentials[upstream.EnvironmentCredential]; present {
+		acc.oauthGatewayEnvironment = upstream.KnownEnvironment(row.GetCredential(upstream.EnvironmentCredential))
+	}
 	acc.ExpiresAt = parseOAuthCredentialExpiry(row.GetCredential("expires_at"))
 	if plan := row.GetCredential("plan_type"); plan != "" {
 		acc.applyRefreshedPlanTypeLocked(plan, time.Now())

@@ -118,6 +118,12 @@ func oauthGatewayWorkspaceName(raw json.RawMessage, workspaceID string) string {
 	return ""
 }
 
+func setOAuthGatewayEnvironment(credentials map[string]any, raw json.RawMessage) {
+	if environment := upstream.KnownEnvironment(gjson.GetBytes(raw, upstream.EnvironmentCredential).Str); environment != "" {
+		credentials[upstream.EnvironmentCredential] = environment
+	}
+}
+
 // Import uses the ordinary account parser and database/runtime entry points,
 // without making an HTTP request to our own administrator endpoint. This is not
 // a recovery upsert: even a freshly authorized duplicate cannot replace a newer
@@ -203,6 +209,7 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 		name = seed.email
 	}
 	credentials := t.h.newCodexAccountCredentials(seed)
+	setOAuthGatewayEnvironment(credentials, raw)
 	if workspaceName != "" {
 		credentials["workspace_name"] = workspaceName
 	}

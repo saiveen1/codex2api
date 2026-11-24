@@ -61,6 +61,7 @@ type CodexUserAgentConfig struct {
 	PoolMix           map[string]int            `json:"pool_mix,omitempty"`
 	AccountKinds      map[int64]CodexClientKind `json:"account_kinds,omitempty"`
 	AccountUserAgents codexAccountUserAgents    `json:"account_user_agents,omitempty"`
+	AutoMatchOS       *bool                     `json:"auto_match_os,omitempty"`
 }
 
 type codexAccountUserAgents map[int64]string
@@ -241,6 +242,7 @@ func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfi
 		PoolMix:           poolMix,
 		AccountKinds:      cfg.AccountKinds,
 		AccountUserAgents: cfg.AccountUserAgents,
+		AutoMatchOS:       cfg.AutoMatchOS,
 	}
 }
 
@@ -417,7 +419,7 @@ func validCodexClientVersionString(value string) bool {
 
 // codexUserAgentFromConfigChecked 按全局 UA 配置生成出站身份。accountID 只在号池模式下参与
 // 画像抽取(同一账号恒得同一画像)。
-func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor string) (string, string, bool, error) {
+func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor string, oauthEnvironment ...string) (string, string, bool, error) {
 	cfg := codexUserAgentConfigFromJSON(raw)
 	if cfg.Mode != CodexUserAgentModePool {
 		cfg.AccountKinds = nil // Dormant bindings do not activate a single persona.
@@ -430,7 +432,11 @@ func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor s
 		return cfg.RawUserAgent, codexVersionFromUserAgent(cfg.RawUserAgent, cfg.ClientVersion), true, nil
 	}
 	if cfg.Mode == CodexUserAgentModePool {
-		return codexPoolPersona(cfg, accountID, versionFloor)
+		environment := ""
+		if len(oauthEnvironment) > 0 {
+			environment = oauthEnvironment[0]
+		}
+		return codexPoolPersona(cfg, accountID, versionFloor, environment)
 	}
 	return buildCodexStructuredUserAgent(cfg, versionFloor)
 }

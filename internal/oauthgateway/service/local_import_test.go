@@ -56,3 +56,29 @@ func TestLocalImportErrorNeverEchoesArbitraryMessage(t *testing.T) {
 		t.Fatal("unknown local error permitted retry")
 	}
 }
+
+func TestLegacyReadyDeliveryUsesSavedBatchNotRequestOrResult(t *testing.T) {
+	for _, returned := range []string{"", "chrome_macos"} {
+		g := Group{Lines: []int{1}, Masks: []string{"fixture"}, Stage: "running", Deliveries: []Delivery{{Line: 1, State: "ready", Account: json.RawMessage(`{"credentials":{"email":"fixture@example.invalid"},"oauth_gateway_environment":"chrome_windows"}`)}}}
+		g.Request.Options.Environment = "chrome_windows"
+		if returned != "" {
+			g.Batch.Options = &upstream.BatchProfile{Environment: returned}
+		}
+		job := Job{ID: "fixture", Groups: []Group{g}}
+		store := &memoryStore{state: State{Version: 1, Jobs: []Job{job}}}
+		f := &fakePair{t: t, importMode: "failed"}
+		a := &App{store: store, target: f}
+		if err := a.importOne(t.Context(), f, job, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		state, err := store.View()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := state.Jobs[0].Groups[0].Deliveries[0]
+		var account map[string]json.RawMessage
+		if !d.EnvironmentChecked || d.State != "import_failed" || json.Unmarshal(d.Account, &account) != nil || string(account[upstream.EnvironmentCredential]) != `"`+returned+`"` {
+			t.Fatalf("retry did not retain trusted environment %q", returned)
+		}
+	}
+}

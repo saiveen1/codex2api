@@ -172,6 +172,7 @@ type CodexUserAgentConfig = {
   pool_mix?: Record<string, number>
   account_kinds?: Record<string, CodexUAKind>
   account_user_agents?: Record<string, string>
+  auto_match_os?: boolean
 }
 type CodexUAKind = 'codex-tui' | 'codex-desktop' | 'codex-vscode' | 'codex-exec' | 'custom'
 const CODEX_UA_KINDS: CodexUAKind[] = ['codex-tui', 'codex-desktop', 'codex-vscode', 'codex-exec', 'custom']
@@ -241,6 +242,7 @@ const DEFAULT_CODEX_UA_CONFIG: Required<CodexUserAgentConfig> = {
   pool_mix: {},
   account_kinds: {},
   account_user_agents: {},
+  auto_match_os: true,
 }
 
 type SettingsTabKey = 'codex' | 'claude' | 'antigravity' | 'grok' | 'kiro' | 'appearance' | 'general'
@@ -472,6 +474,7 @@ const parseCodexUserAgentConfig = (value?: string): CodexUserAgentConfig => {
       pool_mix: poolMix,
       account_kinds: parsed.account_kinds ?? {},
       account_user_agents: parsed.account_user_agents ?? {},
+      auto_match_os: parsed.auto_match_os !== false,
     }
   } catch {
     return {}
@@ -491,6 +494,7 @@ const serializeCodexUserAgentConfig = (config: CodexUserAgentConfig) => {
   if (Object.keys(poolMix).length > 0) normalized.pool_mix = poolMix
   if (config.account_kinds && Object.keys(config.account_kinds).length) normalized.account_kinds = config.account_kinds
   if (config.account_user_agents && Object.keys(config.account_user_agents).length) normalized.account_user_agents = config.account_user_agents
+  if (config.auto_match_os === false) normalized.auto_match_os = false
   return JSON.stringify(normalized)
 }
 
@@ -5335,6 +5339,12 @@ export default function Settings() {
                       ))}
                     </div>
                   ) : null}
+                  {codexUAMode === 'pool' && !codexUARawActive && (
+                    <SettingField label={t('settings.codexUAAutoMatchOS')} description={t('settings.codexUAAutoMatchOSDesc')}>
+                      <Switch aria-label={t('settings.codexUAAutoMatchOS')} checked={codexUserAgentConfig.auto_match_os !== false}
+                        onCheckedChange={(checked) => patchAndSaveCodexUserAgentConfig({ auto_match_os: checked })} />
+                    </SettingField>
+                  )}
                   {codexUAMode === 'pool' && !codexUARawActive && (
                     <SettingField label={t('settings.codexUAAccountKind')} description={t('settings.codexUAAccountKindDesc')}>
                       <div className="flex flex-wrap items-center gap-2">
