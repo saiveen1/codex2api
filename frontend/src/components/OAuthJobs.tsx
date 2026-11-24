@@ -8,12 +8,13 @@ import type { Problem } from '../lib/oauthGateway'
 
 type JobItem = { identifier?: string; identifier_masked?: string; line: number; state: string; import_state: string; can_reauthorize?: boolean; diagnostic?: { upstream_code?: string; http_status?: number; endpoint?: string; stage?: string }; error?: Problem }
 type AccountResult = { line: number; account_id?: number; plan_type?: string; workspace_id?: string; workspace_name?: string; group_ids?: number[]; runtime_proxy_id?: number; recovery_state?: string; identifier_masked?: string; outcome?: string }
+type BatchProfile = { environment?: string; language?: string; timezone?: string }
 export type Job = {
   id: string; state: string; total: number; imported: number; failed: number; pending: number
   can_refresh: boolean; can_cancel: boolean; can_retry_import: boolean; can_archive: boolean; retained_material: boolean; archived: boolean
   created_at?: string; archived_at?: string; job_type?: string; group_ids?: number[]; requested_country?: string; observed_country?: string
   account_results?: AccountResult[]; recovery_account_id?: number; retry_of?: { job_id: string; line: number }; auto_recovery?: boolean
-  groups?: { index: number; state: string; batch_id: string; request_id: string; imported: number; total: number; error?: Problem; read_operation?: string; read_failures?: number; next_check_at?: string; items?: JobItem[] }[]
+  groups?: { index: number; state: string; batch_id: string; request_id: string; imported: number; total: number; profile?: BatchProfile; error?: Problem; read_operation?: string; read_failures?: number; next_check_at?: string; items?: JobItem[] }[]
 }
 
 type Props = {
@@ -140,6 +141,11 @@ export function OAuthJobs({ jobs, groups, archived, error, maxJobs, busy, batchA
                 {job.groups?.map(batch => <div key={batch.index} className="space-y-1 border-t border-border pt-2">
                   <p>{tr('Batch', '批次')} {batch.index + 1}: {stateText(batch.state)} · {batch.imported}/{batch.total}</p>
                   <p className="break-all text-xs text-muted-foreground">{tr('Batch ID', '批次 ID')}: {batch.batch_id || '—'} · {tr('Request', '请求')}: {batch.request_id || '—'}</p>
+                  {(batch.profile?.environment || batch.profile?.language || batch.profile?.timezone) && <p className="break-words text-xs text-muted-foreground">{tr('Gateway authorization options', '网关返回的授权选项')}: {[
+                    batch.profile.environment && `${tr('Environment', '环境')}: ${batch.profile.environment}`,
+                    batch.profile.language && `${tr('Language', '语言')}: ${batch.profile.language}`,
+                    batch.profile.timezone && `${tr('Time zone', '时区')}: ${batch.profile.timezone}`,
+                  ].filter(Boolean).join(' · ')}</p>}
                   {batch.error && <p className="break-words text-destructive">{problemText(batch.error)}</p>}
                   {(batch.read_failures || batch.next_check_at) && <p>{tr('Read / failures / next check', '读取 / 失败次数 / 下次检查')}: {batch.read_operation || '—'} / {batch.read_failures || 0} / {timestamp(batch.next_check_at) || '—'}</p>}
                   {batch.items?.map(item => {

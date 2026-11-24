@@ -40,6 +40,7 @@ func jobView(j Job) JobView {
 	allQueued := true
 	for index, g := range j.Groups {
 		gv := GroupView{Index: index, State: g.Stage, BatchID: g.Batch.BatchID, RequestID: g.Request.RequestID, Total: len(g.Lines), Error: g.Error, Items: []ItemView{}}
+		gv.Profile = g.Batch.Options
 		gv.ReadOperation = g.ReadOperation
 		gv.ReadFailures = g.ReadFailures
 		if g.ReadFailures > 0 && g.Stage != "needs_review" && !g.NextCheck.IsZero() {

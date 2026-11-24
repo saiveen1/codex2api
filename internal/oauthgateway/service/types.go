@@ -146,17 +146,18 @@ type ItemView struct {
 	Diagnostic       *ItemDiagnostic `json:"diagnostic,omitempty"`
 }
 type GroupView struct {
-	Index         int        `json:"index"`
-	State         string     `json:"state"`
-	BatchID       string     `json:"batch_id"`
-	RequestID     string     `json:"request_id"`
-	Total         int        `json:"total"`
-	Imported      int        `json:"imported"`
-	Error         *Problem   `json:"error,omitempty"`
-	Items         []ItemView `json:"items"`
-	ReadOperation string     `json:"read_operation,omitempty"`
-	ReadFailures  int        `json:"read_failures,omitempty"`
-	NextCheckAt   *time.Time `json:"next_check_at,omitempty"`
+	Profile       *upstream.BatchProfile `json:"profile,omitempty"`
+	Index         int                    `json:"index"`
+	State         string                 `json:"state"`
+	BatchID       string                 `json:"batch_id"`
+	RequestID     string                 `json:"request_id"`
+	Total         int                    `json:"total"`
+	Imported      int                    `json:"imported"`
+	Error         *Problem               `json:"error,omitempty"`
+	Items         []ItemView             `json:"items"`
+	ReadOperation string                 `json:"read_operation,omitempty"`
+	ReadFailures  int                    `json:"read_failures,omitempty"`
+	NextCheckAt   *time.Time             `json:"next_check_at,omitempty"`
 }
 
 // AccountResult is a point-in-time summary, not account or login material.

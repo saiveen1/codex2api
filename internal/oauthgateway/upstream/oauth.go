@@ -125,15 +125,36 @@ type BatchItem struct {
 	Progress         *ItemProgress        `json:"progress,omitempty"`
 	SuccessSummary   *BatchSuccessSummary `json:"success_summary,omitempty"`
 }
+
+// BatchProfile contains only the displayable authorization options, never proxy credentials.
+type BatchProfile struct {
+	Environment string `json:"environment,omitempty"`
+	Language    string `json:"language,omitempty"`
+	Timezone    string `json:"timezone,omitempty"`
+}
+
+func (p *BatchProfile) UnmarshalJSON(data []byte) error {
+	field := func(key string) string {
+		v := gjson.GetBytes(data, key)
+		if v.Type != gjson.String || len(v.Str) > 128 || strings.ContainsFunc(v.Str, unicode.IsControl) {
+			return ""
+		}
+		return strings.TrimSpace(v.Str)
+	}
+	*p = BatchProfile{Environment: field("environment"), Language: field("language"), Timezone: field("timezone")}
+	return nil
+}
+
 type Batch struct {
-	BatchID   string      `json:"batch_id"`
-	RequestID string      `json:"request_id"`
-	State     string      `json:"state"`
-	Total     int         `json:"total"`
-	Succeeded int         `json:"succeeded"`
-	Failed    int         `json:"failed"`
-	Pending   int         `json:"pending"`
-	Items     []BatchItem `json:"items"`
+	BatchID   string        `json:"batch_id"`
+	RequestID string        `json:"request_id"`
+	State     string        `json:"state"`
+	Total     int           `json:"total"`
+	Succeeded int           `json:"succeeded"`
+	Failed    int           `json:"failed"`
+	Pending   int           `json:"pending"`
+	Items     []BatchItem   `json:"items"`
+	Options   *BatchProfile `json:"options,omitempty"`
 }
 type DeliveryItem struct {
 	ItemID       string `json:"item_id"`
