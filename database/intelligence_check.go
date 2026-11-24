@@ -338,9 +338,6 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 					delay, state.ProbePhase = state.PauseBackoffSeconds, "backoff"
 				}
 			} else {
-				if a.Channel != "antigravity" {
-					state.BlockedCredentialGeneration = nil
-				}
 				state.PauseBackoffSeconds = 0
 			}
 			state.NextIntervalSeconds = delay

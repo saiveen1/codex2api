@@ -567,7 +567,7 @@ func (db *DB) FinishIntelligenceCheck(ctx context.Context, id int64, owner strin
 				if next.BlockedCredentialGeneration != nil && *next.BlockedCredentialGeneration != a.CredentialGeneration {
 					next.BlockedCredentialGeneration = nil
 				}
-				if o.CredentialRejected && (s.AdaptiveEnabled || a.Channel == "antigravity") {
+				if o.CredentialRejected {
 					generation := a.CredentialGeneration
 					next.BlockedCredentialGeneration = &generation
 				} else if grade.Status == "normal" {

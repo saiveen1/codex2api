@@ -82,7 +82,12 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 		ws     bool
 	}
 	captured := make(chan capture, 4)
-	var failureStatus atomic.Int32
+	const (
+		probeTokenExpired = iota + 1
+		probeBare401
+		probeStreamInvalidated
+	)
+	var failureMode atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if websocket.IsWebSocketUpgrade(r) {
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -105,14 +110,18 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 			}
 		}
 		body, _ := io.ReadAll(r.Body)
-		if status := failureStatus.Load(); status != 0 {
-			if status == http.StatusUnauthorized {
-				w.WriteHeader(http.StatusUnauthorized)
-				io.WriteString(w, `{"error":{"code":"token_revoked"}}`)
-			} else {
-				w.Header().Set("Content-Type", "text/event-stream")
-				io.WriteString(w, "data: "+`{"type":"response.failed","response":{"error":{"code":"token_revoked","message":"token_revoked"}}}`+"\n\n")
-			}
+		switch failureMode.Load() {
+		case probeTokenExpired:
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"code":"token_expired"}}`)
+			return
+		case probeBare401:
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `Unauthorized`)
+			return
+		case probeStreamInvalidated:
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: "+`{"type":"response.failed","response":{"error":{"code":"token_invalidated"}}}`+"\n\n")
 			return
 		}
 		captured <- capture{r.Header.Clone(), body, false}
@@ -207,18 +216,20 @@ func TestIntelligenceActualCodexHTTPAndWebsocketIdentity(t *testing.T) {
 		},
 	})
 	for _, tc := range []struct {
-		status      int32
+		mode        int32
 		recordOnly  bool
+		wantError   string
 		wantSignals int
 	}{
-		{http.StatusUnauthorized, true, 0},
-		{http.StatusUnauthorized, false, 1},
-		{http.StatusOK, false, 2},
+		{probeTokenExpired, true, "token_expired", 0},
+		{probeTokenExpired, false, "token_expired", 1},
+		{probeBare401, false, "上游返回 401: Unauthorized", 1},
+		{probeStreamInvalidated, false, "token_invalidated", 2},
 	} {
-		failureStatus.Store(tc.status)
+		failureMode.Store(tc.mode)
 		result := h.executeIntelligenceCheck(t.Context(), account, "gpt-5.4", "high", prompt, tc.recordOnly)
-		if !strings.Contains(result.Error, "token_revoked") || signals != tc.wantSignals {
-			t.Fatalf("status=%d record-only=%v: error=%q signals=%d want=%d", tc.status, tc.recordOnly, result.Error, signals, tc.wantSignals)
+		if !result.CredentialRejected || !strings.Contains(result.Error, tc.wantError) || signals != tc.wantSignals {
+			t.Fatalf("fixture=%d record-only=%v: result=%+v signals=%d want=%d", tc.mode, tc.recordOnly, result, signals, tc.wantSignals)
 		}
 	}
 }

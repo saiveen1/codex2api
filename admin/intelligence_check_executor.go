@@ -161,7 +161,7 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		result.Error = fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(raw), 4096))
-		result.CredentialRejected = intelligenceCredentialRejected(raw) || (account.IsAntigravityAPI() || account.IsKiro()) && resp.StatusCode == http.StatusUnauthorized
+		result.CredentialRejected = resp.StatusCode == http.StatusUnauthorized || intelligenceCredentialRejected(raw)
 		if applySignals {
 			h.applyIntelligenceUpstreamFailure(account, resp, model, raw)
 		}
@@ -176,7 +176,7 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		proxy.SyncCodexUsageState(h.store, account, resp)
 	}
 	result = readIntelligenceStream(resp.Body, claude)
-	result.CredentialRejected = intelligenceCredentialRejected(result.terminalPayload)
+	result.CredentialRejected = intelligenceCredentialRejected(result.terminalPayload) || proxy.IsResponsesOAuthRecoveryFailure(result.terminalPayload)
 	if ctx.Err() != nil {
 		result.Complete = false
 		result.Error = ctx.Err().Error()

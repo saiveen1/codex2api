@@ -184,6 +184,53 @@ func TestIntelligenceRunnerKeepsOtherUpstreamErrors(t *testing.T) {
 	}
 }
 
+func TestIntelligenceRunnerStops401UntilCredentialsChange(t *testing.T) {
+	f := newIntelligenceHoldFixture(t)
+	ctx := t.Context()
+	if err := f.db.UpdateCredentials(ctx, f.id, map[string]any{"plan_type": "team"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := f.db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.AdaptiveEnabled = false
+	settings.Rules = []ic.Rule{{ID: "all", Name: "All team accounts", Channel: "codex", Plan: "team", Automatic: true}}
+	if settings, err = f.db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	f.status.Store(http.StatusUnauthorized)
+	f.tick()
+	runs := f.runs()
+	if len(runs) != 1 || runs[0].Status != "error" || !runs[0].CredentialRejected || runs[0].RequireNormal {
+		t.Fatalf("expected one 401 from an unrestricted rule: %+v", runs)
+	}
+	f.tick()
+	if runs := f.runs(); len(runs) != 1 || f.requests.Load() != 1 {
+		t.Fatalf("same credentials retried: records=%d requests=%d", len(runs), f.requests.Load())
+	}
+	settings.RetrySeconds++
+	if _, err := f.db.SaveIntelligenceCheckSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	f.tick()
+	if f.requests.Load() != 1 {
+		t.Fatal("saving the rule unblocked rejected credentials")
+	}
+	if err := f.db.UpdateOpenAIResponsesAccount(ctx, f.id, "", map[string]any{"api_key": "replacement-key"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.store.RemoveAccount(f.id)
+	if err := f.store.LoadAccountByID(ctx, f.id); err != nil {
+		t.Fatal(err)
+	}
+	f.status.Store(http.StatusOK)
+	f.tick()
+	if runs := f.runs(); len(runs) != 2 || runs[0].Status != "normal" || f.requests.Load() != 2 {
+		t.Fatalf("new credentials did not resume detection: runs=%+v requests=%d", runs, f.requests.Load())
+	}
+}
+
 func TestIntelligenceRunnerNormalOnlySkipsBeforeQueue(t *testing.T) {
 	f := newIntelligenceHoldFixture(t)
 	ctx := context.Background()
