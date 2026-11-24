@@ -4287,6 +4287,7 @@ export interface PublicAPIKeyUsageLogFilter {
 }
 
 export interface PublicAPIKeyUsageReport {
+  feature_stats: UsageFeatureStats
   summary: PublicAPIKeyUsageSummary
   windows: PublicAPIKeyUsageWindows
   models: PublicAPIKeyUsageBreakdown[]
@@ -4301,6 +4302,7 @@ export interface PublicAPIKeyUsageReport {
 }
 
 export interface PublicAPIKeyUsageResponse {
+  can_view_accounts: boolean
   key: PublicAPIKeyUsageKey
   range: PublicAPIKeyUsageRange
   usage: PublicAPIKeyUsageReport

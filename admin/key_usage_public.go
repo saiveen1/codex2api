@@ -24,6 +24,7 @@ type publicAPIKeyUsageResponse struct {
 	Range             publicAPIKeyUsageRange             `json:"range"`
 	Usage             *database.APIKeySelfUsageReport    `json:"usage"`
 	ModelRequestUsage []database.APIKeyModelRequestUsage `json:"model_request_usage"`
+	CanViewAccounts   bool                               `json:"can_view_accounts"`
 }
 
 type publicAPIKeyUsageKey struct {
@@ -84,11 +85,17 @@ func (h *Handler) GetPublicAPIKeyUsageSummary(c *gin.Context) {
 		modelRequestUsage = []database.APIKeyModelRequestUsage{}
 	}
 
+	permissions, err := h.keyUsagePermissions(ctx, row.ID)
+	if err != nil {
+		writePublicKeyUsageInternalError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, publicAPIKeyUsageResponse{
 		Key:               newPublicAPIKeyUsageKey(row),
 		Range:             newPublicAPIKeyUsageRange(rangeName, rangeStart, rangeEnd),
 		Usage:             report,
 		ModelRequestUsage: modelRequestUsage,
+		CanViewAccounts:   permissions.ViewEnabled,
 	})
 }
 

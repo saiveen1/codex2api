@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -97,4 +98,73 @@ func testUsageStatsGroupRenamedAPIKeysByID(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 	assertStats("Second name")
+}
+
+func TestAPIKeySelfUsageFeatureStats(t *testing.T) {
+	db, err := New("sqlite", filepath.Join(t.TempDir(), "self-features.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	keyID, err := db.InsertAPIKey(ctx, "self", "sk-self-features")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID, err := db.InsertAPIKey(ctx, "other", "sk-other-features")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hour := time.Now().Truncate(time.Hour)
+	start, end := hour.Add(-4*time.Hour+10*time.Minute), hour.Add(-time.Hour+10*time.Minute)
+	logs := []UsageLogInput{
+		{APIKeyID: keyID, CreatedAt: start.Add(time.Minute), StatusCode: 200, Stream: true, ServiceTier: "priority", CachedTokens: 1, ReasoningEffort: "high", Endpoint: "/v1/responses"},
+		{APIKeyID: keyID, CreatedAt: hour.Add(-3*time.Hour + 20*time.Minute), StatusCode: 500, Model: "gpt-image-2", AttemptIndex: 2},
+		{APIKeyID: keyID, CreatedAt: end.Add(-time.Minute), StatusCode: 200, BillingServiceTier: "standard", ServiceTier: "fast", AttemptIndex: 1},
+		{APIKeyID: keyID, CreatedAt: start.Add(-time.Minute), StatusCode: 500, Stream: true},
+		{APIKeyID: keyID, CreatedAt: end, StatusCode: 500, Stream: true},
+		{APIKeyID: otherID, CreatedAt: start.Add(time.Minute), StatusCode: 500, Stream: true},
+		{APIKeyID: keyID, CreatedAt: start.Add(time.Minute), StatusCode: 499, Stream: true},
+		{APIKeyID: keyID, CreatedAt: hour.Add(-3*time.Hour + 30*time.Minute), StatusCode: 500, Stream: true, InternalReason: "internal_test"},
+	}
+	for i := range logs {
+		if err := db.InsertUsageLog(ctx, &logs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.FlushUsageLogs()
+	if err := db.RebuildUsageHourlyRollup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := UsageFeatureStat{StreamRequests: 1, SyncRequests: 2, FastRequests: 1, CacheHitRequests: 1, ReasoningRequests: 1, ImageRequests: 1, RetryRequests: 1, ErrorRequests: 1}
+	for _, ready := range []bool{false, true} {
+		setUsageHourlyReady(t, db, ready)
+		if ready && !db.planUsageHourlyQuery(ctx, start, end, time.Now()).useRollup {
+			t.Fatal("test range should use hourly rollup")
+		}
+		for _, filter := range []APIKeySelfLogFilter{{}, {Endpoint: "/v1/responses"}, {Status: "error", Stream: "sync"}} {
+			report, err := db.GetAPIKeySelfUsageReportFiltered(ctx, keyID, start, end, 1, 10, filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.FeatureStats != want {
+				t.Fatalf("rollup=%v filter=%+v: features=%+v, want %+v", ready, filter, report.FeatureStats, want)
+			}
+			data, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal(data, &result); err != nil || len(result["feature_stats"]) == 0 {
+				t.Fatalf("top-level feature_stats missing: %s (%v)", data, err)
+			}
+		}
+		admin, err := db.GetUsageStatsFiltered(ctx, start, end, "", UsageLogFilter{APIKeyID: &keyID}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if admin.FeatureStats != want {
+			t.Fatalf("rollup=%v: admin features=%+v, want %+v", ready, admin.FeatureStats, want)
+		}
+	}
 }

@@ -14,6 +14,39 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestPublicAPIKeySummaryAccountVisibility(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestAdminDB(t)
+	ctx := context.Background()
+	const key = "sk-portal-visibility-fixture"
+	id, err := db.InsertAPIKey(ctx, "fixture", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	h := &Handler{db: db}
+	router.GET("/summary", h.GetPublicAPIKeyUsageSummary)
+	for _, tc := range []struct{ global, key, want bool }{
+		{false, true, false}, {true, false, false}, {true, true, true},
+	} {
+		for policyID, enabled := range map[int64]bool{0: tc.global, id: tc.key} {
+			if err := db.SetKeyUsageAccountPermissions(ctx, policyID, database.KeyUsageAccountPermissions{ViewEnabled: enabled}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		req := httptest.NewRequest(http.MethodGet, "/summary", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		var resp struct {
+			Visible *bool `json:"can_view_accounts"`
+		}
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil || resp.Visible == nil || *resp.Visible != tc.want {
+			t.Fatalf("global=%t key=%t: status=%d, want can_view_accounts=%t", tc.global, tc.key, w.Code, tc.want)
+		}
+	}
+}
+
 func TestParsePublicAPIKeyUsageLogFilter(t *testing.T) {
 	filter, err := parsePublicAPIKeyUsageLogFilter(" gpt-5.5 ", "/v1/responses", "ERROR", "Stream", "Claude")
 	if err != nil {

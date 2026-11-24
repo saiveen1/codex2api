@@ -15,6 +15,7 @@ import UsageDaybreakBadge from '../components/UsageDaybreakBadge'
 import ModelLogo from '../components/ModelLogo'
 import ReasoningEffortBadge from '../components/ReasoningEffortBadge'
 import { TimingCell, TokensPerSecCell, UsageCacheBadges, UsageInputTokenCount } from '../components/UsageLogMetrics'
+import FeatureStatsPanel from '../components/FeatureStatsPanel'
 import Modal from '../components/Modal'
 import ColumnSettingsMenu from '../components/ColumnSettingsMenu'
 import StateShell from '../components/StateShell'
@@ -22,7 +23,7 @@ import { useDataLoader } from '../hooks/useDataLoader'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useToast } from '../hooks/useToast'
 import { DEFAULT_PAGE_SIZE_OPTIONS, usePersistedPageSize } from '../hooks/usePersistedPageSize'
-import type { APIKeyRow, OpsErrorSummary, SystemSettings, UsageAPIKeyStat, UsageEndpointStat, UsageFeatureStats, UsageLog, UsageModelStat, UsageStats, PromptFilterLog, PromptPolicyIncidentDetailResponse } from '../types'
+import type { APIKeyRow, OpsErrorSummary, SystemSettings, UsageAPIKeyStat, UsageEndpointStat, UsageLog, UsageModelStat, UsageStats, PromptFilterLog, PromptPolicyIncidentDetailResponse } from '../types'
 import { DiagnosticDetailsButton, diagnosticContextSummary } from '../components/DiagnosticDetailsDialog'
 import { usageDiagnosticStatus } from '../lib/diagnosticContext'
 import { cn, formatCompactEmail } from '../lib/utils'
@@ -42,7 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Activity, Box, Clock, Zap, Sparkles, AlertTriangle, Search, Brain, DatabaseZap, X, Image as ImageIcon, Info, CircleDollarSign, BarChart3, KeyRound, Route, SlidersHorizontal, ShieldAlert, RefreshCw, ChevronDown, RotateCcw, PlugZap, FlaskConical } from 'lucide-react'
+import { Activity, Box, Clock, Zap, Sparkles, AlertTriangle, Search, Brain, X, Image as ImageIcon, Info, CircleDollarSign, BarChart3, KeyRound, Route, SlidersHorizontal, ShieldAlert, RefreshCw, ChevronDown, RotateCcw, PlugZap, FlaskConical } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -683,68 +684,6 @@ function ModelStatsPanel({ stats, showFullUsageNumbers }: {
   )
 }
 
-function FeatureStatsPanel({ stats, totalRequests, showFullUsageNumbers }: {
-  stats?: UsageFeatureStats
-  totalRequests: number
-  showFullUsageNumbers: boolean
-}) {
-  const { t } = useTranslation()
-  const stream = Math.max(0, safeNumber(stats?.stream_requests))
-  const sync = Math.max(0, safeNumber(stats?.sync_requests))
-  const share = (value: number) => totalRequests > 0 ? Math.max(0, Math.min(100, value / totalRequests * 100)) : 0
-  const features = [
-    { key: 'featureCache', value: stats?.cache_hit_requests, icon: <DatabaseZap />, accent: 'cyan' },
-    { key: 'featureReasoning', value: stats?.reasoning_requests, icon: <Brain />, accent: 'violet' },
-    { key: 'featureFast', value: stats?.fast_requests, icon: <Zap />, accent: 'blue' },
-    { key: 'featureImage', value: stats?.image_requests, icon: <ImageIcon />, accent: 'amber' },
-  ] as const
-
-  return (
-    <PanelShell className="usage-feature-panel">
-      <PanelHeader accent="cyan" icon={<Activity />} title={t('usage.featureStatsTitle')} description={t('usage.featureStatsDesc')} />
-      <div className="usage-transport">
-        <div className="usage-transport-values">
-          {[{ key: 'featureStream', value: stream }, { key: 'featureSync', value: sync }].map((item) => (
-            <div key={item.key}>
-              <span className="usage-transport-label"><i aria-hidden="true" />{t(`usage.${item.key}`)}</span>
-              <div><strong>{formatTokens(item.value, showFullUsageNumbers)}</strong><span>{formatSharePercent(share(item.value))}</span></div>
-            </div>
-          ))}
-        </div>
-        <div className="usage-transport-track" aria-hidden="true">
-          <span style={{ width: `${share(stream)}%` }} />
-          <span style={{ width: `${share(sync)}%` }} />
-        </div>
-      </div>
-      <div className="usage-feature-heading"><span className="usage-eyebrow">{t('usage.featureTraits')}</span><span>{t('usage.featureOverlapHint')}</span></div>
-      <div className="usage-feature-grid">
-        {features.map((item) => {
-          const value = Math.max(0, safeNumber(item.value))
-          return (
-            <div key={item.key} className="usage-feature-item">
-              <span aria-hidden="true" className={cn('usage-feature-icon', PANEL_ACCENTS[item.accent].chip)}>{item.icon}</span>
-              <div className="usage-feature-content">
-                <span>{t(`usage.${item.key}`)}</span>
-                <div><strong>{formatTokens(value, showFullUsageNumbers)}</strong><span>{formatSharePercent(share(value))}</span></div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="usage-panel-footer usage-status-strip">
-        {[{ key: 'featureRetry', value: stats?.retry_requests, icon: <RefreshCw />, tone: 'text-amber-600 dark:text-amber-400' }, { key: 'featureError', value: stats?.error_requests, icon: <AlertTriangle />, tone: 'text-rose-600 dark:text-rose-400' }].map((item) => {
-          const value = Math.max(0, safeNumber(item.value))
-          return (
-            <div key={item.key} className={value > 0 ? item.tone : undefined}>
-              <span className="usage-status-label"><span aria-hidden="true">{item.icon}</span>{t(`usage.${item.key}`)}</span>
-              <strong>{formatTokens(value, showFullUsageNumbers)}</strong><span>{formatSharePercent(share(value))}</span>
-            </div>
-          )
-        })}
-      </div>
-    </PanelShell>
-  )
-}
 
 function EndpointStatsPanel({
   stats,

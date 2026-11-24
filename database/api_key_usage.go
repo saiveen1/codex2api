@@ -735,6 +735,7 @@ func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, honor
 // 共享同一 key 的持有者可互相看到),不返回其他 key 的日志、账号池、raw key 等后台字段。
 type APIKeySelfUsageReport struct {
 	Summary            APIKeySelfUsageSummary     `json:"summary"`
+	FeatureStats       UsageFeatureStat           `json:"feature_stats"`
 	Windows            APIKeySelfUsageWindows     `json:"windows"`
 	Models             []APIKeySelfUsageBreakdown `json:"models"`
 	Endpoints          []APIKeySelfUsageBreakdown `json:"endpoints"`
@@ -1106,11 +1107,14 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 			var endpoint, requestModel string
 			var segment int
 			var groupDurationSum, groupDurationCount, groupFirstTokenSum, groupFirstTokenCount int64
+			var features UsageFeatureStat
 			var oldestRaw interface{}
 			if err := rows.Scan(
 				&g.Name, &endpoint, &requestModel, &segment,
 				&g.Requests, &g.Tokens, &g.InputTokens, &g.OutputTokens, &g.CachedTokens, &g.ErrorCount, &g.UserBilled,
 				&groupDurationSum, &groupDurationCount, &groupFirstTokenSum, &groupFirstTokenCount,
+				&features.StreamRequests, &features.SyncRequests, &features.FastRequests, &features.CacheHitRequests,
+				&features.ReasoningRequests, &features.ImageRequests, &features.RetryRequests, &features.ErrorRequests,
 				&oldestRaw,
 			); err != nil {
 				return err
@@ -1134,6 +1138,14 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 			if segment < rangeFirst || segment > rangeLast {
 				continue
 			}
+			report.FeatureStats.StreamRequests += features.StreamRequests
+			report.FeatureStats.SyncRequests += features.SyncRequests
+			report.FeatureStats.FastRequests += features.FastRequests
+			report.FeatureStats.CacheHitRequests += features.CacheHitRequests
+			report.FeatureStats.ReasoningRequests += features.ReasoningRequests
+			report.FeatureStats.ImageRequests += features.ImageRequests
+			report.FeatureStats.RetryRequests += features.RetryRequests
+			report.FeatureStats.ErrorRequests += features.ErrorRequests
 			summary.Requests += g.Requests
 			summary.Tokens += g.Tokens
 			summary.InputTokens += g.InputTokens
@@ -1195,6 +1207,14 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 				COUNT(NULLIF(duration_ms, 0)),
 				COALESCE(SUM(NULLIF(first_token_ms, 0)), 0),
 				COUNT(NULLIF(first_token_ms, 0)),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND stream THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND NOT stream THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND LOWER(COALESCE(NULLIF(billing_service_tier, ''), service_tier, '')) IN ('fast', 'priority', 'ultrafast') THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND cached_tokens > 0 THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND (reasoning_tokens > 0 OR NULLIF(reasoning_effort, '') IS NOT NULL) THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND (LOWER(COALESCE(NULLIF(inbound_endpoint, ''), endpoint, '')) LIKE '%/images/%' OR LOWER(COALESCE(model, '')) LIKE 'gpt-image-%' OR image_count > 0) THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND attempt_index > 1 THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN TRIM(COALESCE(internal_reason, '')) = '' AND status_code >= 400 THEN 1 ELSE 0 END), 0),
 				MIN(created_at)
 			FROM usage_logs
 			WHERE api_key_id = $1 AND status_code <> 499 AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic' AND ` + spanWhere + `
@@ -1224,6 +1244,14 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 				` + sumBigint("duration_samples") + `,
 				` + sumBigint("first_token_ms_sum") + `,
 				` + sumBigint("first_token_samples") + `,
+				` + sumBigint("CASE WHEN internal = 0 AND stream THEN requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN CASE WHEN stream THEN 0 ELSE requests END ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN fast_requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN cache_hit_requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN reasoning_requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN image_requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 THEN retry_requests ELSE 0 END") + `,
+				` + sumBigint("CASE WHEN internal = 0 AND status_code >= 400 THEN requests ELSE 0 END") + `,
 				MIN(min_created_at)
 			FROM usage_log_hourly
 			WHERE api_key_id = $1 AND status_code <> 499 AND internal <> 2 AND ` + bucketWhere + `

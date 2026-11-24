@@ -1,8 +1,9 @@
 import { ImageBillingCost } from '../components/image-studio/ImageBillingCost'
 import KeyUsageAccounts from '../components/KeyUsageAccounts'
-import { KEY_USAGE_VIEWS as USAGE_VIEWS, normalizeKeyUsageView as normalizeUsageView, type KeyUsageView as UsageView } from '../lib/keyUsageViews'
+import FeatureStatsPanel from '../components/FeatureStatsPanel'
+import { visibleKeyUsageViews, normalizeKeyUsageView, type KeyUsageView as UsageView } from '../lib/keyUsageViews'
 import { mediaBillingUnit } from '../lib/imageBilling'
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
@@ -86,7 +87,6 @@ export default function APIKeyUsagePortal() {
   const { siteName, siteLogo } = useBranding()
   const { view } = useParams()
   const navigate = useNavigate()
-  const activeView = normalizeUsageView(view)
   const [apiKeyInput, setAPIKeyInput] = useState(() => readStoredAPIKey().key)
   const [remember, setRemember] = useState(() => {
     const stored = readStoredAPIKey()
@@ -103,6 +103,11 @@ export default function APIKeyUsagePortal() {
   const [bootstrapping, setBootstrapping] = useState(() => Boolean(readStoredAPIKey().key))
   const [error, setError] = useState('')
   const [data, setData] = useState<PublicAPIKeyUsageResponse | null>(null)
+  const views = visibleKeyUsageViews(data?.can_view_accounts === true)
+  const activeView = normalizeKeyUsageView(view, views)
+  const handleAccountsDenied = useCallback(() => {
+    setData(current => current && { ...current, can_view_accounts: false })
+  }, [])
   const [logFilter, setLogFilter] = useState<PublicAPIKeyUsageLogFilter>({})
   const logoSrc = siteLogo || DEFAULT_SITE_LOGO
 
@@ -225,12 +230,12 @@ export default function APIKeyUsagePortal() {
     void reload(range, 1, logPageSize, {})
   }
 
-  // 非法的子路由回退到概览
+  // Wait for the authenticated summary before resolving an accounts deep link.
   useEffect(() => {
-    if (view && !USAGE_VIEWS.includes(view as UsageView)) {
+    if (data && view && view !== activeView) {
       navigate('/key-usage/overview', { replace: true })
     }
-  }, [navigate, view])
+  }, [activeView, data, navigate, view])
 
   const handleLogout = () => {
     clearStoredAPIKey()
@@ -391,7 +396,7 @@ export default function APIKeyUsagePortal() {
               <div className="truncate text-xs text-muted-foreground">{siteName}</div>
             </div>
           </div>
-          <UsageTabs activeView={activeView} className="col-span-2 row-start-2 md:col-span-1 md:col-start-2 md:row-start-1 md:w-[440px]" />
+          <UsageTabs views={views} activeView={activeView} className="col-span-2 row-start-2 md:col-span-1 md:col-start-2 md:row-start-1 md:w-[440px]" />
           <div className="justify-self-end md:col-start-3 md:row-start-1">{toolbar}</div>
         </div>
       </header>
@@ -444,26 +449,31 @@ export default function APIKeyUsagePortal() {
                     icon={<Box />}
                     label={t('keyUsage.tokens')}
                     value={formatCompact(summary.tokens)}
-                    hint={t('keyUsage.tokenSplit', { input: formatCompact(summary.input_tokens), output: formatCompact(summary.output_tokens) })}
+                    hint={t('keyUsage.tokenSplit', { input: formatCompact(summary.input_tokens), output: formatCompact(summary.output_tokens), cached: formatCompact(summary.cached_tokens) })}
                   />
                   <StatCard
                     accent="amber"
                     icon={<AlertTriangle />}
                     label={t('usage.errorRateCard')}
                     value={formatPercent(errorRate)}
-                    hint={t('usage.avgLatencyInline', { value: Math.round(summary.avg_duration_ms) })}
+                    hint={[t('usage.avgLatencyInline', { value: Math.round(summary.avg_duration_ms) }), t('keyUsage.avgFirstTokenInline', { value: summary.avg_first_token_ms > 0 ? `${Math.round(summary.avg_first_token_ms)}ms` : '—' })].join(' / ')}
                   />
                 </div>
                 <div className="grid gap-5 lg:grid-cols-2">
                   <ModelStatsPanel rows={data.usage.models} />
-                  <DistributionPanel
-                    accent="violet"
-                    icon={<Route />}
-                    title={t('keyUsage.endpoints')}
-                    rows={data.usage.endpoints}
-                    emptyText={t('usage.noEndpointStats')}
-                  />
+                  {data.usage.feature_stats && <FeatureStatsPanel
+                    stats={data.usage.feature_stats}
+                    totalRequests={data.usage.feature_stats.stream_requests + data.usage.feature_stats.sync_requests}
+                    showFullUsageNumbers={false}
+                  />}
                 </div>
+                <DistributionPanel
+                  accent="violet"
+                  icon={<Route />}
+                  title={t('keyUsage.endpoints')}
+                  rows={data.usage.endpoints}
+                  emptyText={t('usage.noEndpointStats')}
+                />
               </div>
             ) : null}
 
@@ -479,7 +489,7 @@ export default function APIKeyUsagePortal() {
               </div>
             ) : null}
 
-            {activeView === 'accounts' ? <KeyUsageAccounts key={activeAPIKey} apiKey={activeAPIKey} /> : null}
+            {activeView === 'accounts' ? <KeyUsageAccounts key={activeAPIKey} apiKey={activeAPIKey} onAccessDenied={handleAccountsDenied} /> : null}
 
             {/* 请求日志：整页表格 */}
             {activeView === 'logs' ? (
@@ -510,15 +520,11 @@ export default function APIKeyUsagePortal() {
 // ============================================================================
 // UsageTabs —— 顶栏内的分段标签，按 URL 切换概览/额度/日志
 // ============================================================================
-function UsageTabs({ activeView, className = '' }: { activeView: UsageView; className?: string }) {
+function UsageTabs({ views, activeView, className = '' }: { views: readonly UsageView[]; activeView: UsageView; className?: string }) {
   const { t } = useTranslation()
-  const tabs: Array<{ view: UsageView; label: string; icon: ReactNode }> = [
-    { view: 'overview', label: t('keyUsage.views.overview'), icon: <LayoutDashboard /> },
-    { view: 'quota', label: t('keyUsage.views.quota'), icon: <Gauge /> },
-    { view: 'accounts', label: t('keyUsage.views.accounts'), icon: <KeyRound /> },
-    { view: 'logs', label: t('keyUsage.views.logs'), icon: <ScrollText /> },
-  ]
-  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.view === activeView))
+  const icons = { overview: <LayoutDashboard />, quota: <Gauge />, accounts: <KeyRound />, logs: <ScrollText /> }
+  const tabs = views.map(view => ({ view, label: t(`keyUsage.views.${view}`), icon: icons[view] }))
+  const activeIndex = views.indexOf(activeView)
 
   return (
     <div
@@ -608,7 +614,7 @@ function StatCard({ accent, icon, label, value, hint }: { accent: AccentKey; ico
           <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${a.chip} [&_svg]:size-4`}>{icon}</div>
         </div>
         <div className={`min-w-0 break-words text-[22px] font-bold leading-tight tabular-nums ${a.value}`}>{value}</div>
-        <div className="truncate text-[11px] leading-snug text-muted-foreground" title={hint}>{hint}</div>
+        <div className="text-[11px] leading-snug text-muted-foreground">{hint}</div>
       </CardContent>
     </Card>
   )
