@@ -1868,6 +1868,7 @@ type accountResponse struct {
 	CodexPassthroughMode          string                      `json:"codex_passthrough_mode,omitempty"`
 	ResponsesUpstreamTransport    string                      `json:"responses_upstream_transport,omitempty"`
 	CodexFingerprintMode          string                      `json:"codex_fingerprint_mode,omitempty"`
+	CodexUserAgent                string                      `json:"codex_user_agent"`
 	ClaudeFingerprintMode         string                      `json:"claude_fingerprint_mode,omitempty"`
 	ClaudeUserAgent               string                      `json:"claude_user_agent,omitempty"`
 	ClaudeClientPlatform          string                      `json:"claude_client_platform,omitempty"`
@@ -2353,6 +2354,7 @@ type updateAccountSchedulerReq struct {
 	ProxyURL                json.RawMessage `json:"proxy_url"`
 	CustomHeaders           json.RawMessage `json:"custom_headers"`
 	CodexFingerprintMode    json.RawMessage `json:"codex_fingerprint_mode"`
+	CodexUserAgent          json.RawMessage `json:"codex_user_agent"`
 	ClaudeFingerprintMode   json.RawMessage `json:"claude_fingerprint_mode"`
 	ClaudeClientPlatform    json.RawMessage `json:"claude_client_platform"`
 	ClaudeVersionPolicy     json.RawMessage `json:"claude_version_policy"`
@@ -2380,6 +2382,7 @@ type accountSchedulerUpdate struct {
 	ProxyURL                database.OptionalString
 	CustomHeaders           optionalCustomHeaders
 	CodexFingerprintMode    database.OptionalString
+	CodexUserAgent          database.OptionalString
 	ClaudeFingerprintMode   database.OptionalString
 	ClaudeClientPlatform    database.OptionalString
 	ClaudeVersionPolicy     database.OptionalString
@@ -2465,6 +2468,18 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	if err != nil {
 		return accountSchedulerUpdate{}, err
 	}
+	var codexUserAgent database.OptionalString
+	if len(req.CodexUserAgent) > 0 {
+		codexUserAgent.Set = true
+		if string(req.CodexUserAgent) != "null" {
+			if err := json.Unmarshal(req.CodexUserAgent, &codexUserAgent.Value); err != nil {
+				return accountSchedulerUpdate{}, errors.New("codex_user_agent must be a string or null")
+			}
+		}
+		if err := proxy.ValidateAccountCodexUserAgent(codexUserAgent.Value); err != nil {
+			return accountSchedulerUpdate{}, err
+		}
+	}
 	claudeFingerprintMode, err := parseOptionalStringField(req.ClaudeFingerprintMode, "claude_fingerprint_mode", validateClaudeFingerprintMode)
 	if err != nil {
 		return accountSchedulerUpdate{}, err
@@ -2520,6 +2535,9 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 	}
 	if codexFingerprintMode.Set {
 		credentialUpdates[auth.CodexFingerprintModeCredentialKey] = codexFingerprintMode.Value
+	}
+	if codexUserAgent.Set {
+		credentialUpdates[auth.CodexUserAgentCredentialKey] = codexUserAgent.Value
 	}
 	if claudeFingerprintMode.Set {
 		credentialUpdates[auth.ClaudeFingerprintModeCredentialKey] = claudeFingerprintMode.Value
@@ -2605,6 +2623,7 @@ func parseAccountSchedulerUpdate(req updateAccountSchedulerReq) (accountSchedule
 		ProxyURL:                proxyURL,
 		CustomHeaders:           customHeaders,
 		CodexFingerprintMode:    codexFingerprintMode,
+		CodexUserAgent:          codexUserAgent,
 		ClaudeFingerprintMode:   claudeFingerprintMode,
 		ClaudeClientPlatform:    claudeClientPlatform,
 		ClaudeVersionPolicy:     claudeVersionPolicy,
@@ -2696,6 +2715,7 @@ func (u accountSchedulerUpdate) hasChanges() bool {
 		u.ProxyURL.Set ||
 		u.CustomHeaders.Set ||
 		u.CodexFingerprintMode.Set ||
+		u.CodexUserAgent.Set ||
 		u.ClaudeFingerprintMode.Set ||
 		u.ClaudeClientPlatform.Set ||
 		u.ClaudeVersionPolicy.Set ||
@@ -3040,6 +3060,9 @@ func (h *Handler) applyAccountSchedulerRuntimeUpdate(id int64, update accountSch
 	}
 	if update.CodexFingerprintMode.Set {
 		h.store.ApplyAccountCodexFingerprintMode(id, update.CodexFingerprintMode.Value)
+	}
+	if update.CodexUserAgent.Set {
+		h.store.ApplyAccountCodexUserAgent(id, update.CodexUserAgent.Value)
 	}
 	if update.Timezone.Set {
 		h.store.ApplyAccountTimezone(id, update.Timezone.Value)

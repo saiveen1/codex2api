@@ -2106,6 +2106,10 @@ export default function Accounts() {
   >([]);
   const [editProxyUrl, setEditProxyUrl] = useState("");
   const [editCustomHeadersText, setEditCustomHeadersText] = useState("");
+  const [editCodexUA, setEditCodexUA] = useState("");
+  const manualCodexUA = editCodexUA.startsWith("raw:");
+  const rawCodexUA = manualCodexUA ? editCodexUA.slice(4) : "";
+  const editCodexUAInvalid = manualCodexUA && (!rawCodexUA.trim() || /\p{Cc}/u.test(rawCodexUA));
   const [editCodexFingerprintMode, setEditCodexFingerprintMode] =
     useState<CodexFingerprintMode>("off");
   const [editTimezone, setEditTimezone] = useState("");
@@ -5909,6 +5913,7 @@ export default function Accounts() {
     setEditProxyUrl(account.proxy_url ?? "");
     setEditCustomHeadersText(formatCustomHeadersText(account.custom_headers));
     setEditCodexFingerprintMode(account.codex_fingerprint_mode ?? "off");
+    setEditCodexUA(account.codex_user_agent ?? "");
     setEditTimezone(account.timezone ?? "");
     setEditTimezoneCustom(
       Boolean(account.timezone && !findClaudeTimezoneOption(account.timezone)),
@@ -5973,6 +5978,7 @@ export default function Accounts() {
     setEditProxyUrl("");
     setEditCustomHeadersText("");
     setEditCodexFingerprintMode("off");
+    setEditCodexUA("");
     setEditTimezone("");
     setEditTimezoneCustom(false);
     setEditTags([]);
@@ -6086,6 +6092,10 @@ export default function Accounts() {
   ]);
 
   const handleSaveScheduler = async () => {
+    if (editCodexUAInvalid) {
+      showToast(t("accounts.codexUAInvalid"), "error");
+      return;
+    }
     if (!editingAccount) return;
     if (
       scoreInputInvalid ||
@@ -6140,6 +6150,9 @@ export default function Accounts() {
           ? {
               force_fast: editForceFast,
               codex_fingerprint_mode: editCodexFingerprintMode,
+              ...(editCodexUA !== (editingAccount.codex_user_agent ?? "")
+                ? { codex_user_agent: manualCodexUA ? `raw:${rawCodexUA.trim()}` : editCodexUA }
+                : {}),
               timezone: editTimezone.trim(),
             }
           : {}),
@@ -9589,7 +9602,7 @@ export default function Accounts() {
                           editAutoPause5hThresholdInvalid ||
                           editAutoPause7dThresholdInvalid ||
                           editDispatchCountLimitInvalid ||
-                          editSchedulerPriorityInvalid)) ||
+                          editSchedulerPriorityInvalid || editCodexUAInvalid)) ||
                       openAIAccountInputInvalid
                     }
                   >
@@ -10467,6 +10480,26 @@ export default function Accounts() {
                             })}
                           </div>
                         ) : null}
+
+                        {isCodexOfficialAccount(editingAccount) && (
+                          <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
+                            <label htmlFor="account-codex-ua" className="text-sm font-semibold">User-Agent</label>
+                            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("accounts.codexUAHint")}</p>
+                            <Select id="account-codex-ua" className="mt-3" value={manualCodexUA ? "raw:" : editCodexUA} onValueChange={setEditCodexUA}
+                              options={[
+                                { value: "", label: t("accounts.codexUAInherit") },
+                                { value: "codex-desktop", label: t("settings.codexUAKindDesktop") },
+                                { value: "codex-vscode", label: t("settings.codexUAKindVscode") },
+                                { value: "codex-tui", label: t("settings.codexUAKindTui") },
+                                { value: "codex-exec", label: t("settings.codexUAKindExec") },
+                                { value: "raw:", label: t("settings.codexUAManual") },
+                              ]} />
+                            {manualCodexUA && <Input className="mt-2 font-mono" aria-label={t("settings.codexUAManual")}
+                              placeholder="ExampleClient/1.0" value={rawCodexUA} aria-invalid={editCodexUAInvalid}
+                              onChange={(event) => setEditCodexUA(`raw:${event.target.value}`)} />}
+                            {editCodexUAInvalid && <p className="mt-1 text-xs text-destructive">{t("accounts.codexUAInvalid")}</p>}
+                          </div>
+                        )}
 
                         {/* 自定义请求头 */}
                         <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs hover:border-border/90 transition-colors md:col-span-2">

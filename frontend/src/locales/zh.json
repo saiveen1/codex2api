@@ -999,6 +999,9 @@
     "heroChannelTitle": "{{channel}}：可用账号 {{available}}/{{total}} · 今日请求 {{requests}}"
   },
   "accounts": {
+    "codexUAInherit": "跟随全局设置",
+    "codexUAHint": "只对当前账号生效。选择客户端预设或手动填写完整 UA；下方自定义请求头中的 User-Agent 优先。",
+    "codexUAInvalid": "请输入非空的单行 User-Agent，不含控制字符。",
     "activationTitle": "定时激活",
     "activationEnabled": "启用定时激活",
     "activationTimezone": "时区：Asia/Shanghai（北京时间）",

@@ -440,6 +440,9 @@
     }
   },
   "accounts": {
+    "codexUAInherit": "跟隨全域設定",
+    "codexUAHint": "僅對目前帳號生效。選擇用戶端預設或手動填寫完整 UA；下方自訂標頭中的 User-Agent 優先。",
+    "codexUAInvalid": "請輸入非空白的單行 User-Agent，不含控制字元。",
     "activationTitle": "定時啟用",
     "activationEnabled": "啟用定時測試",
     "activationTimezone": "時區：Asia/Shanghai（北京時間）",

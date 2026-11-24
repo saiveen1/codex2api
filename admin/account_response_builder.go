@@ -273,6 +273,7 @@ func (h *Handler) buildAccountResponse(
 		CodexPassthroughMode:         codexPassthroughMode,
 		ResponsesUpstreamTransport:   responsesUpstreamTransport,
 		CodexFingerprintMode:         codexFingerprintMode,
+		CodexUserAgent:               row.GetCredential(auth.CodexUserAgentCredentialKey),
 		ClaudeFingerprintMode:        claudeFingerprintMode,
 		ClaudeUserAgent:              claudeUserAgent,
 		ClaudeClientPlatform:         string(claudeClientPolicy.Platform),

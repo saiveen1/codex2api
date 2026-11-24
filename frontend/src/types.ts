@@ -538,6 +538,7 @@ export interface AccountRow {
   codex_passthrough_mode?: CodexPassthroughMode
   responses_upstream_transport?: ResponsesUpstreamTransport
   codex_fingerprint_mode?: CodexFingerprintMode
+  codex_user_agent?: string
   claude_fingerprint_mode?: 'preserve' | 'force' | ''
   claude_client_platform?: 'any' | 'claude_code_cli_only'
   claude_version_policy?: 'passthrough' | 'fixed' | 'minimum'
@@ -1724,6 +1725,7 @@ export interface UpdateAccountSchedulerRequest {
   scheduler_priority?: number | null
   custom_headers?: Record<string, string> | null
   codex_fingerprint_mode?: CodexFingerprintMode | null
+  codex_user_agent?: string
   claude_fingerprint_mode?: 'preserve' | 'force' | '' | null
   claude_client_platform?: 'any' | 'claude_code_cli_only' | null
   claude_version_policy?: 'passthrough' | 'fixed' | 'minimum' | null

@@ -24,6 +24,22 @@ type CodexOutboundClientIdentity struct {
 // ResolveCodexOutboundClientIdentity 将版本不可用错误传到出站前的调用者。
 func ResolveCodexOutboundClientIdentity(input CodexClientIdentityInput) (CodexOutboundClientIdentity, error) {
 	settings := CurrentRuntimeSettings()
+	if input.Account != nil {
+		input.Account.Mu().RLock()
+		selection, upstreamType := input.Account.CodexUserAgent, input.Account.UpstreamType
+		input.Account.Mu().RUnlock()
+		if selection != "" && (upstreamType == "" || strings.EqualFold(strings.TrimSpace(upstreamType), "codex")) {
+			if err := ValidateAccountCodexUserAgent(selection); err != nil {
+				return CodexOutboundClientIdentity{}, err
+			}
+			if strings.HasPrefix(selection, "raw:") {
+				ua := strings.TrimPrefix(selection, "raw:")
+				return CodexOutboundClientIdentity{UserAgent: ua, Version: codexVersionFromUserAgent(ua, ""), Generated: true}, nil
+			}
+			ua, version, _, err := buildCodexStructuredUserAgent(CodexUserAgentConfig{ClientKind: selection}, codexIdentityVersionFloor(settings))
+			return CodexOutboundClientIdentity{UserAgent: ua, Version: version, Generated: true}, err
+		}
+	}
 	// 强制模拟优先于设备稳定化，避免下游画像覆盖已配置的客户端身份。
 	if settings.ClientCompatMode != ClientCompatModeForce && IsDeviceProfileStabilizationEnabled(input.DeviceConfig) {
 		// 显式选择「保留客户端」时，已识别的官方客户端身份优先于稳定化兜底画像。

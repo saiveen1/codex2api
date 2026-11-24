@@ -316,6 +316,28 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 	return nil
 }
 
+// ValidateAccountCodexUserAgent validates the exact per-account selection.
+func ValidateAccountCodexUserAgent(value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, ok := codexUAKindSpecFor(CodexClientKind(value)); ok {
+		return nil
+	}
+	if strings.HasPrefix(value, "raw:") {
+		ua := strings.TrimPrefix(value, "raw:")
+		if ua != "" && strings.TrimSpace(ua) == ua {
+			for _, r := range ua {
+				if unicode.IsControl(r) {
+					return errors.New("raw User-Agent contains control characters")
+				}
+			}
+			return nil
+		}
+	}
+	return errors.New("codex_user_agent must be a preset or raw: followed by a nonblank User-Agent without surrounding whitespace")
+}
+
 func validHTTPHeaderValue(value string) bool {
 	for _, r := range value {
 		if r == '\t' {

@@ -998,6 +998,9 @@
     "heroChannelTitle": "{{channel}}: {{available}}/{{total}} accounts available · {{requests}} requests today"
   },
   "accounts": {
+    "codexUAInherit": "Use global settings",
+    "codexUAHint": "Choose a client preset or enter a full User-Agent for this account. A User-Agent in the custom headers below takes precedence.",
+    "codexUAInvalid": "Enter a non-empty, single-line User-Agent without control characters.",
     "activationTitle": "Scheduled activation",
     "activationEnabled": "Enable scheduled activation",
     "activationTimezone": "Timezone: Asia/Shanghai (UTC+8)",
