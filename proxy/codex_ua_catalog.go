@@ -360,7 +360,7 @@ func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor, e
 		switch environment {
 		case "chrome_macos":
 			osName = "Mac OS"
-		case "chrome_windows":
+		case "chrome_windows", "firefox_windows":
 			osName = "Windows"
 		}
 		if osName != "" {
@@ -371,7 +371,7 @@ func codexPoolPersona(cfg CodexUserAgentConfig, accountID int64, versionFloor, e
 				}
 			}
 			if len(platforms) == 0 {
-				return "", "", false, fmt.Errorf("codex User-Agent: no %s platform for %s", osName, kind)
+				platforms = spec.Platforms // Optional OS matching must not block requests.
 			}
 		}
 	}

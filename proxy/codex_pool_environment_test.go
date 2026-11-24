@@ -11,7 +11,7 @@ import (
 
 func TestCodexPoolAuthorizationOS(t *testing.T) {
 	for _, kind := range codexUAKindOrder {
-		for environment, osName := range map[string]string{"chrome_macos": "Mac OS", "chrome_windows": "Windows"} {
+		for environment, osName := range map[string]string{"chrome_macos": "Mac OS", "chrome_windows": "Windows", "firefox_windows": "Windows"} {
 			t.Run(string(kind)+"/"+environment, func(t *testing.T) {
 				cfg := CodexUserAgentConfig{Mode: "pool", PoolMix: map[string]int{string(kind): 1}}
 				spec := codexUACatalog[kind]
@@ -116,6 +116,26 @@ func TestCodexPoolAuthorizationOSPreviewMatchesOutbound(t *testing.T) {
 		}
 		if !strings.HasPrefix(identity.UserAgent, "codex_vscode/") {
 			t.Fatal("pinned client changed")
+		}
+	}
+}
+
+func TestCodexPoolAuthorizationOSMissingCandidateFallsBack(t *testing.T) {
+	kind := CodexClientKindTUI
+	original := codexUACatalog[kind]
+	spec := *original
+	spec.Platforms = []codexUAPlatform{{OSName: "Windows", OSVersion: "10.0.26200", Arch: "x86_64", Weight: 1}}
+	codexUACatalog[kind] = &spec
+	t.Cleanup(func() { codexUACatalog[kind] = original })
+	cfg := CodexUserAgentConfig{Mode: "pool", PoolMix: map[string]int{string(kind): 1}}
+	for id := int64(1); id <= 10; id++ {
+		baseline, version, ok, err := codexPoolPersona(cfg, id, "", "")
+		if err != nil || !ok {
+			t.Fatalf("baseline: %v", err)
+		}
+		got, gotVersion, ok, err := codexPoolPersona(cfg, id, "", "chrome_macos")
+		if err != nil || !ok || got != baseline || gotVersion != version {
+			t.Fatalf("missing candidate must preserve original selection: %q / %q, %v", got, baseline, err)
 		}
 	}
 }

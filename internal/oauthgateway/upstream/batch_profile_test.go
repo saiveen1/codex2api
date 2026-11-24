@@ -21,3 +21,16 @@ func TestBatchProfileAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestKnownEnvironmentMatchesDocumentedExplicitSystems(t *testing.T) {
+	for _, value := range []string{"chrome_macos", "chrome_windows", "firefox_windows"} {
+		if got := KnownEnvironment(value); got != value {
+			t.Fatalf("documented explicit environment %q discarded", value)
+		}
+	}
+	for _, value := range []string{"", "auto", "custom_ua", "future_environment"} {
+		if got := KnownEnvironment(value); got != "" {
+			t.Fatalf("unresolved environment %q must not bind a system", value)
+		}
+	}
+}

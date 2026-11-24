@@ -354,7 +354,7 @@ const EnvironmentCredential = "oauth_gateway_environment"
 
 func KnownEnvironment(value string) string {
 	switch value {
-	case "chrome_macos", "chrome_windows":
+	case "chrome_macos", "chrome_windows", "firefox_windows":
 		return value
 	}
 	return ""
