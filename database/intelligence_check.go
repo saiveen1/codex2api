@@ -72,6 +72,7 @@ type IntelligenceCheckAccount struct {
 type IntelligenceCheckRun struct {
 	IntelligenceCheckScope
 	RecordOnly           bool        `json:"record_only,omitempty"`
+	Once                 bool        `json:"once,omitempty"`
 	RequireNormal        bool        `json:"require_normal,omitempty"`
 	CredentialGeneration int64       `json:"credential_generation,omitempty"`
 	ID                   int64       `json:"id"`

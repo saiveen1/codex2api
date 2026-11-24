@@ -92,7 +92,7 @@ export default function AccountIntelligenceHistoryDialog({ accountID, accountNam
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="inline-flex items-center gap-1.5 font-medium"><span className="size-2 rounded-full bg-muted" style={{ backgroundColor: intelligenceColor(run.status) }} />{intelligenceLabels[run.status]}</span>
             <span className="text-xs text-muted-foreground">{run.source === 'manual' ? '手动' : '自动'}</span>
-            {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">试跑（只记录）</span>}
+            {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{run.once ? '单次降智检测（只记录）' : '试跑（只记录）'}</span>}
             <time className="text-xs text-muted-foreground">{new Date(run.created_at || 0).toLocaleString()}</time>
             <span className="ml-auto text-xs tabular-nums text-muted-foreground">#{run.id}</span>
           </div>

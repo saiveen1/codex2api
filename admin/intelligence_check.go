@@ -16,6 +16,7 @@ import (
 )
 
 func (h *Handler) registerIntelligenceCheckRoutes(api *gin.RouterGroup) {
+	api.POST("/accounts/:id/intelligence-check/once", h.CreateIntelligenceCheckOnce)
 	api.GET("/intelligence-check/settings", h.GetIntelligenceSettings)
 	api.PUT("/intelligence-check/settings", h.SaveIntelligenceSettings)
 	api.GET("/intelligence-check/accounts", h.ListIntelligenceAccounts)
@@ -173,6 +174,46 @@ func (h *Handler) SetIntelligenceAccounts(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"updated": len(ids)})
+}
+
+// CreateIntelligenceCheckOnce queues one isolated, record-only candy test.
+func (h *Handler) CreateIntelligenceCheckOnce(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的账号 ID"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
+	var body struct {
+		Model string `json:"model"`
+	}
+	if c.ShouldBindJSON(&body) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求"})
+		return
+	}
+	model := strings.TrimSpace(body.Model)
+	if model == "" {
+		model = "gpt-6.2-sol"
+	}
+	if candidates := ic.ModelCandidates(model); len(model) > 255 || len(candidates) != 1 || candidates[0] != model {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请指定单个有效模型"})
+		return
+	}
+	if h.store == nil || h.store.FindByID(id) == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号不在运行时池中"})
+		return
+	}
+	runID, err := h.db.SubmitIntelligenceCheckOnce(c.Request.Context(), id, model, time.Now())
+	if err != nil {
+		intelligenceAPIError(c, err)
+		return
+	}
+	run, err := h.db.GetIntelligenceCheckRun(c.Request.Context(), runID)
+	if err != nil {
+		intelligenceAPIError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"run": run})
 }
 
 // CreateIntelligenceRuns validates selected accounts and queues explicit manual detector runs.

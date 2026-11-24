@@ -83,7 +83,7 @@ export default function IntelligenceRunDialog({
                 ["检测时套餐", run.plan || "未知"],
                 ["检测时分组", intelligenceGroupNames(run.groups)],
                 ["检测时规则", intelligencePolicyName(run)],
-                ["检测类型", run.record_only ? "试跑（只记录）" : "常规检测"],
+                ["检测类型", run.once ? "单次降智检测（只记录）" : run.record_only ? "试跑（只记录）" : "常规检测"],
                 ["结果", intelligenceLabels[run.status]],
                 ["请求模型", run.model || "—"],
                 ["响应模型", run.response_model || "—"],

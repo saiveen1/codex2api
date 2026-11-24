@@ -147,6 +147,7 @@ export interface IntelligenceRecord {
 }
 export interface IntelligenceRun extends IntelligenceRecord, IntelligencePolicySnapshot {
   record_only?: boolean;
+  once?: boolean;
   account_id: number;
   account_name: string;
   channel: string;

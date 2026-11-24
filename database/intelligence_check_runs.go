@@ -181,6 +181,40 @@ func (db *DB) SubmitIntelligenceChecks(ctx context.Context, ids []int64, now tim
 	return out, skipped, err
 }
 
+// SubmitIntelligenceCheckOnce queues a record-only candy question with a fixed model.
+func (db *DB) SubmitIntelligenceCheckOnce(ctx context.Context, id int64, model string, now time.Time) (int64, error) {
+	var runID int64
+	err := db.withWriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := db.intelligenceSettingsTx(ctx, tx); err != nil {
+			return err
+		}
+		a, err := db.intelligenceAccountTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		s := ic.DefaultSettings()
+		runID, err = db.intelligenceEnqueueTx(ctx, tx, s, a, "manual", true, now)
+		if err != nil {
+			return err
+		}
+		if runID == 0 {
+			return ErrIntelligenceCheckTrialActive
+		}
+		r, err := db.intelligenceRunTx(ctx, tx, runID)
+		if err != nil {
+			return err
+		}
+		r.Once, r.Model = true, model
+		raw, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE intelligence_check_runs SET run_json=$1 WHERE id=$2`, string(raw), runID)
+		return err
+	})
+	return runID, err
+}
+
 // IntelligenceCheckPreflight checks live state outside the queue transaction.
 type IntelligenceCheckPreflight struct {
 	MatchedModels func(ctx context.Context, accountID int64, configured string) []string
@@ -426,7 +460,10 @@ func (db *DB) ClaimIntelligenceCheck(ctx context.Context, owner string, now time
 			if r.Source == "automatic" && (!s.Enabled || !a.Enabled || !a.ManualEnabled || !s.ChannelEnabled(a.Channel) || !intelligenceRuleAllowsAutomatic(s, a, rule)) {
 				continue
 			}
-			fresh, snapshotErr := intelligenceCheckSnapshot(policy, a, r.Source, r.CreatedAt)
+			fresh, snapshotErr := r, error(nil)
+			if !r.Once {
+				fresh, snapshotErr = intelligenceCheckSnapshot(policy, a, r.Source, r.CreatedAt)
+			}
 			if snapshotErr == nil {
 				fresh.ID, fresh.RecordOnly = r.ID, r.RecordOnly
 				fresh.RequireNormal = r.Source == "automatic" && a.requiresNormal(rule)
@@ -557,7 +594,7 @@ func (db *DB) FinishIntelligenceCheck(ctx context.Context, id int64, owner strin
 			return nil
 		}
 		r.Observation = o
-		if o.RequestedModel != "" || o.Skipped {
+		if o.RequestedModel != "" || (o.Skipped && !r.Once) {
 			r.Model = o.RequestedModel
 		}
 		grade := ic.Grade(r.Question, r.JudgeMode, o)

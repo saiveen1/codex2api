@@ -133,7 +133,7 @@ export function IntelligenceHistory({ groups, onRun }: { groups: IntelligenceGro
             <strong>{run.account_name || "未命名账号"} <span className="font-normal text-muted-foreground">#{run.account_id}</span></strong>
             <Status status={run.status} />
             <span className="text-xs text-muted-foreground">{run.source === "manual" ? "手动" : "自动"}</span>
-            {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">试跑（只记录）</span>}
+            {run.record_only && <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{run.once ? '单次降智检测（只记录）' : '试跑（只记录）'}</span>}
           </div>
           <p className="text-xs text-muted-foreground">{run.channel} · 分组：{intelligenceGroupNames(run.groups)} · 套餐：{run.plan || "未知"} · 规则：{intelligencePolicyName(run)}</p>
           <p className="text-xs text-muted-foreground">{run.created_at ? new Date(run.created_at).toLocaleString() : "未记录时间"}{(run.question_name || run.question?.name) && ` · ${run.question_name || run.question?.name}`}{run.duration_ms != null ? ` · ${(run.duration_ms / 1000).toFixed(2)} 秒` : ""}</p>

@@ -34,6 +34,8 @@ import ModelLogo from "../components/ModelLogo";
 import OperationResultsModal from "../components/OperationResultsModal";
 import { cn } from "@/lib/utils";
 import TestConnectionModal from "../components/TestConnectionModal";
+import AccountOneOffTestDialog from "../components/AccountOneOffTestDialog";
+import type { OneOffTestKind } from "../lib/accountOneOffTest";
 import {
   DEFAULT_TEST_MODEL,
   exactModelMappingAliases,
@@ -1157,6 +1159,7 @@ interface AccountRowActions {
   openOfficialUsage: (account: AccountRow) => void;
   openTesting: (account: AccountRow) => void;
   openDetector: (account: AccountRow) => void;
+  openOneOffTest: (account: AccountRow, kind: OneOffTestKind) => void;
   refresh: (account: AccountRow) => void;
   generateAuthJson: (account: AccountRow) => void;
   toggleEnabled: (account: AccountRow) => void;
@@ -1727,6 +1730,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                     includeDelete={false}
                                     onTest={() => actions.openTesting(account)}
                                     onDetect={() => actions.openDetector(account)}
+                                    onOneOffTest={(kind) => actions.openOneOffTest(account, kind)}
                                     onChannelMonitor={() =>
                                       actions.openChannelMonitor(account)
                                     }
@@ -1834,6 +1838,7 @@ const AccountCardItem = memo(function AccountCardItem({
       onChannelMonitor={() => actions.openChannelMonitor(account)}
       onTest={() => actions.openTesting(account)}
       onDetect={() => actions.openDetector(account)}
+      onOneOffTest={(kind) => actions.openOneOffTest(account, kind)}
       onRefresh={() => actions.refresh(account)}
       onGenerateAuthJson={() => actions.generateAuthJson(account)}
       onToggleEnabled={() => actions.toggleEnabled(account)}
@@ -2056,6 +2061,7 @@ export default function Accounts() {
   const [cleaningRateLimited, setCleaningRateLimited] = useState(false);
   const [cleaningError, setCleaningError] = useState(false);
   const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null);
+  const [oneOffTest, setOneOffTest] = useState<{ account: AccountRow; kind: OneOffTestKind } | null>(null);
   const [detectorAccount, setDetectorAccount] = useState<AccountRow | null>(null);
   const [quickConfigAccount, setQuickConfigAccount] = useState<AccountRow | null>(null);
   const [channelMonitorAccount, setChannelMonitorAccount] = useState<AccountRow | null>(null);
@@ -6338,6 +6344,7 @@ export default function Accounts() {
     },
     openTesting: openTestingAccount,
     openDetector: openDetectorAccount,
+    openOneOffTest: (account, kind) => setOneOffTest({ account, kind }),
     refresh: (account) => void handleRefresh(account),
     generateAuthJson: (account) => void handleGenerateAuthJSON(account),
     toggleEnabled: (account) => void handleToggleEnabled(account),
@@ -6363,6 +6370,7 @@ export default function Accounts() {
       openOfficialUsage: (a) => rowActionsImplRef.current?.openOfficialUsage(a),
       openTesting: (a) => rowActionsImplRef.current?.openTesting(a),
       openDetector: (a) => rowActionsImplRef.current?.openDetector(a),
+      openOneOffTest: (account, kind) => rowActionsImplRef.current?.openOneOffTest(account, kind),
       refresh: (a) => rowActionsImplRef.current?.refresh(a),
       generateAuthJson: (a) => rowActionsImplRef.current?.generateAuthJson(a),
       toggleEnabled: (a) => rowActionsImplRef.current?.toggleEnabled(a),
@@ -9359,6 +9367,8 @@ export default function Accounts() {
               </div>
             </div>
           </Modal>
+
+          {oneOffTest && <AccountOneOffTestDialog {...oneOffTest} onClose={() => setOneOffTest(null)} />}
 
           {testingAccount && (
             <TestConnectionModal
@@ -13555,6 +13565,7 @@ function AccountRowActionsMenu({
   includeDelete = true,
   onTest,
   onDetect,
+  onOneOffTest,
   onChannelMonitor,
   onRefresh,
   onGenerateAuthJson,
@@ -13573,6 +13584,7 @@ function AccountRowActionsMenu({
   includeDelete?: boolean;
   onTest: () => void;
   onDetect?: () => void;
+  onOneOffTest: (kind: OneOffTestKind) => void;
   onChannelMonitor?: () => void;
   onRefresh: () => void;
   onGenerateAuthJson: () => void;
@@ -13604,6 +13616,18 @@ function AccountRowActionsMenu({
           },
         ]
       : []),
+    {
+      key: "once-intelligence",
+      label: t("accounts.onceIntelligence"),
+      icon: <Gauge className="size-3.5" />,
+      onSelect: () => onOneOffTest("intelligence"),
+    },
+    {
+      key: "once-quality",
+      label: t("accounts.onceQuality"),
+      icon: <FlaskConical className="size-3.5" />,
+      onSelect: () => onOneOffTest("quality"),
+    },
     // 与测连弹窗内的入口一致:Grok / Antigravity 不支持 ModelTrace 指纹检测。
     ...(onDetect && !account.grok_api && !account.antigravity_api
       ? [
@@ -13916,6 +13940,7 @@ function AccountMobileCard({
   onUsage,
   onTest,
   onDetect,
+  onOneOffTest,
   onRefresh,
   onGenerateAuthJson,
   onToggleEnabled,
@@ -13957,6 +13982,7 @@ function AccountMobileCard({
   onUsage: () => void;
   onTest: () => void;
   onDetect?: () => void;
+  onOneOffTest: (kind: OneOffTestKind) => void;
   onRefresh: () => void;
   onGenerateAuthJson: () => void;
   onToggleEnabled: () => void;
@@ -14373,6 +14399,7 @@ function AccountMobileCard({
           authJsonExporting={authJsonExporting}
           onTest={onTest}
           onDetect={onDetect}
+          onOneOffTest={onOneOffTest}
           onChannelMonitor={onChannelMonitor}
           onRefresh={onRefresh}
           onGenerateAuthJson={onGenerateAuthJson}

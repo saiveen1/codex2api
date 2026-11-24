@@ -1701,6 +1701,8 @@ export const api = {
   getIntelligenceRunSummaries: (page: number, filters: Record<string, string | number | undefined>, signal?: AbortSignal) => request<IntelligencePage<IntelligenceRunSummary>>(`/intelligence-check/runs?${intelligenceQuery(page, { ...filters, summary: 1 })}`, { signal }),
   getIntelligenceRun: (id: number, signal?: AbortSignal) => request<{ run: IntelligenceRun }>(`/intelligence-check/runs/${id}`, { signal }),
   getIntelligenceBars: (ids: number[], signal?: AbortSignal) => request<{ bars: Record<string, IntelligenceBar> }>(`/intelligence-check/bars?account_ids=${ids.join(',')}`, { signal }),
+  createAccountIntelligenceTest: (id: number, model: string) =>
+    request<{ run: IntelligenceRun }>(`/accounts/${id}/intelligence-check/once`, { method: 'POST', body: JSON.stringify({ model }) }),
   getQualityTestOptions: (id: number, signal?: AbortSignal) =>
     request<{ models: string[]; reasoning_efforts: string[] }>(`/accounts/${id}/quality-test/options`, { signal }),
   getQualityTestPrompts: (signal?: AbortSignal) =>
