@@ -152,7 +152,7 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	batch := func() upstream.Batch {
 		return upstream.Batch{BatchID: "gb_00000000000000000000000000000001", RequestID: requestID, State: "completed", Total: 1, Succeeded: 1, Items: []upstream.BatchItem{{ItemID: "gi_00000000000000000000000000000001", Line: 1, IdentifierMasked: "f***@example.invalid", State: "succeeded", SuccessSummary: &upstream.BatchSuccessSummary{WorkspaceID: "workspace-fixture", WorkspaceName: "  研发团队  "}}}}
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","workspace_name":"Legacy export name","plan_type":"plus"}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","oauth_gateway_timezone":"Asia/Tokyo","proxy_url":"http://must-not-copy.example.invalid:9090","credentials":{"email":"fixture@example.invalid","access_token":"synthetic-AT","refresh_token":"synthetic-RT","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","workspace_name":"Legacy export name","plan_type":"plus","timezone":"Asia/Tokyo"}}`)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Header.Get("Authorization") != "Bearer synthetic-CDK" || req.Header.Get("X-Admin-Key") != "" {
@@ -193,7 +193,9 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 			}
 			requestID = input.RequestID
 			w.WriteHeader(202)
-			send(batch())
+			first := batch()
+			first.Options = &upstream.BatchProfile{Timezone: "America/New_York"}
+			send(first)
 		case "/api/v1/oauth/batches/gb_00000000000000000000000000000001":
 			send(batch())
 		case "/api/v1/oauth/batches/gb_00000000000000000000000000000001/result":
@@ -268,6 +270,9 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	}
 	if row.Name != "fixture" || row.GetCredential("workspace_name") != "研发团队" {
 		t.Fatal("gateway workspace name was discarded or replaced the account name")
+	}
+	if row.GetCredential(auth.AccountTimezoneCredentialKey) != "America/New_York" || h.store.FindByID(row.ID).EffectiveCodexTimezone() != "America/New_York" {
+		t.Fatal("returned batch timezone not applied to new account")
 	}
 	groupIDs, err := h.db.GetAccountGroupIDs(ctx, row.ID)
 	if err != nil || len(groupIDs) != 1 || groupIDs[0] != group || h.store.FindByID(row.ID) == nil {
@@ -372,5 +377,30 @@ func TestOAuthGatewayRejectsConflictingJWTIdentity(t *testing.T) {
 	count, err := h.db.CountAll(t.Context())
 	if err != nil || count != 0 {
 		t.Fatalf("conflict wrote accounts: %d %v", count, err)
+	}
+}
+
+func TestOAuthGatewayNewAccountTimezoneValidation(t *testing.T) {
+	for _, tc := range []struct{ timezone, want string }{
+		{"", ""}, {"Local", ""}, {"Not/AZone", ""}, {" Asia/Tokyo ", "Asia/Tokyo"},
+	} {
+		t.Run(tc.timezone, func(t *testing.T) {
+			h, _, _ := newOAuthGatewayAdminFixture(t)
+			raw, err := json.Marshal(map[string]any{
+				"platform": "openai", "type": "oauth", upstream.TimezoneCredential: tc.timezone,
+				"credentials": map[string]any{"email": "fixture@example.invalid", "access_token": "synthetic-at", "refresh_token": "synthetic-rt", "chatgpt_user_id": "user-fixture", "chatgpt_account_id": "workspace-fixture", "workspace_name": "Fixture", "timezone": "Europe/Berlin"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, "", false)
+			if err != nil || len(result.CreatedIDs) != 1 {
+				t.Fatalf("import failed: %+v %v", result, err)
+			}
+			row, err := h.db.GetAccountByID(t.Context(), result.CreatedIDs[0])
+			if err != nil || row.GetCredential(auth.AccountTimezoneCredentialKey) != tc.want {
+				t.Fatalf("timezone not validated: got row=%+v err=%v", row, err)
+			}
+		})
 	}
 }

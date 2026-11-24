@@ -8,6 +8,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/oauthgateway/upstream"
 	"github.com/codex2api/internal/openaiidentity"
 )
 
@@ -274,6 +275,7 @@ func (h *Handler) buildAccountResponse(
 		ResponsesUpstreamTransport:   responsesUpstreamTransport,
 		CodexFingerprintMode:         codexFingerprintMode,
 		CodexUserAgent:               row.GetCredential(auth.CodexUserAgentCredentialKey),
+		OAuthGatewayEnvironment:      upstream.KnownEnvironment(row.GetCredential(upstream.EnvironmentCredential)),
 		ClaudeFingerprintMode:        claudeFingerprintMode,
 		ClaudeUserAgent:              claudeUserAgent,
 		ClaudeClientPlatform:         string(claudeClientPolicy.Platform),

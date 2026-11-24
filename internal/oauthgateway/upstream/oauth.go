@@ -372,6 +372,20 @@ func BindDeliveryEnvironment(account json.RawMessage, profile *BatchProfile) (js
 	return sjson.SetBytes(account, EnvironmentCredential, environment)
 }
 
+const TimezoneCredential = "oauth_gateway_timezone"
+
+// BindDeliveryTimezone replaces any result-supplied value with the saved batch value.
+func BindDeliveryTimezone(account json.RawMessage, profile *BatchProfile) (json.RawMessage, error) {
+	timezone := ""
+	if profile != nil {
+		timezone = profile.Timezone
+	}
+	if timezone == "" && !gjson.GetBytes(account, TimezoneCredential).Exists() {
+		return account, nil
+	}
+	return sjson.SetBytes(account, TimezoneCredential, timezone)
+}
+
 // ValidateDelivery returns the accounts indexed exactly as this delivery's account_index.
 func ValidateDelivery(result Result, batch Batch) ([]json.RawMessage, error) {
 	bad := func() ([]json.RawMessage, error) { return nil, failure("invalid_result", false) }

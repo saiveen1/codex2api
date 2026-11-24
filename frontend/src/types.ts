@@ -539,6 +539,7 @@ export interface AccountRow {
   responses_upstream_transport?: ResponsesUpstreamTransport
   codex_fingerprint_mode?: CodexFingerprintMode
   codex_user_agent?: string
+  oauth_gateway_environment?: 'chrome_macos' | 'chrome_windows' | 'firefox_windows'
   claude_fingerprint_mode?: 'preserve' | 'force' | ''
   claude_client_platform?: 'any' | 'claude_code_cli_only'
   claude_version_policy?: 'passthrough' | 'fixed' | 'minimum'

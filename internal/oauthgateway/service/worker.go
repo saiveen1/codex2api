@@ -263,13 +263,20 @@ func validateBatch(g Group, b upstream.Batch) error {
 
 // Some status replies omit options already returned for this same batch.
 func keepReturnedEnvironment(next *upstream.Batch, previous upstream.Batch) {
-	if next.BatchID == "" || next.BatchID != previous.BatchID || previous.Options == nil || upstream.KnownEnvironment(previous.Options.Environment) == "" {
+	if next.BatchID == "" || next.BatchID != previous.BatchID || previous.Options == nil {
+		return
+	}
+	if next.Options == nil && upstream.KnownEnvironment(previous.Options.Environment) == "" && previous.Options.Timezone == "" {
 		return
 	}
 	if next.Options == nil {
-		next.Options = &upstream.BatchProfile{Environment: previous.Options.Environment}
-	} else if next.Options.Environment == "" {
+		next.Options = &upstream.BatchProfile{}
+	}
+	if next.Options.Environment == "" && upstream.KnownEnvironment(previous.Options.Environment) != "" {
 		next.Options.Environment = previous.Options.Environment
+	}
+	if next.Options.Timezone == "" {
+		next.Options.Timezone = previous.Options.Timezone
 	}
 }
 
@@ -423,6 +430,12 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 		}
 		delivery.Account = bound
 	}
+	// Rebind even previously checked deliveries: their timezone field was never trusted.
+	bound, err := upstream.BindDeliveryTimezone(delivery.Account, job.Groups[index].Batch.Options)
+	if err != nil {
+		return a.failGroup(job.ID, index, "needs_review", publicError(err))
+	}
+	delivery.Account = bound
 	if err := a.mutateGroup(job.ID, index, func(g *Group) {
 		g.Deliveries[d].Account = delivery.Account
 		g.Deliveries[d].EnvironmentChecked = true
@@ -452,7 +465,7 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 	if accepted {
 		summary = committedAccountResult(ctx, c, job, job.Groups[index], delivery.Line, result)
 	}
-	err := a.store.Update(func(s *State) error {
+	err = a.store.Update(func(s *State) error {
 		for j := range s.Jobs {
 			if s.Jobs[j].ID != job.ID {
 				continue

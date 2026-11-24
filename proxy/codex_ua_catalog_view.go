@@ -77,6 +77,13 @@ func CodexUserAgentCatalog() CodexUserAgentCatalogView {
 		for _, p := range spec.VersionPairs {
 			item.VersionPairs = append(item.VersionPairs, CodexUserAgentCatalogVersionPair{CLIVersion: p.CLIVersion, AppVersion: p.AppVersion, Weight: p.Weight})
 		}
+		if spec.AppFollowsCLI {
+			version := effectiveLatestCodexCLIVersion()
+			item.VersionPairs = append(item.VersionPairs, CodexUserAgentCatalogVersionPair{CLIVersion: version, AppVersion: version})
+			if version != latestCodexCLIVersion {
+				item.VersionPairs = append(item.VersionPairs, CodexUserAgentCatalogVersionPair{CLIVersion: latestCodexCLIVersion, AppVersion: latestCodexCLIVersion})
+			}
+		}
 		codexCatalogReferenceOptions(spec, &item)
 		view.Kinds = append(view.Kinds, item)
 	}

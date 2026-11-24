@@ -272,8 +272,7 @@ import AccountQuotaDistributionChart from "../components/AccountQuotaDistributio
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
 import AccountGroupMultiSelect from "../components/AccountGroupMultiSelect";
 import AccountQuickConfigSheet from "../components/AccountQuickConfigSheet";
-import CodexPresetSystemSelect from "../components/CodexPresetSystemSelect";
-import { bindCodexPreset, readCodexPreset } from "../lib/codexPresetSystem";
+import { bindCodexPreset, presetSystemOptions, readCodexPreset } from "../lib/codexPresetSystem";
 import ChannelMonitorConfigDialog from "../components/ChannelMonitorConfigDialog";
 import { useImportGroupIds } from "../hooks/useImportGroupIds";
 import AccountGroupFilterSelect, {
@@ -2109,6 +2108,19 @@ export default function Accounts() {
   const [editProxyUrl, setEditProxyUrl] = useState("");
   const [editCustomHeadersText, setEditCustomHeadersText] = useState("");
   const [editCodexUA, setEditCodexUA] = useState("");
+  const [editCodexSystem, setEditCodexSystem] = useState("");
+  const [editCodexVersionKind, setEditCodexVersionKind] = useState("");
+  const [editCodexVersion, setEditCodexVersion] = useState("");
+  const [editCodexVersionPending, setEditCodexVersionPending] = useState(false);
+  const [editCodexVersionError, setEditCodexVersionError] = useState(false);
+  const [editCodexCatalog, setEditCodexCatalog] = useState<import("../types").CodexUserAgentCatalog | null>(null);
+  const editCodexRequest = useRef(0);
+  useEffect(() => {
+    if (!editingAccount || !isCodexOfficialAccount(editingAccount)) return;
+    let cancelled = false;
+    api.getCodexUserAgentCatalog().then(catalog => { if (!cancelled) setEditCodexCatalog(catalog); }).catch(() => { if (!cancelled) setEditCodexCatalog(null); });
+    return () => { cancelled = true; };
+  }, [editingAccount]);
   const manualCodexUA = editCodexUA.startsWith("raw:");
   const rawCodexUA = manualCodexUA ? editCodexUA.slice(4) : "";
   const editCodexUAInvalid = manualCodexUA && (!rawCodexUA.trim() || /\p{Cc}/u.test(rawCodexUA));
@@ -5916,6 +5928,9 @@ export default function Accounts() {
     setEditCustomHeadersText(formatCustomHeadersText(account.custom_headers));
     setEditCodexFingerprintMode(account.codex_fingerprint_mode ?? "off");
     setEditCodexUA(account.codex_user_agent ?? "");
+    setEditCodexSystem(readCodexPreset(account.codex_user_agent ?? "").system);
+    setEditCodexVersionKind(""); setEditCodexVersion(""); setEditCodexVersionPending(false); setEditCodexVersionError(false);
+    editCodexRequest.current++;
     setEditTimezone(account.timezone ?? "");
     setEditTimezoneCustom(
       Boolean(account.timezone && !findClaudeTimezoneOption(account.timezone)),
@@ -5981,6 +5996,8 @@ export default function Accounts() {
     setEditCustomHeadersText("");
     setEditCodexFingerprintMode("off");
     setEditCodexUA("");
+    setEditCodexSystem(""); setEditCodexVersionKind(""); setEditCodexVersion(""); setEditCodexVersionPending(false); setEditCodexVersionError(false);
+    editCodexRequest.current++;
     setEditTimezone("");
     setEditTimezoneCustom(false);
     setEditTags([]);
@@ -6096,6 +6113,10 @@ export default function Accounts() {
   const handleSaveScheduler = async () => {
     if (editCodexUAInvalid) {
       showToast(t("accounts.codexUAInvalid"), "error");
+      return;
+    }
+    if ((editCodexSystem && !editCodexUA) || editCodexVersionPending || editCodexVersionError) {
+      showToast(t("accounts.codexUAIncomplete"), "error");
       return;
     }
     if (!editingAccount) return;
@@ -9604,7 +9625,7 @@ export default function Accounts() {
                           editAutoPause5hThresholdInvalid ||
                           editAutoPause7dThresholdInvalid ||
                           editDispatchCountLimitInvalid ||
-                          editSchedulerPriorityInvalid || editCodexUAInvalid)) ||
+                          editSchedulerPriorityInvalid || editCodexUAInvalid || Boolean(editCodexSystem && !editCodexUA) || editCodexVersionPending || editCodexVersionError)) ||
                       openAIAccountInputInvalid
                     }
                   >
@@ -10487,22 +10508,76 @@ export default function Accounts() {
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
                             <label htmlFor="account-codex-ua" className="text-sm font-semibold">User-Agent</label>
                             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("accounts.codexUAHint")}</p>
-                            <Select id="account-codex-ua" className="mt-3" value={manualCodexUA ? "raw:" : readCodexPreset(editCodexUA).kind}
-                              onValueChange={(kind) => setEditCodexUA(bindCodexPreset(kind, readCodexPreset(editCodexUA).system))}
+                            {editingAccount.oauth_gateway_environment && <p className="mt-1 text-xs text-muted-foreground">
+                              {t("accounts.codexUAGatewaySystem", { system: editingAccount.oauth_gateway_environment === "chrome_macos" ? "macOS" : "Windows", environment: editingAccount.oauth_gateway_environment })}
+                            </p>}
+                            <label className="mt-3 flex items-center gap-2 text-sm">
+                              {t("settings.codexUAPresetSystem")}
+                              <select className="h-9 rounded-lg border bg-background px-2" value={editCodexSystem} onChange={event => {
+                                const system = event.target.value;
+                                editCodexRequest.current++;
+                                setEditCodexVersion(""); setEditCodexVersionKind(""); setEditCodexVersionPending(false); setEditCodexVersionError(false);
+                                setEditCodexSystem(system);
+                                const kind = editCodexVersionKind || readCodexPreset(editCodexUA).kind;
+                                if (editCodexVersionKind) setEditCodexVersionError(true);
+                                else if (kind && kind !== "raw:") setEditCodexUA(system && !presetSystemOptions(kind).some(option => option.value === system) ? "" : bindCodexPreset(kind, system));
+                              }}>
+                                <option value="">{t("settings.codexUAPresetSystemAuto")}</option>
+                                {presetSystemOptions("codex-tui").map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                              </select>
+                            </label>
+                            <Select id="account-codex-ua" className="mt-3" value={editCodexVersionKind || (manualCodexUA ? "raw:" : readCodexPreset(editCodexUA).kind)}
+                              onValueChange={(kind) => {
+                                editCodexRequest.current++;
+                                setEditCodexVersion(""); setEditCodexVersionKind(""); setEditCodexVersionPending(false); setEditCodexVersionError(false);
+                                if (!kind) setEditCodexSystem("");
+                                setEditCodexUA(bindCodexPreset(kind, editCodexSystem));
+                              }}
                               options={[
                                 { value: "", label: t("accounts.codexUAInherit") },
-                                { value: "codex-desktop", label: t("settings.codexUAKindDesktop") },
-                                { value: "codex-vscode", label: t("settings.codexUAKindVscode") },
-                                { value: "codex-tui", label: t("settings.codexUAKindTui") },
-                                { value: "codex-exec", label: t("settings.codexUAKindExec") },
+                                ...[
+                                  { value: "codex-desktop", label: t("settings.codexUAKindDesktop") },
+                                  { value: "codex-vscode", label: t("settings.codexUAKindVscode") },
+                                  { value: "codex-tui", label: t("settings.codexUAKindTui") },
+                                  { value: "codex-exec", label: t("settings.codexUAKindExec") },
+                                ].filter(option => !editCodexSystem || presetSystemOptions(option.value).some(os => os.value === editCodexSystem)),
                                 { value: "raw:", label: t("settings.codexUAManual") },
                               ]} />
-                            {editCodexUA && !manualCodexUA && <div className="mt-2">
-                              <CodexPresetSystemSelect binding={editCodexUA} onChange={setEditCodexUA} />
-                            </div>}
-                            {manualCodexUA && <Input className="mt-2 font-mono" aria-label={t("settings.codexUAManual")}
+                            {(() => {
+                              const kind = editCodexVersionKind || (!manualCodexUA ? readCodexPreset(editCodexUA).kind : "");
+                              const spec = editCodexCatalog?.kinds.find(item => item.kind === kind);
+                              const pairs = spec?.version_pairs ?? [];
+                              const platform = spec?.platforms?.find(item => editCodexSystem === "macos" ? item.os_name === "Mac OS" : editCodexSystem === "windows" ? item.os_name === "Windows" : editCodexSystem === "linux" && item.os_name !== "Mac OS" && item.os_name !== "Windows");
+                              if (!pairs.length || !platform) return null;
+                              return <label className="mt-2 flex items-center gap-2 text-sm">
+                                {t("accounts.codexUAVersion")}
+                                <select className="h-9 rounded-lg border bg-background px-2" value={editCodexVersion} onChange={event => {
+                                  const value = event.target.value;
+                                  const request = ++editCodexRequest.current;
+                                  setEditCodexVersion(value); setEditCodexVersionError(false);
+                                  if (!value) { setEditCodexVersionKind(""); setEditCodexVersionPending(false); setEditCodexUA(bindCodexPreset(kind, editCodexSystem)); return; }
+                                  const pair = pairs[Number(value) - 1];
+                                  if (!pair) return;
+                                  setEditCodexVersionKind(kind); setEditCodexVersionPending(true);
+                                  api.previewCodexUserAgent({ config: JSON.stringify({ mode: "single", client_kind: kind, client_version: pair.cli_version, app_version: pair.app_version, os_name: platform.os_name, os_version: platform.os_version, arch: platform.arch }) })
+                                    .then(preview => {
+                                      if (editCodexRequest.current !== request) return;
+                                      const ua = preview.persona?.user_agent;
+                                      if (!ua || preview.persona?.version !== pair.cli_version || preview.persona?.app_version !== pair.app_version) { setEditCodexVersionError(true); return; }
+                                      setEditCodexUA(`raw:${ua}`);
+                                    })
+                                    .catch(() => { if (editCodexRequest.current === request) setEditCodexVersionError(true); })
+                                    .finally(() => { if (editCodexRequest.current === request) setEditCodexVersionPending(false); });
+                                }}>
+                                  <option value="">{t("settings.codexUAAutoPaired")}</option>
+                                  {pairs.map((pair, index) => <option key={`${pair.cli_version}-${pair.app_version}-${index}`} value={String(index + 1)}>{pair.cli_version === pair.app_version ? pair.cli_version : `${pair.cli_version} / ${pair.app_version}`}</option>)}
+                                </select>
+                              </label>;
+                            })()}
+                            {(Boolean(editCodexSystem && !editCodexUA) || editCodexVersionPending || editCodexVersionError) && <p className="mt-1 text-xs text-destructive">{t("accounts.codexUAIncomplete")}</p>}
+                            {manualCodexUA && <><p className="mt-1 text-xs text-muted-foreground">{t("accounts.codexUARawSystem")}</p><Input className="mt-2 font-mono" aria-label={t("settings.codexUAManual")}
                               placeholder="ExampleClient/1.0" value={rawCodexUA} aria-invalid={editCodexUAInvalid}
-                              onChange={(event) => setEditCodexUA(`raw:${event.target.value}`)} />}
+                              onChange={(event) => { editCodexRequest.current++; setEditCodexVersionKind(""); setEditCodexVersion(""); setEditCodexVersionPending(false); setEditCodexVersionError(false); setEditCodexUA(`raw:${event.target.value}`); }} /></>}
                             {editCodexUAInvalid && <p className="mt-1 text-xs text-destructive">{t("accounts.codexUAInvalid")}</p>}
                           </div>
                         )}

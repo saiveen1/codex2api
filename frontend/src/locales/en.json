@@ -999,8 +999,12 @@
   },
   "accounts": {
     "codexUAInherit": "Use global settings",
+    "codexUAGatewaySystem": "OAuth gateway authorization system: {{system}} ({{environment}}). This is an import record, not a manual User-Agent.",
     "codexUAHint": "Choose a client preset or enter a full User-Agent for this account. A User-Agent in the custom headers below takes precedence.",
     "codexUAInvalid": "Enter a non-empty, single-line User-Agent without control characters.",
+    "codexUAVersion": "Version pair (CLI / app)",
+    "codexUAIncomplete": "Choose a compatible client or reset the system. If version preview failed, choose a version again or use the automatic option.",
+    "codexUARawSystem": "For a full User-Agent, the system is determined by the text; the system selector is not saved separately.",
     "activationTitle": "Scheduled activation",
     "activationEnabled": "Enable scheduled activation",
     "activationTimezone": "Timezone: Asia/Shanghai (UTC+8)",

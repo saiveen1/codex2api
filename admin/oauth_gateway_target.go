@@ -208,6 +208,9 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 	if name == "" {
 		name = seed.email
 	}
+	if timezone := gjson.GetBytes(raw, upstream.TimezoneCredential); timezone.Type == gjson.String && validateAccountTimezone(timezone.Str) == nil {
+		seed.newAccountTimezone = strings.TrimSpace(timezone.Str)
+	}
 	credentials := t.h.newCodexAccountCredentials(seed)
 	setOAuthGatewayEnvironment(credentials, raw)
 	if workspaceName != "" {

@@ -75,6 +75,7 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	}
 	h.store.SetUsageProbeConcurrency(1)
 	credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at", "expires_at": "2099-01-01T00:00:00Z", "plan_type": "plus"}
+	credentials[auth.AccountTimezoneCredentialKey] = "Europe/Berlin"
 	id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "http://original.invalid:80", []int64{group}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +114,7 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original","plan_type":"self_serve_business_prolite"},"extra":{"oauth_workspace":{"id":"workspace-original","name":"Recovered Workspace"}}}`)
+	account := json.RawMessage(`{"platform":"openai","type":"oauth","name":"must-not-replace","oauth_gateway_timezone":"Asia/Tokyo","credentials":{"email":"fixture@example.invalid","access_token":"new-AT","refresh_token":"new-RT","chatgpt_user_id":"user-original","chatgpt_account_id":"workspace-original","plan_type":"self_serve_business_prolite","timezone":"Asia/Tokyo"},"extra":{"oauth_workspace":{"id":"workspace-original","name":"Recovered Workspace"}}}`)
 	wrongMetadata := json.RawMessage(strings.Replace(string(account), `"id":"workspace-original"`, `"id":"wrong-workspace"`, 1))
 	if oauthGatewayWorkspaceName(wrongMetadata, snap.Identity.ChatGPTAccountID) != "" {
 		t.Fatal("accepted a name from a different workspace")
@@ -154,6 +155,9 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	}
 	if after.GetCredential("access_token") != "new-AT" || h.store.FindByID(id).GetCredentialGeneration() != snap.Generation+1 {
 		t.Fatal("recovered credentials not published")
+	}
+	if after.GetCredential(auth.AccountTimezoneCredentialKey) != "Europe/Berlin" || originalRuntime.EffectiveCodexTimezone() != "Europe/Berlin" {
+		t.Fatal("recovery changed existing timezone")
 	}
 	if after.GetCredential("workspace_name") != "Recovered Workspace" {
 		t.Fatal("recovery did not save the verified workspace name")

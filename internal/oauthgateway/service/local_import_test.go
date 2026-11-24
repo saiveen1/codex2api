@@ -82,3 +82,44 @@ func TestLegacyReadyDeliveryUsesSavedBatchNotRequestOrResult(t *testing.T) {
 		}
 	}
 }
+
+func TestDeliveryTimezoneUsesSavedBatchForCheckedAndLegacy(t *testing.T) {
+	for _, checked := range []bool{false, true} {
+		for _, returned := range []string{"", "America/New_York", "Local"} {
+			g := Group{Lines: []int{1}, Masks: []string{"fixture"}, Stage: "running", Deliveries: []Delivery{{Line: 1, State: "ready", EnvironmentChecked: checked, Account: json.RawMessage(`{"credentials":{"email":"fixture@example.invalid"},"oauth_gateway_timezone":"Asia/Tokyo"}`)}}}
+			g.Request.Options.Timezone = "Europe/Berlin"
+			g.Batch.Options = &upstream.BatchProfile{Timezone: returned}
+			job := Job{ID: "fixture", Groups: []Group{g}}
+			store := &memoryStore{state: State{Version: 1, Jobs: []Job{job}}}
+			f := &fakePair{t: t, importMode: "failed"}
+			a := &App{store: store, target: f}
+			if err := a.importOne(t.Context(), f, job, 0, 0); err != nil {
+				t.Fatal(err)
+			}
+			state, err := store.View()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var account map[string]json.RawMessage
+			d := state.Jobs[0].Groups[0].Deliveries[0]
+			if d.State != "import_failed" || json.Unmarshal(d.Account, &account) != nil || string(account[upstream.TimezoneCredential]) != `"`+returned+`"` {
+				t.Fatalf("checked=%v returned=%q: wrong persisted timezone", checked, returned)
+			}
+		}
+	}
+}
+
+func TestKeepReturnedTimezoneSameBatch(t *testing.T) {
+	previous := upstream.Batch{BatchID: "batch", Options: &upstream.BatchProfile{Timezone: "America/New_York"}}
+	for _, tc := range []struct{ id, timezone, want string }{
+		{"batch", "", "America/New_York"},
+		{"batch", "Asia/Tokyo", "Asia/Tokyo"},
+		{"other", "", ""},
+	} {
+		next := upstream.Batch{BatchID: tc.id, Options: &upstream.BatchProfile{Timezone: tc.timezone}}
+		keepReturnedEnvironment(&next, previous)
+		if next.Options.Timezone != tc.want {
+			t.Fatalf("batch=%q got %q, want %q", tc.id, next.Options.Timezone, tc.want)
+		}
+	}
+}
