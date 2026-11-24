@@ -405,9 +405,9 @@ func (a *App) importOne(ctx context.Context, c Target, job Job, index, d int) er
 	var result upstream.ImportResult
 	var importErr error
 	if job.Recovery != nil {
-		result, importErr = a.target.(RecoveryTarget).Recover(ctx, *job.Recovery, delivery.Account, job.ID)
+		result, importErr = a.target.(RecoveryTarget).Recover(ctx, *job.Recovery, delivery.Account, job.ID, job.PauseAutoDetection)
 	} else {
-		result, importErr = c.Import(ctx, delivery.Account, job.GroupIDs, runtimeProxy)
+		result, importErr = c.Import(ctx, delivery.Account, job.GroupIDs, runtimeProxy, job.PauseAutoDetection)
 	}
 	var remote *upstream.Error
 	knownError := errors.As(importErr, &remote) && !remote.Uncertain

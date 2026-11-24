@@ -75,7 +75,7 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	}
 	h.store.SetUsageProbeConcurrency(1)
 	credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at", "expires_at": "2099-01-01T00:00:00Z", "plan_type": "plus"}
-	id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "http://original.invalid:80", []int64{group})
+	id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "http://original.invalid:80", []int64{group}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +119,10 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 		t.Fatal("accepted a name from a different workspace")
 	}
 	wrong := json.RawMessage(strings.ReplaceAll(string(account), "workspace-original", "wrong-workspace"))
-	if result, err := target.Recover(ctx, snap, wrong, "wrong"); err == nil || result.Failed != 1 {
+	if result, err := target.Recover(ctx, snap, wrong, "wrong", true); err == nil || result.Failed != 1 {
 		t.Fatal("workspace mismatch accepted")
 	}
-	result, err := target.Recover(ctx, snap, account, "repair")
+	result, err := target.Recover(ctx, snap, account, "repair", false)
 	if err != nil || result.Updated != 1 || result.Success != 0 {
 		t.Fatal("native recovery failed", err)
 	}
@@ -158,10 +158,10 @@ func TestOAuthGatewayRecoveryNativeIdentityCASAndNoUpsert(t *testing.T) {
 	if after.GetCredential("workspace_name") != "Recovered Workspace" {
 		t.Fatal("recovery did not save the verified workspace name")
 	}
-	if result, err = target.Recover(ctx, snap, account, "stale"); err == nil || result.Failed != 1 {
+	if result, err = target.Recover(ctx, snap, account, "stale", false); err == nil || result.Failed != 1 {
 		t.Fatal("stale recovery overwrote new credentials")
 	}
-	if result, err = target.Import(ctx, account, nil, ""); err == nil || result.Failed != 1 {
+	if result, err = target.Import(ctx, account, nil, "", false); err == nil || result.Failed != 1 {
 		t.Fatal("ordinary import became an overwrite")
 	}
 	if err = h.db.SoftDeleteAccount(ctx, id); err != nil {
@@ -188,7 +188,7 @@ func TestOAuthGatewayRecoveryRefresh401AndConcurrentFences(t *testing.T) {
 			}
 			ctx := context.Background()
 			credentials := map[string]any{"email": "fixture@example.invalid", "user_id": "user-original", "workspace_id": "workspace-original", "account_id": "workspace-original", "refresh_token": "old-rt", "access_token": "old-at"}
-			id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "", nil)
+			id, err := h.db.InsertOAuthGatewayAccount(ctx, "original", credentials, "", nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}

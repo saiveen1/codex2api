@@ -249,7 +249,7 @@ var _ service.Store = (*OAuthGatewayStore)(nil)
 
 // InsertOAuthGatewayAccount commits the new account and chosen groups together,
 // before the caller publishes it into the runtime scheduler.
-func (db *DB) InsertOAuthGatewayAccount(ctx context.Context, name string, credentials map[string]interface{}, proxyURL string, groupIDs []int64) (int64, error) {
+func (db *DB) InsertOAuthGatewayAccount(ctx context.Context, name string, credentials map[string]interface{}, proxyURL string, groupIDs []int64, pauseAutoDetection bool) (int64, error) {
 	credJSON, err := json.Marshal(encryptSensitiveCredentials(credentials))
 	if err != nil {
 		return 0, err
@@ -257,7 +257,7 @@ func (db *DB) InsertOAuthGatewayAccount(ctx context.Context, name string, creden
 	return db.insertAccountRowWithFamilyGroups(ctx,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3) RETURNING id`,
 		`INSERT INTO accounts (name, credentials, proxy_url) VALUES ($1, $2, $3)`,
-		credentials, proxyURL, normalizeIDSlice(groupIDs), name, credJSON, proxyURL,
+		credentials, proxyURL, normalizeIDSlice(groupIDs), pauseAutoDetection, name, credJSON, proxyURL,
 	)
 }
 

@@ -122,7 +122,7 @@ func oauthGatewayWorkspaceName(raw json.RawMessage, workspaceID string) string {
 // without making an HTTP request to our own administrator endpoint. This is not
 // a recovery upsert: even a freshly authorized duplicate cannot replace a newer
 // credential or change the existing account's proxy, groups, status or history.
-func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, groupIDs []int64, runtimeProxy string) (upstream.ImportResult, error) {
+func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, groupIDs []int64, runtimeProxy string, pauseAutoDetection bool) (upstream.ImportResult, error) {
 	var result struct {
 		Platform string `json:"platform"`
 		Type     string `json:"type"`
@@ -206,7 +206,7 @@ func (t oauthGatewayTarget) Import(ctx context.Context, raw json.RawMessage, gro
 	if workspaceName != "" {
 		credentials["workspace_name"] = workspaceName
 	}
-	id, err := t.h.db.InsertOAuthGatewayAccount(ctx, name, credentials, runtimeProxy, groupIDs)
+	id, err := t.h.db.InsertOAuthGatewayAccount(ctx, name, credentials, runtimeProxy, groupIDs, pauseAutoDetection)
 	if err != nil {
 		// A lost COMMIT response may already have inserted an account. Never
 		// classify arbitrary SQL errors as proof that another write is safe.

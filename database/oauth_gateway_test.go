@@ -159,7 +159,7 @@ func TestOAuthGatewayAccountAndGroupsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	credentials := map[string]any{"access_token": "synthetic-AT", "refresh_token": "synthetic-RT", "email": "fixture@example.invalid", "workspace_id": "workspace-fixture"}
-	id, err := db.InsertOAuthGatewayAccount(ctx, "fixture", credentials, "", []int64{group, group})
+	id, err := db.InsertOAuthGatewayAccount(ctx, "fixture", credentials, "", []int64{group, group}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestOAuthGatewayAccountAndGroupsAtomic(t *testing.T) {
 	if _, err = db.conn.Exec(`CREATE TRIGGER fail_gateway_group BEFORE INSERT ON account_group_members BEGIN SELECT RAISE(ABORT, 'synthetic binding failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.InsertOAuthGatewayAccount(ctx, "must-rollback", credentials, "", []int64{group}); err == nil {
+	if _, err = db.InsertOAuthGatewayAccount(ctx, "must-rollback", credentials, "", []int64{group}, false); err == nil {
 		t.Fatal("binding failure accepted")
 	}
 	count, err := db.CountAll(ctx)

@@ -195,7 +195,7 @@ func TestOAuthGatewayImportUsageProbeHonorsSettingAndDuplicates(t *testing.T) {
 				return nil
 			}
 			raw := json.RawMessage(`{"platform":"openai","type":"oauth","name":"fixture","credentials":{"email":"import-probe@example.invalid","access_token":"synthetic-at","refresh_token":"synthetic-rt","chatgpt_user_id":"user-fixture","chatgpt_account_id":"workspace-fixture","plan_type":"plus"}}`)
-			result, err := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, proxyURL)
+			result, err := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, proxyURL, false)
 			if err != nil || result.Success != 1 || len(result.CreatedIDs) != 1 {
 				t.Fatalf("import: %+v %v", result, err)
 			}
@@ -207,7 +207,7 @@ func TestOAuthGatewayImportUsageProbeHonorsSettingAndDuplicates(t *testing.T) {
 			if calls.Load() != want {
 				t.Fatalf("probe calls=%d, want %d", calls.Load(), want)
 			}
-			duplicate, duplicateErr := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, proxyURL)
+			duplicate, duplicateErr := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, proxyURL, false)
 			if duplicateErr == nil || duplicate.Failed != 1 {
 				t.Fatalf("duplicate: %+v %v", duplicate, duplicateErr)
 			}

@@ -228,7 +228,7 @@ func (f *fakePair) handle(w http.ResponseWriter, r *http.Request) {
 func (f *fakePair) Groups(context.Context) ([]upstream.Group, error) {
 	return []upstream.Group{{ID: 1, Name: "free"}}, nil
 }
-func (f *fakePair) Import(ctx context.Context, account json.RawMessage, ids []int64, proxy string) (upstream.ImportResult, error) {
+func (f *fakePair) Import(ctx context.Context, account json.RawMessage, ids []int64, proxy string, pauseAutoDetection bool) (upstream.ImportResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {

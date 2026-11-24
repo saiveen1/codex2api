@@ -134,6 +134,14 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	detection, err := h.db.GetIntelligenceCheckSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detection.NewAccountsEnabled = true
+	if _, err := h.db.SaveIntelligenceCheckSettings(ctx, detection); err != nil {
+		t.Fatal(err)
+	}
 	runtimeProxy := "http://runtime.example.invalid:8080"
 	proxyID, err := h.db.InsertProxy(ctx, runtimeProxy, "gateway runtime")
 	if err != nil {
@@ -203,6 +211,7 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	}
 	input := service.Input{RequestID: "native-test-1", SourceText: "fixture@example.invalid----  synthetic-password  ----JBSWY3DPEHPK3PXP", Options: upstream.Options{ProxyMode: "system"}, GroupIDs: []int64{group}}
 	input.RuntimeProxy = runtimeProxy
+	input.PauseAutoDetection = true
 	payload, _ := json.Marshal(input)
 	w = oauthGatewayRequest(r, "POST", "preview", string(payload))
 	if w.Code != 200 {
@@ -215,6 +224,12 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 	w = oauthGatewayRequest(r, "POST", "jobs", string(payload))
 	if w.Code != 200 {
 		t.Fatalf("idempotent create: %d", w.Code)
+	}
+	changed := input
+	changed.PauseAutoDetection = false
+	changedPayload, _ := json.Marshal(changed)
+	if w := oauthGatewayRequest(r, "POST", "jobs", string(changedPayload)); w.Code != 409 {
+		t.Fatalf("same request accepted changed detection preference: %d", w.Code)
 	}
 	for i := 0; i < 6; i++ {
 		if err := state.Update(func(s *service.State) error {
@@ -244,6 +259,10 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 		t.Fatal("missing imported account")
 	}
 	row := rows[0]
+	detectors, _, err := h.db.ListIntelligenceCheckAccounts(ctx, database.IntelligenceCheckAccountFilter{AccountID: row.ID})
+	if err != nil || len(detectors) != 1 || detectors[0].Enabled || detectors[0].QualityPaused {
+		t.Fatalf("expected only automatic detection to be paused: %+v, %v", detectors, err)
+	}
 	if row.ProxyURL != runtimeProxy || row.GetCredential("workspace_id") != "workspace-fixture" || row.GetCredential("user_id") != "user-fixture" || row.GetCredential("access_token") != "synthetic-AT" {
 		t.Fatal("account mapping or proxy isolation failed")
 	}
@@ -270,7 +289,7 @@ func TestOAuthGatewayNativeImportEndToEnd(t *testing.T) {
 		t.Fatal("completed job retained password")
 	}
 	rotated := bytes.ReplaceAll(account, []byte("synthetic-AT"), []byte("new-AT-must-not-overwrite"))
-	result, err := (oauthGatewayTarget{h}).Import(ctx, rotated, nil, "")
+	result, err := (oauthGatewayTarget{h}).Import(ctx, rotated, nil, "", false)
 	if err == nil || result.Failed != 1 {
 		t.Fatal("duplicate account overwritten")
 	}
@@ -344,7 +363,7 @@ func TestOAuthGatewayRejectsConflictingJWTIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, "")
+		result, err := (oauthGatewayTarget{h}).Import(t.Context(), raw, nil, "", false)
 		problem, ok := err.(*upstream.Error)
 		if !ok || result.Failed != 1 || problem.Code != "gateway_identity_mismatch" {
 			t.Fatalf("conflicting identity accepted: %+v %v", result, err)

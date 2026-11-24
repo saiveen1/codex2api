@@ -84,7 +84,7 @@ func (s *stoppedRecoveryStore) Close() error { return nil }
 type stoppedRecoveryTarget struct{}
 
 func (stoppedRecoveryTarget) Groups(context.Context) ([]upstream.Group, error) { return nil, nil }
-func (stoppedRecoveryTarget) Import(context.Context, json.RawMessage, []int64, string) (upstream.ImportResult, error) {
+func (stoppedRecoveryTarget) Import(context.Context, json.RawMessage, []int64, string, bool) (upstream.ImportResult, error) {
 	return upstream.ImportResult{}, nil
 }
 

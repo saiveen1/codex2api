@@ -21,7 +21,7 @@ type Store interface {
 // other ambiguous failures require manual review, never an automatic replay.
 type Target interface {
 	Groups(context.Context) ([]upstream.Group, error)
-	Import(context.Context, json.RawMessage, []int64, string) (upstream.ImportResult, error)
+	Import(context.Context, json.RawMessage, []int64, string, bool) (upstream.ImportResult, error)
 }
 
 // AccountResultTarget reads safe fields from the committed local account.
@@ -64,15 +64,16 @@ type RetryReference struct {
 	Line  int    `json:"line"`
 }
 type Input struct {
-	RequestID         string           `json:"request_id,omitempty"`
-	SourceText        string           `json:"source_text,omitempty"`
-	Accounts          []InputAccount   `json:"accounts,omitempty"`
-	Options           upstream.Options `json:"options"`
-	GroupIDs          []int64          `json:"group_ids"`
-	SaveCredentials   bool             `json:"save_credentials"`
-	RuntimeProxy      string           `json:"runtime_proxy,omitempty"`
-	RecoveryAccountID int64            `json:"recovery_account_id,omitempty"`
-	RetryOf           *RetryReference  `json:"retry_of,omitempty"`
+	RequestID          string           `json:"request_id,omitempty"`
+	SourceText         string           `json:"source_text,omitempty"`
+	Accounts           []InputAccount   `json:"accounts,omitempty"`
+	Options            upstream.Options `json:"options"`
+	GroupIDs           []int64          `json:"group_ids"`
+	SaveCredentials    bool             `json:"save_credentials"`
+	PauseAutoDetection bool             `json:"pause_auto_detection,omitempty"`
+	RuntimeProxy       string           `json:"runtime_proxy,omitempty"`
+	RecoveryAccountID  int64            `json:"recovery_account_id,omitempty"`
+	RetryOf            *RetryReference  `json:"retry_of,omitempty"`
 }
 type PreviewRow struct {
 	Line             int    `json:"line"`
@@ -111,20 +112,21 @@ type Group struct {
 	ReadFailures   int                    `json:"read_failures,omitempty"`
 }
 type Job struct {
-	ID              string            `json:"id"`
-	Fingerprint     string            `json:"fingerprint"`
-	Settings        Settings          `json:"settings"`
-	Groups          []Group           `json:"groups"`
-	GroupIDs        []int64           `json:"group_ids"`
-	SaveCredentials bool              `json:"save_credentials"`
-	RuntimeProxy    string            `json:"runtime_proxy,omitempty"`
-	CancelRequested bool              `json:"cancel_requested"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	Recovery        *RecoverySnapshot `json:"recovery,omitempty"`
-	RecoveryEpoch   int64             `json:"recovery_epoch,omitempty"`
-	AutoRecovery    bool              `json:"auto_recovery,omitempty"`
-	RetryOf         *RetryReference   `json:"retry_of,omitempty"`
+	ID                 string            `json:"id"`
+	Fingerprint        string            `json:"fingerprint"`
+	Settings           Settings          `json:"settings"`
+	Groups             []Group           `json:"groups"`
+	GroupIDs           []int64           `json:"group_ids"`
+	SaveCredentials    bool              `json:"save_credentials"`
+	PauseAutoDetection bool              `json:"pause_auto_detection,omitempty"`
+	RuntimeProxy       string            `json:"runtime_proxy,omitempty"`
+	CancelRequested    bool              `json:"cancel_requested"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
+	Recovery           *RecoverySnapshot `json:"recovery,omitempty"`
+	RecoveryEpoch      int64             `json:"recovery_epoch,omitempty"`
+	AutoRecovery       bool              `json:"auto_recovery,omitempty"`
+	RetryOf            *RetryReference   `json:"retry_of,omitempty"`
 }
 type State struct {
 	Version    int           `json:"version"`

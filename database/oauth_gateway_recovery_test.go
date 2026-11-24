@@ -67,7 +67,7 @@ func TestOAuthRecoveryCASPreservesOriginalAndRejectsRaces(t *testing.T) {
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						if db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-race") == nil {
+						if db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-race", false) == nil {
 							successes.Add(1)
 						}
 					}()
@@ -78,7 +78,7 @@ func TestOAuthRecoveryCASPreservesOriginalAndRejectsRaces(t *testing.T) {
 				}
 				return
 			}
-			err = db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-"+scenario)
+			err = db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-"+scenario, false)
 			if scenario != "success" {
 				var classified *upstream.Error
 				if !errors.As(err, &classified) || classified.Uncertain {
@@ -103,7 +103,7 @@ func TestOAuthRecoveryCASPreservesOriginalAndRejectsRaces(t *testing.T) {
 			if after.ID != id || after.Name != row.Name || after.ProxyURL != row.ProxyURL || after.CredentialFamilyID != snap.Family || after.CredentialGeneration != snap.Generation+1 || after.GetCredentialStringMap("custom_headers")["X-Keep"] != "yes" || after.GetCredential("access_token") != "new-at" {
 				t.Fatal("original account metadata not preserved")
 			}
-			if err = db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-success"); err == nil {
+			if err = db.RecoverOAuthGatewayAccount(ctx, snap, updates, "job-success", false); err == nil {
 				t.Fatal("same snapshot wrote twice")
 			}
 		})

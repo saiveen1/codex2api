@@ -31,7 +31,7 @@ func (r *recoveryTestTarget) RefreshBeforeRecovery(context.Context, RecoverySnap
 	r.refreshCalls++
 	return r.refreshEligible, nil
 }
-func (r *recoveryTestTarget) Recover(_ context.Context, expected RecoverySnapshot, _ json.RawMessage, _ string) (upstream.ImportResult, error) {
+func (r *recoveryTestTarget) Recover(_ context.Context, expected RecoverySnapshot, _ json.RawMessage, _ string, _ bool) (upstream.ImportResult, error) {
 	if r.unavailable || expected != r.snapshot {
 		return upstream.ImportResult{Total: 1, Failed: 1}, LocalImportError("recovery_credentials_changed")
 	}
@@ -43,8 +43,8 @@ func (r *recoveryTestTarget) Recover(_ context.Context, expected RecoverySnapsho
 	r.snapshot.CredentialVersion = "recovered"
 	return upstream.ImportResult{Total: 1, Updated: 1}, nil
 }
-func (r *recoveryTestTarget) Import(ctx context.Context, raw json.RawMessage, ids []int64, proxy string) (upstream.ImportResult, error) {
-	result, err := r.fakePair.Import(ctx, raw, ids, proxy)
+func (r *recoveryTestTarget) Import(ctx context.Context, raw json.RawMessage, ids []int64, proxy string, pauseAutoDetection bool) (upstream.ImportResult, error) {
+	result, err := r.fakePair.Import(ctx, raw, ids, proxy, pauseAutoDetection)
 	if err == nil && result.Success == 1 {
 		result.CreatedIDs = []int64{r.snapshot.AccountID}
 	}

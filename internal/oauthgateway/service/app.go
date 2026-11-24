@@ -34,7 +34,7 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 	}
 	a := &App{store: store, target: target, allowHTTP: allowHTTP, wake: make(chan struct{}, 1)}
 	err := store.Update(func(s *State) error {
-		if (s.Version < 1 || s.Version > 5) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
+		if (s.Version < 1 || s.Version > 6) || (s.Version == 1 && len(s.Archived) > 0) || (s.Version < 3 && len(s.Recoveries) > 0) {
 			return errors.New("unsupported encrypted state version")
 		}
 		if s.Version < 5 && len(retryReferences(*s)) != 0 {
@@ -47,6 +47,9 @@ func New(store Store, target Target, allowHTTP bool) (*App, error) {
 			s.Settings.OAuthURL = DefaultOAuthURL
 		}
 		for j := range s.Jobs {
+			if s.Version < 6 && s.Jobs[j].PauseAutoDetection {
+				return errors.New("paused detection imports require encrypted state version 6")
+			}
 			// Legacy flags were never consent to retention. V3 is a one-way,
 			// fail-closed migration: older binaries reject it rather than purge it.
 			if s.Version < 3 {
@@ -419,12 +422,17 @@ func (a *App) Create(in Input) (JobView, bool, error) {
 		}
 		now := time.Now().UTC()
 		job := Job{ID: in.RequestID, Fingerprint: fp, Settings: s.Settings, Groups: groups, GroupIDs: sortedGroups(in.GroupIDs), RuntimeProxy: in.RuntimeProxy, CreatedAt: now, UpdatedAt: now}
+		job.PauseAutoDetection = in.PauseAutoDetection
+		if job.PauseAutoDetection {
+			// Older workers must not import a paused account as eligible for detection.
+			s.Version = 6
+		}
 		job.SaveCredentials, job.Recovery = in.SaveCredentials, recovery
 		if in.RetryOf != nil {
 			retry := *in.RetryOf
 			job.RetryOf = &retry
 			// Older workers would drop the reference, losing durable deduplication.
-			s.Version = 5
+			s.Version = max(s.Version, 5)
 		}
 		if recovery != nil {
 			for _, r := range s.Recoveries {

@@ -48,7 +48,7 @@ func OAuthRecoverySnapshot(row *AccountRow) (service.RecoverySnapshot, error) {
 // RecoverOAuthGatewayAccount uses the existing Codex generation/family fence.
 // The row lock covers enabled/deleted and identity checks, not just generation.
 // No insert and no mutation of proxy, groups, statistics or sibling routes.
-func (db *DB) RecoverOAuthGatewayAccount(ctx context.Context, expected service.RecoverySnapshot, updates map[string]any, jobID string) error {
+func (db *DB) RecoverOAuthGatewayAccount(ctx context.Context, expected service.RecoverySnapshot, updates map[string]any, jobID string, pauseAutoDetection bool) error {
 	return db.withOAuthGatewayWrite(ctx, func(conn *sql.Conn) error {
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
@@ -88,6 +88,11 @@ func (db *DB) RecoverOAuthGatewayAccount(ctx context.Context, expected service.R
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE accounts SET cooldown_until=NULL,cooldown_reason='' WHERE id=$1 AND cooldown_reason='unauthorized'`, row.ID); err != nil {
 			return err
+		}
+		if pauseAutoDetection {
+			if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET enabled=FALSE,next_due_ms=0 WHERE account_id=$1`, row.ID); err != nil {
+				return err
+			}
 		}
 		// An unknown COMMIT stays import_unknown at the worker; it is never replayed.
 		return tx.Commit()

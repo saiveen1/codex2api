@@ -421,7 +421,7 @@ func TestImportedProxyBinding(t *testing.T) {
 			return db.InsertAccountWithUpstream(ctx, "new", "xai", "api", nil, url)
 		},
 		"gateway": func(db *DB, url string) (int64, error) {
-			return db.InsertOAuthGatewayAccount(ctx, "new", nil, url, nil)
+			return db.InsertOAuthGatewayAccount(ctx, "new", nil, url, nil, false)
 		},
 		"grok": func(db *DB, url string) (int64, error) {
 			id, _, err := db.InsertGrokAccountIfAbsent(ctx, "new", map[string]any{"refresh_token": "rt"}, url, true)

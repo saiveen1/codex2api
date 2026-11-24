@@ -46,7 +46,7 @@ func (t oauthGatewayTarget) RefreshBeforeRecovery(ctx context.Context, snap serv
 	return false, service.LocalImportError("recovery_refresh_requires_review")
 }
 
-func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySnapshot, raw json.RawMessage, jobID string) (upstream.ImportResult, error) {
+func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySnapshot, raw json.RawMessage, jobID string, pauseAutoDetection bool) (upstream.ImportResult, error) {
 	var result struct {
 		Platform string `json:"platform"`
 		Type     string `json:"type"`
@@ -90,7 +90,7 @@ func (t oauthGatewayTarget) Recover(ctx context.Context, snap service.RecoverySn
 	if name := oauthGatewayWorkspaceName(raw, snap.Identity.ChatGPTAccountID); name != "" {
 		updates["workspace_name"] = name
 	}
-	if err := t.h.db.RecoverOAuthGatewayAccount(ctx, snap, updates, jobID); err != nil {
+	if err := t.h.db.RecoverOAuthGatewayAccount(ctx, snap, updates, jobID, pauseAutoDetection); err != nil {
 		var known *upstream.Error
 		if errors.As(err, &known) && !known.Uncertain {
 			return upstream.ImportResult{Total: 1, Failed: 1}, known

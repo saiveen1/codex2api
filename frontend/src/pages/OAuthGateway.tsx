@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import PageHeader from '../components/PageHeader'
@@ -12,6 +12,7 @@ import { formatProxyDisplayURL, formatProxyIdentity, proxyIsSelectable } from '.
 import { createSubmission, parseMaterial, withAccountRuntimeProxies, previewMatches, readPendingRequest, rememberPendingRequest, forgetPendingRequest, type Account, type GatewayInput, type Problem } from '../lib/oauthGateway'
 import { OAuthJobs, type Job } from '../components/OAuthJobs'
 import { gatewayRequest, GatewayError } from '../lib/oauthGatewayApi'
+import { COMMON_DISPLAY_TIMEZONES } from '../lib/displayTimezone'
 
 type Settings = { oauth_url: string; oauth_token_set: boolean; configured: boolean; auto_recovery_supported: boolean; auto_recovery_reason: string; max_jobs?: number; max_archived_jobs?: number }
 type Capabilities = { countries?: string[]; environments?: string[]; proxy_modes?: string[]; workspace_policies?: string[]; max_batch_size?: number; max_upload_bytes?: number; features?: Record<string, boolean> }
@@ -63,6 +64,11 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
   const { hash } = useLocation()
   const { i18n } = useTranslation()
   const zh = i18n.resolvedLanguage?.startsWith('zh') ?? false
+  const timezoneListId = useId()
+  const timezones = useMemo(() => {
+    const intl = Intl as typeof Intl & { supportedValuesOf?: (key: 'timeZone') => string[] }
+    return [...new Set([...COMMON_DISPLAY_TIMEZONES, ...(intl.supportedValuesOf?.('timeZone') || [])])].sort()
+  }, [])
   const tr = (en: string, cn: string) => zh ? cn : en
   const [settings, setSettings] = useState<Settings | null>(null)
   const [url, setUrl] = useState('https://oauth.cala.lol')
@@ -79,6 +85,7 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
   const [runtimeProxies, setRuntimeProxies] = useState<ProxyRow[] | null>(null)
   const [accountRuntimeProxies, setAccountRuntimeProxies] = useState<Record<string, string>>({})
   const [saveCredentials, setSaveCredentials] = useState(false)
+  const [pauseAutoDetection, setPauseAutoDetection] = useState(false)
   const [recoveryAccountID, setRecoveryAccountID] = useState('')
   const [retry, setRetry] = useState<{ job_id: string; line: number; identifier: string } | null>(null)
   const [preview, setPreview] = useState<{ revision: number; input: GatewayInput; result: Preview } | null>(null)
@@ -265,7 +272,7 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
     if (problem) throw new Error(problem)
     const accounts = withAccountRuntimeProxies(material.accounts, accountRuntimeProxies, repairing)
     const options = Object.fromEntries(Object.entries(opts).filter(([key, value]) => value && (key !== 'proxy' || opts.proxy_mode === 'custom')))
-    return { ...(format === 'json' || accounts.some(a => a.runtime_proxy) ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}), ...(retry ? { retry_of: { job_id: retry.job_id, line: retry.line } } : {}) }
+    return { ...(format === 'json' || accounts.some(a => a.runtime_proxy) ? { accounts } : { source_text: source.replace(/^\uFEFF/, '') }), options, group_ids: repairing ? [] : selectedGroups, save_credentials: saveCredentials, pause_auto_detection: pauseAutoDetection, ...(repairing ? { recovery_account_id: Number(recoveryAccountID) } : runtimeProxy ? { runtime_proxy: runtimeProxy } : {}), ...(retry ? { retry_of: { job_id: retry.job_id, line: retry.line } } : {}) }
   }
   const saveSettings = () => run('save', async signal => {
     invalidate(); setConnection('')
@@ -378,7 +385,7 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
   const startRetry = (job: Job, item: Identifier & { line: number }) => {
     if (formLocked || busy.current.has('submit') || pending.preview || !item.identifier || !Number.isSafeInteger(item.line) || item.line < 1) return
     if ((source || preview || retry) && !window.confirm(tr('Discard the current unsubmitted material and preview?', '放弃当前未提交的材料和预检结果？'))) return
-    clearMaterial(); setFormat('txt'); setOpts({ proxy_mode: 'system' }); setSelectedGroups([]); setRecoveryAccountID(''); setSaveCredentials(false); setProxyResult('')
+    clearMaterial(); setFormat('txt'); setOpts({ proxy_mode: 'system' }); setSelectedGroups([]); setRecoveryAccountID(''); setSaveCredentials(false); setPauseAutoDetection(false); setProxyResult('')
     setRetry({ job_id: job.id, line: item.line, identifier: item.identifier })
   }
   const select = (name: string, key: string, values?: string[], fallback = '') => {
@@ -474,7 +481,7 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
         <div className="grid gap-4 md:grid-cols-2">
           {label('User-Agent', <Input value={opts.user_agent || ''} disabled={opts.environment !== 'custom_ua' && !opts.user_agent} onChange={e => setOption('user_agent', e.target.value)} />, tr('Only custom_ua allows this field. Otherwise leave it blank.', '仅 custom_ua 环境需要填写，其他环境请留空。'))}
           {label(tr('Language (optional)', '语言（可选）'), <Input value={opts.language || ''} onChange={e => setOption('language', e.target.value)} />)}
-          {label(tr('Timezone (optional)', '时区（可选）'), <Input value={opts.timezone || ''} onChange={e => setOption('timezone', e.target.value)} />)}
+          {label(tr('Timezone (optional)', '时区（可选）'), <><Input list={timezoneListId} value={opts.timezone || ''} onChange={e => setOption('timezone', e.target.value)} /><datalist id={timezoneListId}>{timezones.map(zone => <option key={zone} value={zone} />)}</datalist></>)}
         </div>
         </section>
         <section className="space-y-3 border-t border-border pt-4" aria-labelledby="runtime-proxy-heading">
@@ -509,6 +516,8 @@ export default function OAuthGateway({ embedded = false, active = true }: { embe
           {label(tr('Existing account ID to repair (optional)', '修复已有账号 ID（可选）'), <Input inputMode="numeric" value={recoveryAccountID} disabled={!!retry || (!settings?.auto_recovery_supported && !recoveryAccountID)} placeholder={tr('Blank creates a new account', '留空表示新增账号')} onChange={e => { setRecoveryAccountID(e.target.value.trim()); invalidate() }} />, tr('Specify the original account ID and one account’s material. Identity, workspace and credential version must match. Deleted or disabled accounts are not revived.', '填写原账号 ID，并只提供一条材料。必须通过身份、工作区与凭据版本校验；不会复活已删除或禁用账号。'))}
           <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={saveCredentials} disabled={!settings?.auto_recovery_supported && !saveCredentials} onChange={e => { setSaveCredentials(e.target.checked); invalidate() }} /><span>{tr('Enable 401 recovery after success (encrypt and retain password and TOTP)', '成功后启用 401 自动恢复（加密保管密码和 TOTP）')}</span></label>
           <p className="text-xs text-muted-foreground">{settings?.auto_recovery_supported ? tr('Off by default. Only explicitly enrolled accounts may recover. Turn it off below to discard saved login material; archiving a job does not disable recovery.', '默认关闭，仅对明确启用的账号生效。可在下方停止恢复并清除保管材料；归档任务不会关闭已启用的恢复。') : settings?.auto_recovery_reason || tr('Waiting for server recovery capabilities.', '正在读取服务端恢复能力。')}</p>
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={pauseAutoDetection} onChange={e => { setPauseAutoDetection(e.target.checked); invalidate() }} /><span>{tr('Pause automatic intelligence detection after import', '导入后暂停自动降智检测')}</span></label>
+          <p className="text-xs text-muted-foreground">{tr('Automatic detection stays paused even when a group rule matches. Resume it under paused detections in the policy; manual detection is unaffected.', '即使匹配分组规则也会暂停自动检测；可在策略的已暂停检测中恢复，不影响手动检测。')}</p>
         </div>
       </fieldset>
       <div className="space-y-3 border-t border-border pt-4">

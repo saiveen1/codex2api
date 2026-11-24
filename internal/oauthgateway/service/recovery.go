@@ -21,7 +21,7 @@ const (
 type RecoveryTarget interface {
 	RecoverySnapshot(context.Context, int64) (RecoverySnapshot, error)
 	RefreshBeforeRecovery(context.Context, RecoverySnapshot) (bool, error)
-	Recover(context.Context, RecoverySnapshot, json.RawMessage, string) (upstream.ImportResult, error)
+	Recover(context.Context, RecoverySnapshot, json.RawMessage, string, bool) (upstream.ImportResult, error)
 }
 
 type RecoverySnapshot struct {

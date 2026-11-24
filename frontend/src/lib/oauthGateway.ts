@@ -1,6 +1,6 @@
 export type Problem = { code?: string; message?: string; source?: string; action?: string; retryable?: boolean; retry_after?: number; uncertain?: boolean }
 export type Account = { identifier: string; password: string; totp_secret: string; proxy?: string | Record<string, unknown>; runtime_proxy?: string }
-export type GatewayInput = { source_text?: string; accounts?: Account[]; options: Record<string, string>; group_ids: number[]; save_credentials: boolean; runtime_proxy?: string; request_id?: string; recovery_account_id?: number; retry_of?: { job_id: string; line: number } }
+export type GatewayInput = { source_text?: string; accounts?: Account[]; options: Record<string, string>; group_ids: number[]; save_credentials: boolean; pause_auto_detection: boolean; runtime_proxy?: string; request_id?: string; recovery_account_id?: number; retry_of?: { job_id: string; line: number } }
 export function parseMaterial(source: string, format: 'txt' | 'json'): Account[] {
   if (new TextEncoder().encode(source).length > 1048576) throw new Error('Input exceeds 1 MiB')
   const text = source.replace(/^\uFEFF/, '')

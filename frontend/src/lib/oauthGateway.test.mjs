@@ -18,7 +18,7 @@ test('JSON preserves per-account proxy and enforces bounds', () => {
 test('preview revision must match and submission keeps the supplied ID and content', () => {
   assert.equal(previewMatches({ revision: 4 }, 4), true)
   assert.equal(previewMatches({ revision: 4 }, 5), false)
-  const input = { source_text: 'a---- b ----t', options: { proxy_mode: 'system' }, group_ids: [], save_credentials: false }
+  const input = { source_text: 'a---- b ----t', options: { proxy_mode: 'system' }, group_ids: [], save_credentials: false, pause_auto_detection: false }
   const original = createSubmission(input, 'request-1')
   assert.deepEqual(original, { ...input, request_id: 'request-1' })
   assert.deepEqual(createSubmission(input, original.request_id), original)
@@ -43,7 +43,7 @@ test('only the opaque request ID survives navigation and invalid stored IDs are 
 })
 
 test('retention and an explicit recovery target survive preview submission unchanged', () => {
-  const input = { source_text: 'a----p----t', options: { proxy_mode: 'system' }, group_ids: [], save_credentials: true, recovery_account_id: 42 }
+  const input = { source_text: 'a----p----t', options: { proxy_mode: 'system' }, group_ids: [], save_credentials: true, pause_auto_detection: true, recovery_account_id: 42 }
   assert.deepEqual(createSubmission(input, 'repair-1'), { ...input, request_id: 'repair-1' })
   assert.equal(input.request_id, undefined)
 })

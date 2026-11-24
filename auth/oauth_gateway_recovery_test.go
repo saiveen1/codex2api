@@ -129,7 +129,7 @@ func (s *failedOAuthRecoveryStore) Close() error { return nil }
 type failedOAuthRecoveryTarget struct{}
 
 func (failedOAuthRecoveryTarget) Groups(context.Context) ([]upstream.Group, error) { return nil, nil }
-func (failedOAuthRecoveryTarget) Import(context.Context, json.RawMessage, []int64, string) (upstream.ImportResult, error) {
+func (failedOAuthRecoveryTarget) Import(context.Context, json.RawMessage, []int64, string, bool) (upstream.ImportResult, error) {
 	return upstream.ImportResult{}, nil
 }
 

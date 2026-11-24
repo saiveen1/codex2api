@@ -8978,10 +8978,10 @@ func (db *DB) InsertAccountWithUpstream(ctx context.Context, name, platform, acc
 // insertAccountRowWithFamily keeps legacy insert SQL untouched while ensuring
 // every newly-created account immediately receives its stable family key.
 func (db *DB) insertAccountRowWithFamily(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, proxyURL string, args ...interface{}) (int64, error) {
-	return db.insertAccountRowWithFamilyGroups(ctx, postgresQuery, sqliteQuery, credentials, proxyURL, nil, args...)
+	return db.insertAccountRowWithFamilyGroups(ctx, postgresQuery, sqliteQuery, credentials, proxyURL, nil, false, args...)
 }
 
-func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, proxyURL string, groupIDs []int64, args ...interface{}) (int64, error) {
+func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuery, sqliteQuery string, credentials map[string]interface{}, proxyURL string, groupIDs []int64, pauseAutoDetection bool, args ...interface{}) (int64, error) {
 	candidate := credentialFamilyCandidate(credentials)
 	returnID := int64(0)
 	err := db.withImportedProxyBinding(proxyURL, func(promoted *ProxyRow) error {
@@ -9013,6 +9013,11 @@ func (db *DB) insertAccountRowWithFamilyGroups(ctx context.Context, postgresQuer
 			}
 			if len(groupIDs) > 0 {
 				if err := db.batchReplaceAccountGroups(ctx, tx, []int64{returnID}, groupIDs); err != nil {
+					return err
+				}
+			}
+			if pauseAutoDetection {
+				if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET enabled=FALSE,next_due_ms=0 WHERE account_id=$1`, returnID); err != nil {
 					return err
 				}
 			}

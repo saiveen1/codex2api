@@ -15,7 +15,7 @@ func TestOAuthGatewayLegacyWorkspaceDiscoveryKeepsDuplicateGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "")
+	result, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "", false)
 	if err != nil || result.Success != 1 || len(result.CreatedIDs) != 1 || calls != 2 {
 		t.Fatalf("legacy gateway import: %+v %v metadata=%d", result, err, calls)
 	}
@@ -23,7 +23,7 @@ func TestOAuthGatewayLegacyWorkspaceDiscoveryKeepsDuplicateGuard(t *testing.T) {
 	if err != nil || row.GetCredential("workspace_id") != "workspace-default" || row.GetCredential("account_id") != "workspace-default" || row.GetCredential("user_id") != "user-legacy" {
 		t.Fatal("gateway did not preserve separate authenticated identity")
 	}
-	duplicate, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "")
+	duplicate, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "", false)
 	if err == nil || duplicate.Success != 0 || duplicate.Failed != 1 {
 		t.Fatal("gateway compatibility bypassed duplicate/no-recovery guard")
 	}
@@ -42,7 +42,7 @@ func TestOAuthGatewayLegacyIdentityMismatchStillRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "")
+	result, err := (oauthGatewayTarget{h}).Import(ctx, raw, nil, "", false)
 	if err == nil || result.Success != 0 {
 		t.Fatal("gateway accepted mismatched authenticated identity")
 	}

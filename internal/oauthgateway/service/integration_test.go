@@ -304,7 +304,8 @@ func TestRestartAfterImportOutcomeCommitFailure(t *testing.T) {
 func TestConstructorStateVersionsAndLegacyRetention(t *testing.T) {
 	f := newPair(t)
 	for _, state := range []State{
-		{Version: 0}, {Version: 6},
+		{Version: 0}, {Version: 7},
+		{Version: 5, Jobs: []Job{{PauseAutoDetection: true}}},
 		{Version: 3, Jobs: []Job{{Groups: []Group{{RuntimeProxies: []string{"http://runtime.example.invalid:8080"}}}}}},
 		{Version: 4, Jobs: []Job{{RetryOf: &RetryReference{JobID: "source", Line: 1}}}},
 		{Version: 4, Archived: []ArchivedJob{{RetryOf: &RetryReference{JobID: "source", Line: 1}}}},
@@ -340,7 +341,7 @@ type summaryTarget struct {
 	err    error
 }
 
-func (s summaryTarget) Import(context.Context, json.RawMessage, []int64, string) (upstream.ImportResult, error) {
+func (s summaryTarget) Import(context.Context, json.RawMessage, []int64, string, bool) (upstream.ImportResult, error) {
 	return s.result, s.err
 }
 func TestInjectedImportSummaryValidation(t *testing.T) {
