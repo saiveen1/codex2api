@@ -1,5 +1,41 @@
 # Changelog
 
+## v3.2.0 - 2026-11-23
+
+> **Security upgrade notice.** [Issue #916](https://github.com/james-6-23/codex2api/issues/916), reported by @azure9, identified backdoored releases tagged `v3.1.10`, `v3.1.11` and `v3.1.12`. Upgrade to `v3.2.0` from the official release. If you ran an affected version, isolate the deployment, preserve logs, redeploy from a trusted environment and rotate credentials accessible to the old instance. The seven commits identified in the report are outside the history of this release.
+
+### Features
+
+- **Administrators can review recorded requests and replay tasks by conversation (#914, @BobChuang).** The admin view shows user input, images, model replies, tool calls and results, and captured Skill content. Full request recording is opt-in and defaults to 30 days of retention when enabled. Clients can submit task outcomes, and operators can separately configure Langfuse to receive trace metadata.
+
+### Fixes
+
+- **Dropdowns scroll reliably on touchscreens (#915, @mianfeikejiwl).** Swiping through options in dialogs keeps the list open until the user taps a choice. The invite account list keeps its scroll position when the highlighted row rerenders, and the auto-refresh menu scrolls on small screens.
+
+## v3.1.9 - 2026-11-22
+
+### Features
+
+- **Antigravity exposes reasoning tiers for Gemini 4 Neon, Carbon and Hydrogen (#902, @wangbingnan136).** The model list and Codex manifest group tiers under each family's name. Requests select the matching upstream model and send its thinking level. All three default to `high` when available, and Neon and Hydrogen also support `xhigh`.
+
+- **Antigravity accounts support per-account scheduling and per-family quota pauses (#912, @wangbingnan136).** Administrators can configure concurrency, priority, request-count limits and allowed API keys in the account editor. Reaching a 5-hour or weekly threshold pauses the affected model family until its trusted reset. The account list shows live concurrency, request counts and cooldowns.
+
+- **Administrators can schedule daily quiet hours for background inspections (#909, @Alexander4731).** Up to 32 periods in UTC+8 can span midnight or overlap. Saving a schedule takes effect immediately for automatic refreshes, probes and scheduled connection tests. Manual actions and model requests remain available.
+
+- **Codex account headers can follow the synchronized CLI version (#908, @Alexander4731).** Official Codex accounts can use `{{codex_cli_version}}` in custom `User-Agent` and `Version` headers. HTTP requests, maintenance requests and new WebSocket handshakes expand the template at send time.
+
+- **Isolated Codex IDs can preserve the source UUIDv7 creation time (#911, @Alexander4731).** An optional, fixed `CODEX_IDENTITY_V2_FROM_UNIX_MS` cutoff applies to single-machine multi-window identities and explicit session-derived cache IDs. Older IDs and opaque inputs keep their existing mappings. See the [activation and rollback instructions](docs/codex-identity-time.md).
+
+### Fixes
+
+- **Renaming an API key keeps its usage in one row (#903, @Blaskyy).** Usage statistics and token rankings group records by key ID and display the current name. Deleted keys use their latest available log label, and historical records without an ID retain their snapshot labels.
+
+- **Codex Responses preserves the requested reasoning-summary delivery mode (#905, reported by @mice33, #906, @koeria).** Request preparation forwards a nonempty `stream_options.reasoning_summary_delivery`, including `sequential_cutoff`. Strict compatibility accepts the string field and rejects unsupported sibling options and non-string values.
+
+- **The Codex Desktop identity preview shows the correct target platform (#907, @Alexander4731).** The preview reads the operating system and architecture from the User-Agent's platform segment. Regression tests cover Windows x64 and macOS arm64 and check the displayed CLI version source.
+
+- **Codex Responses country-field behavior is documented and covered by regression tests (#904, requested by @mice33).** Tests cover an omitted `request_country`, explicit `null` and a country code over HTTP and across successive WebSocket frames. The configuration guide shows how to supply a default for requests that omit the field.
+
 ## v3.1.8 - 2026-11-20
 
 ### Fixes

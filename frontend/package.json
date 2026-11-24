@@ -15,6 +15,7 @@
     "test:intelligence": "node --experimental-strip-types --test tests/intelligenceCheck.browser.test.mjs",
     "test:key-usage": "node --experimental-strip-types --test tests/keyUsageAccounts.browser.test.mjs",
     "test:version": "node --experimental-strip-types --test tests/useVersionCheck.browser.test.mjs tests/versionPopover.browser.test.mjs",
+    "test:quiet-hours": "node --experimental-strip-types --test tests/backgroundQuietHours.browser.test.mjs",
     "typecheck": "tsc --noEmit",
     "audit:ci": "node scripts/audit-gate.mjs"
   },
@@ -29,8 +30,10 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^16.6.6",
+    "react-markdown": "10.1.0",
     "react-router-dom": "^7.18.0",
     "recharts": "^3.8.0",
+    "remark-gfm": "4.0.1",
     "shiki": "^3.23.0",
     "tailwind-merge": "^3.5.0"
   },

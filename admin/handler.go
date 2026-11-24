@@ -72,6 +72,9 @@ type Handler struct {
 	refreshAccount           func(context.Context, int64) error
 	probeUsage               func(context.Context, *auth.Account) error
 
+	promptRequestRecording bool
+	promptTraceExporter    *promptTraceExporter
+
 	codexUsageRefreshRunning atomic.Bool
 
 	// executeClaudeUsageProbe is injectable for tests; production uses the
@@ -1400,6 +1403,14 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/settings/background-upload", h.UploadBackgroundAsset)
 	api.POST("/settings/image-storage/test", h.TestImageStorageConnection)
 	api.GET("/prompt-filter/logs", h.ListPromptFilterLogs)
+	api.GET("/prompt-filter/requests", h.ListPromptRequests)
+	api.GET("/prompt-filter/request-conversations", h.ListPromptRequestConversations)
+	api.GET("/prompt-filter/request-conversations/:id", h.ListPromptRequestRounds)
+	api.GET("/prompt-filter/request-conversations/:id/tasks", h.ListPromptRequestTasks)
+	api.GET("/prompt-filter/request-tasks/:id", h.GetPromptRequestTask)
+	api.PUT("/prompt-filter/requests/retention", h.UpdatePromptRequestRetention)
+	api.GET("/prompt-filter/requests/:id", h.GetPromptRequest)
+	api.GET("/prompt-filter/requests/:id/images/:image", h.GetPromptRequestImage)
 	api.GET("/prompt-filter/logs/match", h.MatchPromptFilterLog)
 	api.DELETE("/prompt-filter/logs", h.ClearPromptFilterLogs)
 	api.GET("/prompt-filter/retention", h.GetPromptLogRetention)
@@ -9734,6 +9745,8 @@ type settingsResponse struct {
 	OutputGuardMaxChannelBytes         int64                            `json:"output_guard_max_channel_bytes"`
 	OutputGuardMaxRequestBytes         int64                            `json:"output_guard_max_request_bytes"`
 	OutputGuardConfigGeneration        int64                            `json:"output_guard_config_generation"`
+
+	BackgroundQuietHours []database.BackgroundQuietPeriod `json:"background_quiet_hours"`
 }
 
 type rawJSON = json.RawMessage
@@ -9914,6 +9927,8 @@ type updateSettingsReq struct {
 	OutputGuardMaxChannelBytes          *int64                           `json:"output_guard_max_channel_bytes"`
 	OutputGuardMaxRequestBytes          *int64                           `json:"output_guard_max_request_bytes"`
 	OutputGuardConfigGeneration         rawJSON                          `json:"output_guard_config_generation"`
+
+	BackgroundQuietHours *[]database.BackgroundQuietPeriod `json:"background_quiet_hours"`
 }
 
 func updateSettingsHasFieldsOtherThanCustomPatterns(req updateSettingsReq) bool {
@@ -10609,6 +10624,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		OAuthModelCooldownSeconds:           modelCooldownSettings.OAuthSeconds,
 		OAuthModelCooldownBackoffEnabled:    modelCooldownSettings.OAuthBackoffEnabled,
 		OAuthUnsupportedCooldownSeconds:     modelCooldownSettings.UnsupportedCooldownSeconds(),
+		BackgroundQuietHours:                decodeBackgroundQuietHours(h.store.GetBackgroundQuietHours()),
 		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
@@ -11128,6 +11144,16 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		modelsListReadMaxBytes = database.NormalizeModelsListReadMaxBytes(existingSettings.ModelsListReadMaxBytes)
 		sessionSlotBufferEnabled = existingSettings.SessionSlotBufferEnabled
 		sessionSlotBufferSeconds = database.NormalizeSessionSlotBufferSeconds(existingSettings.SessionSlotBufferSeconds)
+	}
+	quietHours := h.store.GetBackgroundQuietHours()
+	if req.BackgroundQuietHours != nil {
+		raw, _ := json.Marshal(*req.BackgroundQuietHours)
+		var quietErr error
+		quietHours, quietErr = database.NormalizeBackgroundQuietHours(string(raw))
+		if quietErr != nil {
+			writeError(c, http.StatusBadRequest, quietErr.Error())
+			return
+		}
 	}
 	if req.SessionSlotBufferEnabled != nil {
 		sessionSlotBufferEnabled = *req.SessionSlotBufferEnabled
@@ -12223,6 +12249,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		CodexImagesMainModel:                codexImagesMainModel,
 		TestContent:                         h.store.GetTestContent(),
 		TestConcurrency:                     h.store.GetTestConcurrency(),
+		BackgroundQuietHours:                quietHours,
 		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
@@ -12360,6 +12387,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
+		if req.BackgroundQuietHours != nil {
+			writeError(c, http.StatusInternalServerError, "保存巡检暂停时段失败，设置未生效")
+			return
+		}
 		if outputGuardUpdateRequested {
 			// 事务内校验失败是调用方输入问题，映射 400；其余（数据库/IO 等）才是 500。
 			if errors.Is(err, database.ErrInvalidOutputGuardSettings) {
@@ -12410,6 +12441,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "保存系统设置失败，设置未生效："+err.Error())
 		return
 	} else {
+		if req.BackgroundQuietHours != nil {
+			_ = h.store.SetBackgroundQuietHours(quietHours)
+		}
 		// settings 事务提交成功后立即热应用基础运行时上限与全局限流，
 		// 确保后续 UpdateContinuousRetryPolicy 等独立步骤即使失败，
 		// 已提交到数据库的并发/重试/RPM 配置在本实例内存中也保持一致。
@@ -12618,6 +12652,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		OAuthModelCooldownSeconds:           modelCooldownSettings.OAuthSeconds,
 		OAuthModelCooldownBackoffEnabled:    modelCooldownSettings.OAuthBackoffEnabled,
 		OAuthUnsupportedCooldownSeconds:     modelCooldownSettings.UnsupportedCooldownSeconds(),
+		BackgroundQuietHours:                decodeBackgroundQuietHours(h.store.GetBackgroundQuietHours()),
 		BackgroundRefreshIntervalMinutes:    h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:             h.store.GetUsageProbeMaxAgeMinutes(),
 		UsageProbeConcurrency:               h.store.GetUsageProbeConcurrency(),
