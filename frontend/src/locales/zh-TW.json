@@ -648,6 +648,10 @@
     "hrefClickHint": "點擊開啟跳轉位址（未設定時開啟 api-base）；Alt/Option+點擊 設定自訂連結"
   },
   "settings": {
+    "codexUAAccountKind": "單帳號用戶端",
+    "codexUAAccountKindDesc": "輸入帳號 ID 後選擇用戶端。未指定的帳號仍依帳號池權重分配。",
+    "codexUAAccountID": "帳號 ID",
+    "codexUAFollowPool": "跟隨帳號池",
     "quietHours": "巡檢暫停時段（北京時間 UTC+8）",
     "quietHoursDesc": "在每天指定時段暫停自動 Token 更新、用量探針、封禁恢復探測、定時連線測試及官方用量同步。支援多時段、跨午夜及重疊；包含開始，不包含結束。手動操作、請求觸發的驗證修復及正常呼叫不受影響；已開始的任務允許完成。結束可填 24:00。",
     "quietHoursEmpty": "未設定暫停時段，全天按巡檢間隔執行。",

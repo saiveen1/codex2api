@@ -57,8 +57,9 @@ type CodexUserAgentConfig struct {
 	AppName    string `json:"app_name,omitempty"`
 	AppVersion string `json:"app_version,omitempty"`
 	// Mode 为 "pool" 时忽略单画像字段,按 PoolMix 配比为每个账号确定性抽取目录画像。
-	Mode    string         `json:"mode,omitempty"`
-	PoolMix map[string]int `json:"pool_mix,omitempty"`
+	Mode         string                    `json:"mode,omitempty"`
+	PoolMix      map[string]int            `json:"pool_mix,omitempty"`
+	AccountKinds map[int64]CodexClientKind `json:"account_kinds,omitempty"`
 }
 
 var codexOfficialClientUserAgentPrefixes = []string{
@@ -227,6 +228,7 @@ func normalizeCodexUserAgentConfig(cfg CodexUserAgentConfig) CodexUserAgentConfi
 		AppVersion:    strings.TrimSpace(cfg.AppVersion),
 		Mode:          mode,
 		PoolMix:       poolMix,
+		AccountKinds:  cfg.AccountKinds,
 	}
 }
 
@@ -250,6 +252,11 @@ func validateCodexUserAgentConfig(cfg CodexUserAgentConfig) error {
 	}
 	if cfg.Mode != "" && cfg.Mode != CodexUserAgentModePool {
 		return errors.New("codex User-Agent mode must be single or pool")
+	}
+	for id, kind := range cfg.AccountKinds {
+		if _, ok := codexUAKindSpecFor(kind); id <= 0 || !ok {
+			return fmt.Errorf("invalid codex User-Agent account_kinds entry: %d = %q", id, kind)
+		}
 	}
 	for kind, weight := range cfg.PoolMix {
 		if k, ok := normalizeCodexClientKind(kind); !ok || k == "" || k == CodexClientKindCustom {
@@ -364,7 +371,7 @@ func isEmptyCodexUserAgentConfig(cfg CodexUserAgentConfig) bool {
 		cfg.AppName == "" &&
 		cfg.AppVersion == "" &&
 		cfg.Mode == "" &&
-		len(cfg.PoolMix) == 0
+		len(cfg.PoolMix) == 0 && len(cfg.AccountKinds) == 0
 }
 
 func codexUserAgentConfigFromJSON(raw string) CodexUserAgentConfig {
@@ -392,6 +399,9 @@ func validCodexClientVersionString(value string) bool {
 // 画像抽取(同一账号恒得同一画像)。
 func codexUserAgentFromConfigChecked(raw string, accountID int64, versionFloor string) (string, string, bool, error) {
 	cfg := codexUserAgentConfigFromJSON(raw)
+	if cfg.Mode != CodexUserAgentModePool {
+		cfg.AccountKinds = nil // Dormant bindings do not activate a single persona.
+	}
 	if isEmptyCodexUserAgentConfig(cfg) {
 		return "", "", false, nil
 	}

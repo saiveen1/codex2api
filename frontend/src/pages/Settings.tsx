@@ -170,6 +170,7 @@ type CodexUserAgentConfig = {
   app_version?: string
   mode?: string
   pool_mix?: Record<string, number>
+  account_kinds?: Record<string, CodexUAKind>
 }
 type CodexUAKind = 'codex-tui' | 'codex-desktop' | 'codex-vscode' | 'codex-exec' | 'custom'
 const CODEX_UA_KINDS: CodexUAKind[] = ['codex-tui', 'codex-desktop', 'codex-vscode', 'codex-exec', 'custom']
@@ -237,6 +238,7 @@ const DEFAULT_CODEX_UA_CONFIG: Required<CodexUserAgentConfig> = {
   app_version: '',
   mode: '',
   pool_mix: {},
+  account_kinds: {},
 }
 
 type SettingsTabKey = 'codex' | 'claude' | 'antigravity' | 'grok' | 'kiro' | 'appearance' | 'general'
@@ -466,6 +468,7 @@ const parseCodexUserAgentConfig = (value?: string): CodexUserAgentConfig => {
       app_version: typeof parsed.app_version === 'string' ? parsed.app_version : '',
       mode: typeof parsed.mode === 'string' ? parsed.mode : '',
       pool_mix: poolMix,
+      account_kinds: parsed.account_kinds ?? {},
     }
   } catch {
     return {}
@@ -483,6 +486,7 @@ const serializeCodexUserAgentConfig = (config: CodexUserAgentConfig) => {
     if (Number.isFinite(weight) && weight >= 0) poolMix[kind] = Math.floor(weight)
   }
   if (Object.keys(poolMix).length > 0) normalized.pool_mix = poolMix
+  if (config.account_kinds && Object.keys(config.account_kinds).length) normalized.account_kinds = config.account_kinds
   return JSON.stringify(normalized)
 }
 
@@ -3941,6 +3945,7 @@ export default function Settings() {
   const [codexUACatalog, setCodexUACatalog] = useState<CodexUserAgentCatalog | null>(null)
   const [codexUAPreview, setCodexUAPreview] = useState<CodexUserAgentPreview | null>(null)
   const [codexUAPreviewError, setCodexUAPreviewError] = useState('')
+  const [codexUAAccountID, setCodexUAAccountID] = useState('')
   useEffect(() => {
     let cancelled = false
     api.getCodexUserAgentCatalog()
@@ -3989,6 +3994,15 @@ export default function Settings() {
       default: return t('settings.codexUAKindTui')
     }
   }, [t])
+  const accountKinds = codexUserAgentConfig.account_kinds ?? {}
+  const validUAAccountID = /^[1-9]\d{0,18}$/.test(codexUAAccountID) && (codexUAAccountID.length < 19 || codexUAAccountID <= '9223372036854775807')
+  const setAccountKind = (kind: string) => {
+    if (!validUAAccountID) return
+    const next = { ...parseCodexUserAgentConfig(settingsFormRef.current.codex_user_agent_config).account_kinds }
+    if (kind) next[codexUAAccountID] = kind as CodexUAKind
+    else delete next[codexUAAccountID]
+    patchAndSaveCodexUserAgentConfig({ account_kinds: next })
+  }
   const codexUAKindOptions = useMemo(() => CODEX_UA_KINDS.map((kind) => ({ label: codexUAKindLabel(kind), value: kind })), [codexUAKindLabel])
   const codexUAModeOptions = useMemo(() => [
     { label: t('settings.codexUAModeSingle'), value: 'single' as const },
@@ -5304,6 +5318,23 @@ export default function Settings() {
                       ))}
                     </div>
                   ) : null}
+                  {codexUAMode === 'pool' && !codexUARawActive && (
+                    <SettingField label={t('settings.codexUAAccountKind')} description={t('settings.codexUAAccountKindDesc')}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input className="w-40 tabular-nums" inputMode="numeric" placeholder={t('settings.codexUAAccountID')} aria-label={t('settings.codexUAAccountID')}
+                          value={codexUAAccountID} onChange={(e) => setCodexUAAccountID(e.target.value.trim())} aria-invalid={!!codexUAAccountID && !validUAAccountID} />
+                        <select className="h-9 rounded-lg border bg-background px-2 text-sm disabled:opacity-50" aria-label={t('settings.codexUAAccountKind')}
+                          disabled={!validUAAccountID} value={accountKinds[codexUAAccountID] ?? ''} onChange={(e) => setAccountKind(e.target.value)}>
+                          <option value="">{t('settings.codexUAFollowPool')}</option>
+                          {CODEX_UA_POOL_KINDS.map((kind) => <option key={kind} value={kind}>{codexUAKindLabel(kind)}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(accountKinds).map(([id, kind]) => <button type="button" key={id} onClick={() => setCodexUAAccountID(id)}
+                          className="rounded border px-2 py-1 text-xs hover:bg-muted">#{id} · {codexUAKindLabel(kind)}</button>)}
+                      </div>
+                    </SettingField>
+                  )}
                   <div className="min-w-0 rounded-xl border border-primary/15 bg-primary/[0.03] px-3.5 py-3">
                     <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
                       <Eye className="size-3.5 text-primary" aria-hidden="true" />

@@ -264,6 +264,30 @@ func TestCodexUserAgentConfigValidatesNewFields(t *testing.T) {
 	}
 }
 
+func TestCodexPoolAccountKind(t *testing.T) {
+	const pinned = `{"mode":"pool","pool_mix":{"codex-tui":1},"account_kinds":{"11":"codex-exec"}}`
+	const unpinned = `{"mode":"pool","pool_mix":{"codex-tui":1}}`
+	for _, tc := range []struct {
+		raw  string
+		id   int64
+		want string
+	}{{pinned, 11, "codex_exec"}, {pinned, 12, "codex-tui"}, {unpinned, 11, "codex-tui"}} {
+		preview, err := PreviewCodexUserAgentConfig(tc.raw, "", []int64{tc.id})
+		if err != nil || len(preview.Samples) != 1 {
+			t.Fatalf("preview: %+v, %v", preview, err)
+		}
+		ua, _, ok, err := codexUserAgentFromConfigChecked(preview.Normalized, tc.id, "")
+		if err != nil || !ok || preview.Samples[0].UserAgent != ua || !strings.HasPrefix(ua, tc.want+"/") {
+			t.Fatalf("id %d: preview %+v, outbound %q, err %v", tc.id, preview.Samples[0], ua, err)
+		}
+	}
+	for _, invalid := range []string{`{"account_kinds":{"0":"codex-tui"}}`, `{"account_kinds":{"1":"custom"}}`} {
+		if _, err := NormalizeCodexUserAgentConfigJSON(invalid); err == nil {
+			t.Errorf("accepted %s", invalid)
+		}
+	}
+}
+
 func TestPreviewCodexUserAgentConfig(t *testing.T) {
 	preview, err := PreviewCodexUserAgentConfig(`{"client_kind":"codex-desktop","terminal":"WindowsTerminal"}`, "", nil)
 	if err != nil {
