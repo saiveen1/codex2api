@@ -129,6 +129,7 @@ func persistDiagnosticOnlyUsage(c *gin.Context, e diagnosticEvent) {
 		}
 	}
 	populateAPIKeyMetaFromContext(c, input)
+	populateClientIPFromRequest(c, input)
 	if err := db.InsertUsageLog(context.Background(), input); err != nil {
 		log.Print("failed to enqueue local request diagnostic")
 	}

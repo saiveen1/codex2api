@@ -188,32 +188,53 @@ func TestDiagnosticOldAttemptSnapshotKeepsOwnSubmittedContext(t *testing.T) {
 
 func TestDiagnosticLocalRejectPersistedOnceWithoutBilling(t *testing.T) {
 	installDiagnosticTestSink(t)
-	db, err := database.New("sqlite", filepath.Join(t.TempDir(), "diag.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	r := gin.New()
-	r.Use(RequestDiagnosticMiddleware(nil, db), RequestDiagnosticMiddleware(nil, db))
-	r.POST("/v1/responses", func(c *gin.Context) {
-		c.JSON(413, gin.H{"error": gin.H{"code": "invalid_request_error", "message": "PRIVATE_SENTINEL"}})
-	})
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", nil))
-	db.FlushUsageLogs()
-	rows, err := db.ListRecentUsageLogs(context.Background(), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].StatusCode != 413 || rows[0].TotalTokens != 0 || rows[0].AccountBilled != 0 || rows[0].UserBilled != 0 {
-		t.Fatalf("unexpected local rows: %+v", rows)
-	}
-	var e diagnosticEvent
-	if err = json.Unmarshal([]byte(rows[0].DiagnosticContext), &e); err != nil {
-		t.Fatal(err)
-	}
-	if e.Attempt.Index != 0 || e.Error.Source != "downstream_response" || e.RequestID != w.Header().Get("X-Codex2API-Request-ID") {
-		t.Fatal("local rejection lost origin")
+	for _, tc := range []struct {
+		name, path, remoteAddr, forwardedFor, wantIP string
+		status                                       int
+	}{
+		{"body rejected", "/v1/responses", "203.0.113.10:1234", "", "203.0.113.10", http.StatusRequestEntityTooLarge},
+		{"unmatched route", "/v1/unknown", "192.0.2.1:1234", "203.0.113.20", "203.0.113.20", http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := database.New("sqlite", filepath.Join(t.TempDir(), "diag.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			r := gin.New()
+			if err := r.SetTrustedProxies([]string{"192.0.2.1"}); err != nil {
+				t.Fatal(err)
+			}
+			r.Use(RequestDiagnosticMiddleware(nil, db), RequestDiagnosticMiddleware(nil, db))
+			r.POST("/v1/responses", func(c *gin.Context) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"code": "invalid_request_error", "message": "PRIVATE_SENTINEL"}})
+			})
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			req.RemoteAddr = tc.remoteAddr
+			if tc.forwardedFor != "" {
+				req.Header.Set("X-Forwarded-For", tc.forwardedFor)
+			}
+			r.ServeHTTP(w, req)
+			db.FlushUsageLogs()
+			rows, err := db.ListRecentUsageLogs(context.Background(), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].StatusCode != tc.status || rows[0].TotalTokens != 0 || rows[0].AccountBilled != 0 || rows[0].UserBilled != 0 {
+				t.Fatalf("unexpected local rows: %+v", rows)
+			}
+			if got := rows[0].ClientIP; got != tc.wantIP {
+				t.Fatalf("client IP = %q, want %q", got, tc.wantIP)
+			}
+			var e diagnosticEvent
+			if err = json.Unmarshal([]byte(rows[0].DiagnosticContext), &e); err != nil {
+				t.Fatal(err)
+			}
+			if e.Attempt.Index != 0 || e.Error.Source != "downstream_response" || e.RequestID != w.Header().Get("X-Codex2API-Request-ID") {
+				t.Fatal("local rejection lost origin")
+			}
+		})
 	}
 }
 
