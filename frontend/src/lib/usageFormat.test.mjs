@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatUsageClientIP,
   getAccountStatusBadgeStatus,
   isOfficialCostHiddenAccount,
   isOfficialCostTooNew,
@@ -13,6 +14,15 @@ import {
   supportsOfficialUsage,
   isWorkspaceCreditHardStop,
 } from "./usageFormat.ts";
+
+test("usage IP shows local origin only for intelligence checks without a client IP", () => {
+  const check = { internal_reason: "intelligence_check" };
+  const local = "本机调用";
+  assert.equal(formatUsageClientIP({ ...check, client_ip: "" }, local), local);
+  assert.equal(formatUsageClientIP({ ...check, client_ip: "203.0.113.42" }, local), "203.0.113.42");
+  assert.equal(formatUsageClientIP({ client_ip: "" }, local), "-");
+  assert.equal(formatUsageClientIP({ internal_reason: "dispatch_terminal_diagnostic" }, local), "-");
+});
 
 test("usage reload accepts either optional usage window as sampled", () => {
   assert.equal(needsUsageReload({ status: "active" }), true);

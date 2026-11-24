@@ -1829,6 +1829,7 @@
     "cyberRiskSubjectEvents": "{{count}} 筆事件"
   },
   "usage": {
+    "localCall": "本機呼叫",
     "tableTokensPerSecHint": "輸出吞吐 = 本輪輸出 token ÷ 上游本輪完整耗時（秒），包含首內容等待。失敗、無輸出、資料無效或未採集時顯示 —，不使用請求總耗時替代。",
     "roundTimingNotRecorded": "未採集上游本輪耗時",
     "roundThroughputUnavailable": "上游本輪吞吐無法使用",

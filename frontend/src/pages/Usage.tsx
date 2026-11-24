@@ -26,7 +26,7 @@ import type { APIKeyRow, OpsErrorSummary, SystemSettings, UsageAPIKeyStat, Usage
 import { DiagnosticDetailsButton, diagnosticContextSummary } from '../components/DiagnosticDetailsDialog'
 import { usageDiagnosticStatus } from '../lib/diagnosticContext'
 import { cn, formatCompactEmail } from '../lib/utils'
-import { formatUsageNumber as formatTokens } from '../lib/usageFormat'
+import { formatUsageClientIP, formatUsageNumber as formatTokens } from '../lib/usageFormat'
 import { buildModelShareData, formatSharePercent, type ModelShareMetric } from '../lib/usageInsights'
 import './usage-insights.css'
 import { formatBeijingTime } from '../utils/time'
@@ -161,6 +161,18 @@ function InternalRequestBadge({ log }: { log: UsageLog }) {
       <Icon className="size-3" />
       {label}
     </Badge>
+  )
+}
+
+function UsageClientIP({ log, mobile = false }: { log: UsageLog; mobile?: boolean }) {
+  const { t } = useTranslation()
+  const label = formatUsageClientIP(log, t('usage.localCall'))
+  if (!mobile) return <span title={label}>{label}</span>
+  return (
+    <div className="truncate font-mono" title={label}>
+      <span className="font-sans font-semibold text-foreground/80">{t('usage.tableClientIP')}: </span>
+      {label}
+    </div>
   )
 }
 
@@ -2481,12 +2493,7 @@ export default function Usage() {
                               {formatUsageAPIKeyLabel(log.api_key_name, log.api_key_masked) || t('usage.unknownApiKey')}
                             </div>
                           )}
-                          {visibleColumns.clientIp && (
-                            <div className="truncate font-mono" title={log.client_ip || '-'}>
-                              <span className="font-sans font-semibold text-foreground/80">{t('usage.tableClientIP')}: </span>
-                              {log.client_ip || '-'}
-                            </div>
-                          )}
+                          {visibleColumns.clientIp && <UsageClientIP log={log} mobile />}
                           {visibleColumns.endpoint && (
                             <div className="truncate font-mono">
                               <span className="font-sans font-semibold text-foreground/80">{t('usage.tableEndpoint')}: </span>
@@ -2698,9 +2705,7 @@ export default function Usage() {
                           </span>
                         </TableCell>}
                         {visibleColumns.clientIp && <TableCell className={`${usageTableMonoClass} text-muted-foreground whitespace-nowrap`}>
-                          <span title={log.client_ip || '-'}>
-                            {log.client_ip || '-'}
-                          </span>
+                          <UsageClientIP log={log} />
                         </TableCell>}
                         {visibleColumns.userAgent && <TableCell>
                           <UserAgentCell log={log} />

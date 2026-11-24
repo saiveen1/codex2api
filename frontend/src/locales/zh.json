@@ -2767,6 +2767,7 @@
     "tableAccount": "来源账号",
     "tableApiKey": "API 密钥",
     "tableClientIP": "IP",
+    "localCall": "本机调用",
     "tableUserAgent": "User-Agent",
     "clientUserAgent": "客户端 UA",
     "upstreamUserAgent": "上游 UA",

@@ -16,6 +16,10 @@ export function formatLongUsageWindowLabel(account: {
   return '7d'
 }
 
+export function formatUsageClientIP(log: { client_ip?: string; internal_reason?: string }, localCallLabel: string): string {
+  return log.client_ip?.trim() || (log.internal_reason?.trim() === 'intelligence_check' ? localCallLabel : '-')
+}
+
 export function formatUsageNumber(
   value?: number | null,
   showFullNumbers = false,
