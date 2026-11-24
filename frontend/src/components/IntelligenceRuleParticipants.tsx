@@ -7,7 +7,7 @@ import { Button } from "./ui/button";
 
 const states: Record<IntelligenceRuleParticipant["state"], string> = {
   due: "当前可排队", scheduled: "尚未到期", queued: "已排队", running: "检测中",
-  quota_wait: "等待额度恢复", not_dispatchable: "不可调度，暂缓", config_error: "目标分组不可用",
+  skipped: "无匹配模型，已跳过", quota_wait: "等待额度恢复", not_dispatchable: "不可调度，暂缓", config_error: "目标分组不可用",
 };
 
 export default function IntelligenceRuleParticipants({ ruleID, groups, dirty }: {

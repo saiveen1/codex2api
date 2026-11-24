@@ -85,7 +85,7 @@ export default function IntelligenceRunDialog({
                 ["检测时规则", intelligencePolicyName(run)],
                 ["检测类型", run.record_only ? "试跑（只记录）" : "常规检测"],
                 ["结果", intelligenceLabels[run.status]],
-                ["请求模型", run.model],
+                ["请求模型", run.model || "—"],
                 ["响应模型", run.response_model || "—"],
                 ["推理强度", run.reasoning_effort || "默认"],
                 [
@@ -139,8 +139,8 @@ export default function IntelligenceRunDialog({
             )}
             {run.error && (
               <p
-                role="alert"
-                className="whitespace-pre-wrap break-words text-destructive"
+                role={run.status === "skipped" ? undefined : "alert"}
+                className={`whitespace-pre-wrap break-words ${run.status === "skipped" ? "text-muted-foreground" : "text-destructive"}`}
               >
                 {run.error}
               </p>

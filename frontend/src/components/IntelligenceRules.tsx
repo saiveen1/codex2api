@@ -94,7 +94,7 @@ export default function IntelligenceRules({ settings, saved, groups, onChange, d
               <span className="text-xs text-muted-foreground">跳过异常或不可调度账号；不影响手动检测和已处置账号的恢复复检。</span>
             </Field>
             <p className="col-span-full text-xs text-muted-foreground">以下参数留空时继承全局配置。</p>
-            <Field label="检测模型"><Input value={rule.model ?? ""} placeholder="继承来源的检测模型" onChange={e => patch({ model: e.target.value })} /></Field>
+            <Field label="检测模型"><textarea rows={2} className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" value={rule.model ?? ""} placeholder="留空继承来源模型" onChange={e => patch({ model: e.target.value })} /><span className="text-xs text-muted-foreground">多个模型按优先顺序填写，以英文逗号、中文逗号或换行分隔；留空继承来源配置。</span></Field>
             {rule.channel === "codex" && <Field label="推理强度"><Select aria-label="推理强度" value={rule.reasoning_effort ?? ""} options={[inherit, ...choices({ none: "none", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max", ultra: "ultra" })]} onValueChange={v => patch({ reasoning_effort: v || undefined })} /></Field>}
             <Field label="判断方式"><Select aria-label="判断方式" value={rule.judge_mode ?? ""} options={[inherit, ...choices({ answer: "仅答案", latency: "仅耗时", both: "答案和耗时均满足" })]} onValueChange={v => patch({ judge_mode: (v || undefined) as IntelligenceRule["judge_mode"] })} /></Field>
             {intelligenceRuleNumbers.map(([key, label, max]) => <Field key={key} label={label}>

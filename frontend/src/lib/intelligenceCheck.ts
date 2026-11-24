@@ -1,5 +1,5 @@
 export type IntelligenceStatus =
-  "queued" | "running" | "normal" | "degraded" | "error" | "interrupted";
+  "queued" | "running" | "normal" | "degraded" | "error" | "interrupted" | "skipped";
 export type IntelligenceAction = "none" | "pause" | "switch_group" | "pause_and_switch_group";
 export const intelligenceActionOptions: Record<IntelligenceAction, string> = {
   none: "不自动处置", pause: "禁用业务调度", switch_group: "转移分组", pause_and_switch_group: "禁用业务调度并转移分组",
@@ -78,9 +78,13 @@ export function intelligenceRuleError(rule: IntelligenceRule, questions: Intelli
   return "";
 }
 
+export function normalizeIntelligenceModels(value: string) {
+  return value.split(/[,，\r\n]+/).map(model => model.trim()).filter(Boolean).join(",");
+}
+
 export function normalizeIntelligenceRule(rule: IntelligenceRule) {
   return { ...rule, name: rule.name.trim(), plan: rule.plan?.trim().toLowerCase() || undefined,
-    model: rule.model?.trim() || undefined };
+    model: rule.model ? normalizeIntelligenceModels(rule.model) || undefined : undefined };
 }
 
 export interface IntelligenceSettings {
@@ -199,7 +203,7 @@ export interface IntelligenceRuleParticipant {
   original_group_ids?: number[];
   recovery: boolean;
   next_due_at?: string;
-  state: "due" | "scheduled" | "queued" | "running" | "quota_wait" | "not_dispatchable" | "config_error";
+  state: "due" | "scheduled" | "queued" | "running" | "quota_wait" | "not_dispatchable" | "config_error" | "skipped";
   available_after?: string;
 }
 export interface IntelligencePage<T> {
@@ -215,6 +219,7 @@ export const intelligenceLabels: Record<string, string> = {
   degraded: "未通过",
   error: "上游错误",
   interrupted: "已中断",
+  skipped: "已跳过（无匹配模型）",
   resume: "恢复调度",
   restore_groups: "还原分组",
   resume_and_restore_groups: "恢复调度并还原分组",
@@ -278,7 +283,7 @@ export function intelligenceScheduleLabel(bar: IntelligenceBar): string {
   const labels: Record<string, string> = {
     normal: '正常检测', backoff: '退避中', recovering: '恢复确认',
     retrying: '异常重试', credential_blocked: '等待凭证修复',
-    quota_wait: '等待额度恢复',
+    quota_wait: '等待额度恢复', model_skipped: '无匹配模型，已跳过',
   };
   const label = labels[bar.probe_phase || ''];
   if (!label) return '';

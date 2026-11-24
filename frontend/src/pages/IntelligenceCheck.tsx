@@ -32,6 +32,7 @@ import {
   intelligenceActionMovesGroups,
   intelligenceActionOptions,
   intelligenceRuleError,
+  normalizeIntelligenceModels,
   normalizeIntelligenceRule,
   intelligenceTargetConflict,
   type IntelligenceTargetConflict,
@@ -128,7 +129,13 @@ export default function IntelligenceCheck() {
         const error = intelligenceRuleError(rule, settings.questions, groups);
         if (error) { setTab("policies"); throw new Error(`${rule.name || "未命名规则"}：${error}`); }
       }
-      const next = await api.saveIntelligenceSettings({ ...settings, rules });
+      const next = await api.saveIntelligenceSettings({ ...settings, rules,
+        gpt_model: normalizeIntelligenceModels(settings.gpt_model),
+        claude_model: normalizeIntelligenceModels(settings.claude_model),
+        grok_model: settings.grok_model == null ? undefined : normalizeIntelligenceModels(settings.grok_model),
+        antigravity_model: settings.antigravity_model == null ? undefined : normalizeIntelligenceModels(settings.antigravity_model),
+        kiro_model: settings.kiro_model == null ? undefined : normalizeIntelligenceModels(settings.kiro_model),
+      });
       setSettings(next);
       setSaved(next);
       refreshIntelligenceBars();
@@ -284,23 +291,10 @@ export default function IntelligenceCheck() {
                 </div>
                 <p className="text-xs text-muted-foreground">Antigravity 来源的 Claude 模型仍归 Antigravity。Grok 和 Antigravity 为新增支持，默认关闭，开启前请核对检测模型。</p>
               </div>
-              {field("Grok 检测模型", <Input value={settings.grok_model ?? "grok-4.5"} onChange={(e) => change("grok_model", e.target.value)} />)}
-              {field("Antigravity 检测模型", <Input value={settings.antigravity_model ?? "gemini-3.8-flash-medium"} onChange={(e) => change("antigravity_model", e.target.value)} />)}
-              {field("Kiro 检测模型", <Input value={settings.kiro_model ?? "claude-sonnet-4.6"} onChange={(e) => change("kiro_model", e.target.value)} />)}
-              {field(
-                "GPT / Codex 模型",
-                <Input
-                  value={settings.gpt_model}
-                  onChange={(e) => change("gpt_model", e.target.value)}
-                />,
-              )}
-              {field(
-                "Claude 模型",
-                <Input
-                  value={settings.claude_model}
-                  onChange={(e) => change("claude_model", e.target.value)}
-                />,
-              )}
+              <p className="col-span-full text-xs text-muted-foreground">每个来源可按优先顺序填写多个模型，用英文逗号、中文逗号或换行分隔；无匹配模型时跳过检测。单个模型仍可直接填写。</p>
+              {([ ["grok_model", "Grok 检测模型", "grok-4.5"], ["antigravity_model", "Antigravity 检测模型", "gemini-3.8-flash-medium"], ["kiro_model", "Kiro 检测模型", "claude-sonnet-4.6"], ["gpt_model", "GPT / Codex 模型", ""], ["claude_model", "Claude 模型", ""] ] as const).map(([key, label, fallback]) => (
+                <div key={key}>{field(label, <textarea rows={2} className={fieldClass} value={settings[key] ?? fallback} onChange={e => change(key, e.target.value)} />)}</div>
+              ))}
               {field(
                 "GPT 推理强度",
                 <Select

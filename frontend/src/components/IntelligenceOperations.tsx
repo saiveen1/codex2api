@@ -19,7 +19,7 @@ const emptyHistoryFilters = { ...emptyFilters, status: "", source: "", from: "",
 const selectionLimit = 200;
 const pageSizeLimit = 100;
 const options = (values: Record<string, string>) => Object.entries(values).map(([value, label]) => ({ value, label }));
-const statuses = ["queued", "running", "normal", "degraded", "error", "interrupted"];
+const statuses = ["queued", "running", "normal", "degraded", "error", "interrupted", "skipped"];
 const { getIntelligenceRunSummaries, getIntelligenceAccounts } = api;
 
 function usePage<T>(load: (page: number, filters: Filters, signal: AbortSignal) => Promise<IntelligencePage<T>>, page: number, filters: Filters | null) {

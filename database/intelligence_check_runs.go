@@ -183,8 +183,9 @@ func (db *DB) SubmitIntelligenceChecks(ctx context.Context, ids []int64, now tim
 
 // IntelligenceCheckPreflight checks live state outside the queue transaction.
 type IntelligenceCheckPreflight struct {
-	QuotaHold   func(accountID int64, model string) (until time.Time, held bool)
-	IsAvailable func(accountID int64) bool
+	MatchedModels func(ctx context.Context, accountID int64, configured string) []string
+	QuotaHold     func(accountID int64, model string) (until time.Time, held bool)
+	IsAvailable   func(accountID int64) bool
 }
 
 type intelligenceQueryer interface {
@@ -265,7 +266,8 @@ func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, l
 	}
 	held := map[int64]holdResult{}
 	available := map[int64]bool{}
-	if preflight.QuotaHold != nil || preflight.IsAvailable != nil {
+	blocked := map[int64]ic.ModelSkip{}
+	if preflight.MatchedModels != nil || preflight.QuotaHold != nil || preflight.IsAvailable != nil {
 		s, err := db.GetIntelligenceCheckSettings(ctx)
 		if err != nil {
 			return 0, err
@@ -280,9 +282,22 @@ func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, l
 		for _, a := range due {
 			policy, rule := a.resolve(s)
 			model, _ := policy.ModelForChannel(a.Channel)
-			if preflight.QuotaHold != nil {
+			configured := model
+			if preflight.MatchedModels != nil {
+				models := preflight.MatchedModels(ctx, a.AccountID, configured)
+				key := ic.ModelSkip{Revision: policy.Revision, Generation: a.CredentialGeneration, RuleID: rule.ID, Channel: a.Channel, Matches: strings.Join(models, ",")}
+				if a.ModelSkip != nil && *a.ModelSkip == key {
+					blocked[a.AccountID] = key
+					continue
+				}
+				model = ""
+				if len(models) != 0 {
+					model = models[0]
+				}
+			}
+			if model != "" && preflight.QuotaHold != nil {
 				if until, ok := preflight.QuotaHold(a.AccountID, model); ok {
-					held[a.AccountID] = holdResult{until, model}
+					held[a.AccountID] = holdResult{until, configured}
 					continue
 				}
 			}
@@ -315,6 +330,15 @@ func (db *DB) EnqueueDueIntelligenceChecks(ctx context.Context, now time.Time, l
 				// A removed target must not monopolize the bounded due window.
 				if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET next_due_ms=$1 WHERE account_id=$2`, now.Add(time.Duration(policy.IntervalSeconds)*time.Second).UnixMilli(), a.AccountID); err != nil {
 					return err
+				}
+				continue
+			}
+			if key, ok := blocked[a.AccountID]; ok {
+				if a.ModelSkip != nil && *a.ModelSkip == key && policy.Revision == key.Revision && rule.ID == key.RuleID && a.CredentialGeneration == key.Generation && a.Channel == key.Channel {
+					// Only recheck local metadata next interval; never enqueue the same skip.
+					if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET next_due_ms=$1 WHERE account_id=$2`, now.Add(time.Duration(policy.IntervalSeconds)*time.Second).UnixMilli(), a.AccountID); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -533,6 +557,9 @@ func (db *DB) FinishIntelligenceCheck(ctx context.Context, id int64, owner strin
 			return nil
 		}
 		r.Observation = o
+		if o.RequestedModel != "" || o.Skipped {
+			r.Model = o.RequestedModel
+		}
 		grade := ic.Grade(r.Question, r.JudgeMode, o)
 		r.AnswerPassed = grade.AnswerPassed
 		r.LatencyPassed = grade.LatencyPassed
@@ -543,9 +570,21 @@ func (db *DB) FinishIntelligenceCheck(ctx context.Context, id int64, owner strin
 				return err
 			}
 			policy, rule := a.resolve(s)
-			if err == nil && intelligenceRunMayUpdate(r, a, policy, rule) {
+			mayUpdate := err == nil && intelligenceRunMayUpdate(r, a, policy, rule)
+			if mayUpdate && grade.Status == "skipped" {
+				// Preserve streaks, question position, and any owned recovery action.
+				a.ModelSkip = &ic.ModelSkip{Revision: policy.Revision, Generation: a.CredentialGeneration, RuleID: rule.ID, Channel: a.Channel, Matches: o.MatchedModels}
+				raw, err := json.Marshal(a.State)
+				if err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE intelligence_check_accounts SET state_json=$1,next_due_ms=$2,status='skipped' WHERE account_id=$3`, string(raw), now.Add(time.Duration(policy.IntervalSeconds)*time.Second).UnixMilli(), a.AccountID); err != nil {
+					return err
+				}
+			} else if mayUpdate {
 				s := policy
 				prior := a.State
+				prior.ModelSkip = nil
 				if prior.PolicyRuleID != r.RuleID {
 					prior.PolicyRuleID = r.RuleID
 					prior.DegradeStreak, prior.RecoverStreak, prior.ErrorRetrySeconds = 0, 0, 0
@@ -876,6 +915,9 @@ func (db *DB) IntelligenceCheckBars(ctx context.Context, ids []int64) (map[int64
 			if !automaticAllowed || !b.Enabled {
 				b.ProbePhase = ""
 			}
+		}
+		if s.ModelSkip != nil && automaticAllowed && b.Enabled {
+			b.ProbePhase, b.NextDueAt = "model_skipped", nil
 		}
 		if s.BlockedCredentialGeneration != nil && *s.BlockedCredentialGeneration == generation {
 			b.ProbePhase = "credential_blocked"

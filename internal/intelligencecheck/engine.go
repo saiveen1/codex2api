@@ -139,12 +139,18 @@ func ValidateSettings(s Settings) error {
 			return fmt.Errorf("unknown intelligence check channel: %s", channel)
 		}
 	}
-	for _, model := range []string{s.GrokModel, s.AntigravityModel, s.KiroModel} {
-		if model != "" && strings.TrimSpace(model) == "" {
-			return fmt.Errorf("model must not contain only whitespace")
+	for _, model := range []string{s.GPTModel, s.ClaudeModel, s.GrokModel, s.AntigravityModel, s.KiroModel} {
+		if model == "" {
+			continue
 		}
-		if len(model) > 255 {
-			return fmt.Errorf("model too long")
+		models := ModelCandidates(model)
+		if len(models) == 0 || len(models) > 32 || len(model) > 8192 {
+			return fmt.Errorf("请填写 1 至 32 个候选模型")
+		}
+		for _, id := range models {
+			if len(id) > 255 {
+				return fmt.Errorf("model too long")
+			}
 		}
 	}
 	s = AdaptiveDefaults(s)
@@ -153,9 +159,6 @@ func ValidateSettings(s Settings) error {
 	}
 	if strings.TrimSpace(s.GPTModel) == "" || strings.TrimSpace(s.ClaudeModel) == "" {
 		return fmt.Errorf("both channel models are required")
-	}
-	if len(s.GPTModel) > 255 || len(s.ClaudeModel) > 255 {
-		return fmt.Errorf("model too long")
 	}
 	switch s.ReasoningEffort {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
@@ -214,7 +217,25 @@ func ValidateSettings(s Settings) error {
 	return validateRules(s)
 }
 
+// ModelCandidates preserves configured priority, including legacy single values.
+func ModelCandidates(raw string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, id := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '，' || r == '\n' || r == '\r' }) {
+		id = strings.TrimSpace(id)
+		key := strings.ToLower(id)
+		if id != "" && !seen[key] {
+			out = append(out, id)
+			seen[key] = true
+		}
+	}
+	return out
+}
+
 type Observation struct {
+	Skipped            bool              `json:"skipped,omitempty"`
+	RequestedModel     string            `json:"-"` // copied into the run snapshot at completion
+	MatchedModels      string            `json:"-"` // resolved allowlist intersection for skip suppression
 	CredentialRejected bool              `json:"credential_rejected,omitempty"`
 	Output             string            `json:"output"`
 	DurationMS         int64             `json:"duration_ms"`
@@ -251,6 +272,10 @@ func Grade(q Question, mode string, o Observation) Result {
 	r := Result{Status: "error", Error: o.Error}
 	if o.Interrupted {
 		r.Status = "interrupted"
+		return r
+	}
+	if o.Skipped {
+		r.Status = "skipped"
 		return r
 	}
 	if o.Error != "" || !o.Complete {
@@ -296,7 +321,17 @@ func Grade(q Question, mode string, o Observation) Result {
 	return r
 }
 
+// ModelSkip fences an automatic skip to the policy and account capabilities that caused it.
+type ModelSkip struct {
+	Revision   int64  `json:"revision"`
+	Generation int64  `json:"generation"`
+	RuleID     string `json:"rule_id"`
+	Channel    string `json:"channel"`
+	Matches    string `json:"matches"`
+}
+
 type State struct {
+	ModelSkip                   *ModelSkip       `json:"model_skip,omitempty"`
 	PauseBackoffSeconds         int              `json:"pause_backoff_seconds,omitempty"`
 	ErrorRetrySeconds           int              `json:"error_retry_seconds,omitempty"`
 	PolicyRuleID                string           `json:"policy_rule_id,omitempty"`

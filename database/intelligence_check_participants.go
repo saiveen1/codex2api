@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	ic "github.com/codex2api/internal/intelligencecheck"
@@ -89,6 +90,16 @@ func (db *DB) ListIntelligenceRuleParticipants(ctx context.Context, id string, o
 		}
 		if item.State == "" {
 			model, _ := policy.ModelForChannel(a.Channel)
+			if preflight.MatchedModels != nil {
+				models := preflight.MatchedModels(ctx, a.AccountID, model)
+				key := ic.ModelSkip{Revision: policy.Revision, Generation: a.CredentialGeneration, RuleID: matched.ID, Channel: a.Channel, Matches: strings.Join(models, ",")}
+				if len(models) == 0 || a.ModelSkip != nil && *a.ModelSkip == key {
+					item.State = "skipped"
+					items = append(items, item)
+					continue
+				}
+				model = models[0]
+			}
 			item.State, item.AvailableAfter = intelligenceParticipantState(now, a, matched, model, !item.Recovery && configErr != nil, preflight)
 		}
 		items = append(items, item)

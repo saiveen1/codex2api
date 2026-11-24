@@ -11,6 +11,7 @@ function verdict(run: IntelligenceRun) {
   if (run.status === 'queued' || run.status === 'running') return intelligenceLabels[run.status]
   if (run.status === 'error') return '请求未成功，未参与答案与耗时判定'
   if (run.status === 'interrupted') return '检测已中断，未参与判定'
+  if (run.status === 'skipped') return '无匹配模型，未参与判定'
   const checks = []
   if (run.judge_mode !== 'latency') checks.push(run.answer_passed ? '答案匹配' : '答案不匹配')
   if (run.judge_mode !== 'answer') checks.push(run.latency_passed ? '耗时达标' : '耗时超出阈值')
@@ -102,7 +103,7 @@ export default function AccountIntelligenceHistoryDialog({ accountID, accountNam
           <p className="break-words">判定原因：{verdict(run)}</p>
           <p className="break-words">预期答案：<code>{run.question.expected_answer}</code></p>
           <div><p className="mb-1 text-xs text-muted-foreground">实际输出</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 font-sans text-sm [overflow-wrap:anywhere]">{run.output || '暂无输出'}</pre></div>
-          {run.error && <div><p className="mb-1 text-xs text-muted-foreground">错误</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 font-sans text-sm text-red-800 dark:text-red-400 [overflow-wrap:anywhere]">{run.error}</pre></div>}
+          {run.error && <div><p className="mb-1 text-xs text-muted-foreground">{run.status === 'skipped' ? '跳过原因' : '错误'}</p><pre className={`max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 font-sans text-sm [overflow-wrap:anywhere] ${run.status === 'skipped' ? 'text-muted-foreground' : 'text-red-800 dark:text-red-400'}`}>{run.error}</pre></div>}
           {run.action_message && <p className="break-words text-xs text-muted-foreground">{run.action_message}</p>}
         </article>)}
       </div>

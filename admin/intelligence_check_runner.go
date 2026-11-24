@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/codex2api/auth"
@@ -66,7 +68,8 @@ func (h *Handler) intelligenceTick(ctx context.Context) error {
 			return nil
 		}
 		account := h.store.FindByID(run.AccountID)
-		if account != nil && !h.store.TryAcquireIntelligenceCheck(account) {
+		models := h.matchedIntelligenceModels(opCtx, account, run.Model)
+		if len(models) > 0 && !h.store.TryAcquireIntelligenceCheck(account) {
 			if err := h.db.RequeueIntelligenceCheck(opCtx, run.ID, owner, time.Now()); err != nil {
 				return err
 			}
@@ -75,17 +78,30 @@ func (h *Handler) intelligenceTick(ctx context.Context) error {
 		h.intelligenceWG.Add(1)
 		go func(run database.IntelligenceCheckRun) {
 			defer h.intelligenceWG.Done()
-			if account != nil {
+			if len(models) > 0 {
 				defer h.store.Release(account)
 			}
-			h.runIntelligenceCheck(ctx, run, account)
+			h.runMatchedIntelligenceCheck(ctx, run, account, models)
 		}(*run)
 	}
 	return nil
 }
 
+// A detector must satisfy both the account allowlist and the source's text-test catalog.
+func (h *Handler) matchedIntelligenceModels(ctx context.Context, account *auth.Account, configured string) []string {
+	models := intelligenceModelCandidates(account, configured)
+	if len(models) == 0 {
+		return nil
+	}
+	options := h.qualityTestOptionsForAccount(ctx, account)
+	return slices.DeleteFunc(models, func(model string) bool { return !slices.Contains(options.Models, model) })
+}
+
 func (h *Handler) intelligencePreflight() database.IntelligenceCheckPreflight {
 	return database.IntelligenceCheckPreflight{
+		MatchedModels: func(ctx context.Context, id int64, configured string) []string {
+			return h.matchedIntelligenceModels(ctx, h.store.FindByID(id), configured)
+		},
 		QuotaHold: func(id int64, model string) (time.Time, bool) {
 			return h.intelligenceQuotaHold(h.store.FindByID(id), model)
 		},
@@ -106,6 +122,10 @@ func intelligenceAccountAvailable(account *auth.Account) bool {
 }
 
 func (h *Handler) runIntelligenceCheck(parent context.Context, run database.IntelligenceCheckRun, account *auth.Account) {
+	h.runMatchedIntelligenceCheck(parent, run, account, h.matchedIntelligenceModels(parent, account, run.Model))
+}
+
+func (h *Handler) runMatchedIntelligenceCheck(parent context.Context, run database.IntelligenceCheckRun, account *auth.Account, models []string) {
 	ctx, cancel := context.WithTimeout(parent, time.Duration(run.Settings.TimeoutSeconds)*time.Second)
 	result := intelligenceExecution{}
 	if h.db != nil && !run.RecordOnly {
@@ -114,23 +134,20 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 			result.Interrupted = true
 		}
 	}
+	if result.Error == "" && account != nil && len(models) == 0 {
+		result = intelligenceExecution{Skipped: true, Error: "无匹配模型：候选模型与账号允许的检测模型没有交集"}
+	}
 	// A rate-limited or exhausted account says nothing about model quality, so
 	// neither outcome below is graded. An automatic check that was queued before
 	// the limit was known is not sent; an explicit manual check still is.
-	if result.Error == "" && run.Source == "automatic" {
-		if _, held := h.intelligenceQuotaHold(account, run.Model); held {
-			result.Error = "账号限流或额度耗尽，已跳过本次自动检测"
-			result.Interrupted = true
-		}
-	}
 	if result.Error == "" && run.Source == "automatic" && run.RequireNormal && !intelligenceAccountAvailable(account) {
 		result.Error = "账号当前不可调度，已跳过仅正常账号的自动检测"
 		result.Interrupted = true
 	}
 	if result.Error == "" {
-		result = h.executeIntelligenceCheck(ctx, account, run.Model, run.ReasoningEffort, run.Question.Prompt, run.RecordOnly)
-		if result.Error != "" && !result.Interrupted && !result.CredentialRejected {
-			if _, held := h.intelligenceQuotaHold(account, run.Model); held {
+		result = h.executeIntelligenceCandidates(ctx, account, models, run.ReasoningEffort, run.Question.Prompt, !run.RecordOnly, run.Source == "automatic")
+		if result.Error != "" && !result.Skipped && !result.Interrupted && !result.CredentialRejected {
+			if _, held := h.intelligenceQuotaHold(account, result.RequestedModel); held {
 				result.Error = "账号限流或额度耗尽，本次检测不计入结果：" + result.Error
 				result.Interrupted = true
 			}
@@ -138,6 +155,8 @@ func (h *Handler) runIntelligenceCheck(parent context.Context, run database.Inte
 	}
 	cancel()
 	observation := ic.Observation{CredentialRejected: result.CredentialRejected, Interrupted: result.Interrupted, Output: result.Output, Error: result.Error, Complete: result.Complete, DurationMS: result.DurationMS, InputTokens: int64(result.InputTokens), OutputTokens: int64(result.OutputTokens), ReasoningTokens: int64(result.ReasoningTokens), ResponseModel: result.ResponseModel, EffectiveContext: result.EffectiveContext}
+	observation.Skipped, observation.RequestedModel = result.Skipped, result.RequestedModel
+	observation.MatchedModels = strings.Join(models, ",")
 	if parent.Err() != nil {
 		observation.Interrupted = true
 		observation.Error = "服务关闭，检测已中断"

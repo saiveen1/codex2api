@@ -322,6 +322,7 @@ func (db *DB) SaveIntelligenceCheckSettings(ctx context.Context, s ic.Settings) 
 			state := a.State
 			policy, rule := a.resolve(s)
 			state.PolicyRuleID = rule.ID
+			state.ModelSkip = nil // The saved settings revision has changed.
 			state.DegradeStreak, state.RecoverStreak = 0, 0
 			delay := policy.IntervalSeconds
 			state.ErrorRetrySeconds = 0

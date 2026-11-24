@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	ic "github.com/codex2api/internal/intelligencecheck"
 	"github.com/codex2api/proxy"
 	"github.com/tidwall/gjson"
 )
@@ -24,13 +25,16 @@ type intelligenceExecution struct {
 	Error              string
 	Complete           bool
 	Interrupted        bool
+	Skipped            bool
 	DurationMS         int64
+	RequestedModel     string
 	ResponseModel      string
 	InputTokens        int
 	OutputTokens       int
 	ReasoningTokens    int
 	CachedTokens       int
 	terminalPayload    []byte
+	modelUnsupported   bool
 	EffectiveContext   map[string]string
 }
 
@@ -50,13 +54,80 @@ func intelligenceAccountChannel(account *auth.Account) string {
 	}
 }
 
-// Uses the same outbound executors as generation, with no browser request context
-// or application-level retry. The detector context freezes the measurement prompt
-// and model against user payload rules; identity/fingerprint/timezone still apply.
+// intelligenceModelCandidates preserves configured priority, not whitelist order.
+func intelligenceModelCandidates(account *auth.Account, configured string) []string {
+	if account == nil {
+		return nil
+	}
+	whitelist := account.CodexModels() // Snapshot of Account.Models, shared by all sources.
+	restricted := len(whitelist) > 0
+	if account.IsAntigravityAPI() {
+		// The account stores wire IDs; compare against its projected detector IDs.
+		whitelist = antigravityConnectionTestModels(account)
+		restricted = true
+	}
+	allowed := make(map[string]string, len(whitelist))
+	for _, model := range whitelist {
+		model = strings.TrimSpace(model)
+		allowed[strings.ToLower(model)] = model
+	}
+	var candidates []string
+	for _, model := range ic.ModelCandidates(configured) {
+		if restricted {
+			model = allowed[strings.ToLower(model)]
+			if model == "" {
+				continue
+			}
+		}
+		candidates = append(candidates, model)
+	}
+	return candidates
+}
+
 func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Account, model, effort, prompt string, recordOnly ...bool) (result intelligenceExecution) {
-	applySignals := len(recordOnly) == 0 || !recordOnly[0]
+	return h.executeIntelligenceCandidates(ctx, account, h.matchedIntelligenceModels(ctx, account, model), effort, prompt, len(recordOnly) == 0 || !recordOnly[0], false)
+}
+
+func (h *Handler) executeIntelligenceCandidates(ctx context.Context, account *auth.Account, candidates []string, effort, prompt string, applySignals, automatic bool) (result intelligenceExecution) {
 	if account == nil {
 		return intelligenceExecution{Interrupted: true, Error: "配置错误：该账号渠道不支持降智检测"}
+	}
+	if len(candidates) == 0 {
+		return intelligenceExecution{Skipped: true, Error: "检测候选模型与账号可用模型无交集"}
+	}
+	for _, candidate := range candidates {
+		if automatic {
+			if _, held := h.intelligenceQuotaHold(account, candidate); held {
+				return intelligenceExecution{Interrupted: true, RequestedModel: result.RequestedModel, DurationMS: result.DurationMS, Error: "账号限流或额度耗尽，已跳过本次自动检测"}
+			}
+		}
+		attempt := h.executeIntelligenceModel(ctx, account, candidate, effort, prompt, applySignals)
+		attempt.DurationMS += result.DurationMS
+		if attempt.RequestedModel == "" {
+			attempt.RequestedModel = result.RequestedModel
+		}
+		result = attempt
+		if !result.modelUnsupported {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			result.Error = err.Error()
+			result.modelUnsupported = false
+			break
+		}
+	}
+	if result.modelUnsupported {
+		result.Skipped = true
+		result.Error = "无匹配模型：上游不支持全部候选模型。" + result.Error
+	}
+	return result
+}
+
+// Uses the same outbound executors as generation. The detector context freezes
+// the measurement prompt and model against user payload rules.
+func (h *Handler) executeIntelligenceModel(ctx context.Context, account *auth.Account, model, effort, prompt string, applySignals bool) (result intelligenceExecution) {
+	if err := ctx.Err(); err != nil {
+		return intelligenceExecution{Error: err.Error()}
 	}
 	if h.store == nil || !h.store.ProxyAllowedForAccount(account.DBID, account.GetProxyURL()) {
 		return intelligenceExecution{Interrupted: true, Error: "proxy access denied or unavailable"}
@@ -128,6 +199,7 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		result.Output = sanitizeCodexTestText(result.Output, secrets)
 		result.Error = truncate(sanitizeCodexTestText(result.Error, secrets), 4096)
 		result.ResponseModel = truncate(sanitizeCodexTestText(result.ResponseModel, secrets), 256)
+		result.RequestedModel = model
 		result.EffectiveContext = map[string]string{"fingerprint_mode": fingerprint, "timezone": timezone, "proxy": "direct", "transport": "http", "attempts": strconv.Itoa(proxy.UpstreamAttemptCount(ctx))}
 		if proxyURL != "" {
 			result.EffectiveContext["proxy"] = "configured"
@@ -138,7 +210,11 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 		if resp != nil && codexTestTransport(resp.Header) == "websocket" {
 			result.EffectiveContext["transport"] = "websocket"
 		}
-		h.logConnectionTestUsage(nil, account, connectionTestUsageInput{Reason: "intelligence_check", Endpoint: connectionTestEndpoint(account), Model: model, EffectiveModel: result.ResponseModel, ReasoningEffort: effort, StatusCode: statusCode, DurationMs: int(result.DurationMS), InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CachedTokens: result.CachedTokens, ErrorMessage: result.Error, ViaWebsocket: result.EffectiveContext["transport"] == "websocket"})
+		effectiveModel := result.ResponseModel
+		if effectiveModel == "" {
+			effectiveModel = model
+		}
+		h.logConnectionTestUsage(nil, account, connectionTestUsageInput{Reason: "intelligence_check", Endpoint: connectionTestEndpoint(account), Model: model, EffectiveModel: effectiveModel, ReasoningEffort: effort, StatusCode: statusCode, DurationMs: int(result.DurationMS), InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CachedTokens: result.CachedTokens, ErrorMessage: result.Error, ViaWebsocket: result.EffectiveContext["transport"] == "websocket"})
 	}()
 	switch {
 	case claude:
@@ -159,10 +235,11 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	defer resp.Body.Close()
 	statusCode = resp.StatusCode
 	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		result.Error = fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(raw), 4096))
 		result.CredentialRejected = resp.StatusCode == http.StatusUnauthorized || intelligenceCredentialRejected(raw)
-		if applySignals {
+		result.modelUnsupported = readErr == nil && ctx.Err() == nil && !result.CredentialRejected && intelligenceModelUnsupported(resp.StatusCode, raw, model)
+		if applySignals && !result.modelUnsupported {
 			h.applyIntelligenceUpstreamFailure(account, resp, model, raw)
 		}
 		if !applySignals && resp.StatusCode == http.StatusTooManyRequests {
@@ -177,17 +254,19 @@ func (h *Handler) executeIntelligenceCheck(ctx context.Context, account *auth.Ac
 	}
 	result = readIntelligenceStream(resp.Body, claude)
 	result.CredentialRejected = intelligenceCredentialRejected(result.terminalPayload) || proxy.IsResponsesOAuthRecoveryFailure(result.terminalPayload)
+	result.modelUnsupported = !result.Complete && result.Output == "" && !result.CredentialRejected && intelligenceModelUnsupported(http.StatusOK, result.terminalPayload, model)
 	if ctx.Err() != nil {
 		result.Complete = false
 		result.Error = ctx.Err().Error()
+		result.modelUnsupported = false
 	}
-	if applySignals && !claude && !account.IsAntigravityAPI() && result.Error != "" && len(result.terminalPayload) > 0 {
+	if applySignals && !result.modelUnsupported && !claude && !account.IsAntigravityAPI() && result.Error != "" && len(result.terminalPayload) > 0 {
 		if !h.applyResponsesUsageLimitFailure(account, resp, model, result.terminalPayload) {
 			h.applyResponsesOAuthRecovery(account, result.terminalPayload)
 		}
 	}
 	// Never mark an account successful/reset its authentication or quota state here.
-	if applySignals && claude && result.Error != "" {
+	if applySignals && !result.modelUnsupported && claude && result.Error != "" {
 		applyClaudeConnectionStreamFailure(h, account, model, "failed", result.Error, resp)
 	}
 	return
@@ -348,6 +427,7 @@ func readIntelligenceStream(body io.Reader, claude bool) (result intelligenceExe
 				}
 				return false
 			case "error":
+				result.terminalPayload = append([]byte(nil), data...)
 				result.Error = formatUpstreamTestError(data, "Claude 上游错误")
 				return false
 			}
@@ -367,6 +447,9 @@ func readIntelligenceStream(body io.Reader, claude bool) (result intelligenceExe
 		case "response.completed":
 			status := root.Get("response.status").String()
 			if status != "" && status != "completed" {
+				if status == "failed" {
+					result.terminalPayload = append([]byte(nil), data...)
+				}
 				result.Error = formatUpstreamTestError(data, "上游未完整完成: "+status)
 				return false
 			}
@@ -430,6 +513,69 @@ func intelligenceCredentialRejected(payload []byte) bool {
 		switch gjson.GetBytes(payload, path).String() {
 		case "token_revoked", "account_deactivated", "workspace_deactivated", "organization_deactivated":
 			return true
+		}
+	}
+	return false
+}
+
+// Only provider-declared model rejections justify changing what we measure.
+func intelligenceModelUnsupported(status int, payload []byte, model string) bool {
+	if len(payload) == 0 || proxy.IsUsageLimitReachedError(payload) {
+		return false
+	}
+	if status == http.StatusOK {
+		status = int(gjson.GetBytes(payload, "response.status_code").Int())
+		if status == 0 {
+			status = int(gjson.GetBytes(payload, "status_code").Int())
+		}
+	}
+	switch status {
+	case 0, http.StatusOK, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity:
+	default:
+		return false
+	}
+	typ := firstNonEmptyGJSONString(payload, "response.status_details.error.type", "response.error.type", "error.type", "type")
+	code := firstNonEmptyGJSONString(payload, "response.status_details.error.code", "response.error.code", "error.code", "code")
+	for _, value := range []string{code, typ} {
+		switch strings.ToLower(value) {
+		case "model_not_found", "unsupported_model", "model_not_supported":
+			return true
+		}
+	}
+	message := firstNonEmptyGJSONString(payload, "response.status_details.error.message", "response.error.message", "error.message", "message", "detail")
+	if message == "" {
+		plain := strings.TrimSpace(string(payload))
+		if plain == "" || strings.ContainsAny(plain[:1], "{[<") {
+			return false
+		}
+		message = plain
+	}
+	message = strings.TrimRight(strings.ToLower(strings.TrimSpace(message)), ".!")
+	message = strings.NewReplacer("'", "", "\"", "", "`", "").Replace(message)
+	message = strings.TrimPrefix(message, "the ")
+	model = strings.ToLower(model)
+	if strings.HasPrefix(message, model+" model is not supported when using codex") ||
+		strings.HasPrefix(message, "model is not supported when using codex") ||
+		strings.HasPrefix(message, "unknown provider for model ") || strings.HasPrefix(message, "unknown provider for model:") {
+		return true
+	}
+	switch message {
+	case "model not found", "model not supported", "unsupported model", "model is not supported", "unknown model",
+		"unknown model: " + model, "unsupported model: " + model:
+		return true
+	case "model: " + model:
+		// Anthropic identifies a missing model as `not_found_error` + `model: ID`.
+		return status == http.StatusNotFound || typ == "not_found_error"
+	}
+	for _, subject := range []string{"model " + model, model + " model", "models/" + model} {
+		if rest, ok := strings.CutPrefix(message, subject); ok {
+			switch rest {
+			case " is not supported", " is not supported for this account", " is not supported by this account", " was not found", " is not found", " does not exist", " does not exist or you do not have access to it", " is no longer available":
+				return true
+			}
+			if strings.HasPrefix(rest, " is not found for api version ") {
+				return true
+			}
 		}
 	}
 	return false

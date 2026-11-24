@@ -370,7 +370,7 @@ func TestIntelligenceAdminAPIAndRunner(t *testing.T) {
 	}
 }
 
-func TestIntelligenceRuntimeConfigurationFailureIsInterrupted(t *testing.T) {
+func TestIntelligenceManualModelMismatchIsSkipped(t *testing.T) {
 	db := newTestAdminDB(t)
 	id := insertTestAccount(t, db)
 	ctx := context.Background()
@@ -395,7 +395,7 @@ func TestIntelligenceRuntimeConfigurationFailureIsInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "interrupted" || got.Error == "" {
-		t.Fatalf("local failure misclassified: %+v", got)
+	if got.Status != "skipped" || got.Model != "" || !strings.Contains(got.Error, "无匹配模型") {
+		t.Fatalf("unmatched manual check was not skipped: %+v", got)
 	}
 }

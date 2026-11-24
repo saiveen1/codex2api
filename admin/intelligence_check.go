@@ -229,9 +229,10 @@ func (h *Handler) CreateIntelligenceRuns(c *gin.Context) {
 			intelligenceAPIError(c, err)
 			return
 		}
-		model, effort := policy.ModelForChannel(intelligenceAccountChannel(account))
-		if err = h.validateQualityTestForAccount(c.Request.Context(), account, qualityTestRequest{Model: model, ReasoningEffort: effort}); err != nil {
-			c.JSON(400, gin.H{"error": fmt.Sprintf("账号 %d: %s", id, err)})
+		// A model mismatch is a per-account skip, not an invalid manual batch.
+		_, effort := policy.ModelForChannel(intelligenceAccountChannel(account))
+		if !slices.Contains(h.qualityTestOptionsForAccount(c.Request.Context(), account).ReasoningEfforts, effort) {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("账号 %d: 该渠道不支持所选思考强度", id)})
 			return
 		}
 	}

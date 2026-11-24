@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { intelligenceWindow, intelligenceColor, intelligenceQuery, latestRequestGuard, intelligenceTargetConflict, intelligenceScheduleLabel, intelligenceGroupNames, intelligencePolicyName, intelligenceRuleError, intelligenceTimeRange, normalizeIntelligenceRule } from './intelligenceCheck.ts'
+import { intelligenceWindow, intelligenceColor, intelligenceLabels, intelligenceQuery, latestRequestGuard, intelligenceTargetConflict, intelligenceScheduleLabel, intelligenceGroupNames, intelligencePolicyName, intelligenceRuleError, intelligenceTimeRange, normalizeIntelligenceRule, normalizeIntelligenceModels } from './intelligenceCheck.ts'
 test('last 20 completed checks remain chronological and errors do not dilute pass rate', () => {
   const records = Array.from({ length: 23 }, (_, i) => ({ id: i, status: i % 3 === 0 ? 'normal' : i % 3 === 1 ? 'degraded' : 'error', created_at: new Date(i * 1000).toISOString() }))
   records.push({ id: 24, status: 'running' })
@@ -18,6 +18,7 @@ test('no scored samples never display 100 percent, and specified colors stay dis
   assert.equal(intelligenceColor('degraded'), '#ef4444')
   assert.equal(intelligenceColor('error'), '#991b1b')
   assert.equal(intelligenceColor('interrupted'), undefined)
+  assert.equal(intelligenceScheduleLabel({enabled: true, probe_phase: 'model_skipped'}), '无匹配模型，已跳过')
 })
 test('queries escape filters and stale async responses are rejected after newer load or disposal', () => {
   assert.equal(intelligenceQuery(2, { search: 'a&b', channel: '', account_id: 42 }), 'page=2&page_size=20&search=a%26b&account_id=42')
@@ -70,4 +71,22 @@ test('rule validation distinguishes omitted overrides, required matchers and ena
   assert.equal(validate({ action:'pause_and_switch_group', target_group_id:1 }), '')
   assert.match(validate({ question_ids:['off'] }), /至少启用/)
   assert.match(validate({ timeout_seconds:0 }), /1–3600/)
+})
+
+test('ordered model lists preserve single values, normalize separators and inherit empty rules', () => {
+  assert.equal(normalizeIntelligenceModels('old-model'), 'old-model')
+  assert.equal(normalizeIntelligenceModels(' first， second\r\n third, ,fourth '), 'first,second,third,fourth')
+  const rule = { id:'r', name:'rule', channel:'codex', automatic:true }
+  assert.equal(normalizeIntelligenceRule({...rule, model:' ， \n '}).model, undefined)
+  assert.equal(normalizeIntelligenceRule({...rule, model:'a，b\nc'}).model, 'a,b,c')
+})
+
+test('skipped records are neutral and do not count toward the pass rate', () => {
+  const result = intelligenceWindow([{id:1,status:'normal'}, {id:2,status:'skipped'}, {id:3,status:'degraded'}])
+  assert.equal(result.rate, 50)
+  assert.equal(result.errors, 0)
+  assert.equal(result.records.length, 3)
+  assert.equal(intelligenceColor('skipped'), undefined)
+  assert.equal(intelligenceLabels.skipped, '已跳过（无匹配模型）')
+  assert.match(intelligenceQuery(1, {status:'skipped'}), /status=skipped/)
 })

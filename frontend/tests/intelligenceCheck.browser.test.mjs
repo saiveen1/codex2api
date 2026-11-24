@@ -54,6 +54,7 @@ async function fixture(t, options = {}) {
  await page.route('http://intelligence.test/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div></body></html>' }))
  await page.goto('http://intelligence.test/')
  await page.evaluate(({ settings, accounts, run, options }) => {
+  if (options.skipped) run = {...run, status:'skipped', error:'无匹配模型'}
   localStorage.setItem("lang", "zh"); localStorage.setItem("codex2api:accounts:page-mode", "pool"); window.__claudePage = options.claudePage; window.__accountsPage = options.accountsPage; window.__initialPath = options.initialPath; window.__calls = []; window.__config = settings; window.__showBar = options.bar
   window.__bar = { enabled: options.detectionEnabled ?? true, action: 'none', records: ['normal', 'degraded', 'error', 'interrupted'].map((status, i) => ({ id: 10 + i, status, question_name: '糖果配对', duration_ms: 1200, completed_at: run.completed_at })) }
   if (options.dark) document.documentElement.classList.add('dark')
@@ -529,4 +530,27 @@ test('scope can be narrowed next to the master switch before enabling automatic 
  await page.getByRole('button', {name:'保存配置',exact:true}).click()
  await page.getByRole('button', {name:'保存配置',exact:true,disabled:true}).waitFor()
  assert.deepEqual(await page.evaluate(() => [window.__config.rules_only, window.__config.enabled]), [true, true])
+})
+
+test('ordered models save as strings and skipped history remains neutral and filterable', async t => {
+ const page = await fixture(t, {skipped:true, initialPath:'/?account_id=1'})
+ const dialog = page.getByRole('dialog')
+ await dialog.getByText('已跳过（无匹配模型）').waitFor()
+ await dialog.getByText('判定原因：无匹配模型，未参与判定').waitFor()
+ await dialog.getByText('跳过原因', {exact:true}).waitFor()
+ await page.keyboard.press('Escape')
+ await page.getByLabel('GPT / Codex 模型', {exact:true}).fill('first，second\nthird')
+ await page.getByRole('tab', {name:'独立策略'}).click()
+ const rules = page.getByRole('region', {name:'分组 / 套餐规则'})
+ await rules.getByRole('button', {name:'新增规则'}).click()
+ await rules.getByLabel('匹配套餐码').fill('plus')
+ await rules.getByLabel('检测模型', {exact:true}).fill('rule-a\nrule-b')
+ await page.getByRole('button', {name:'保存配置',exact:true}).click()
+ await page.getByRole('button', {name:'保存配置',exact:true,disabled:true}).waitFor()
+ assert.deepEqual(await page.evaluate(() => [window.__config.gpt_model, window.__config.rules[0].model]), ['first,second,third','rule-a,rule-b'])
+ await page.getByRole('tab', {name:'检测历史'}).click()
+ const panel = page.getByRole('tabpanel', {name:'检测历史'})
+ await selectOption(page, '状态', '已跳过（无匹配模型）', panel)
+ await page.waitForFunction(() => window.__calls.some(c => c.name === 'getIntelligenceRunSummaries' && c.args[1].status === 'skipped'))
+ await panel.getByText('已跳过（无匹配模型）').first().waitFor()
 })
