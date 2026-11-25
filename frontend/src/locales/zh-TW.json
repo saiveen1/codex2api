@@ -440,6 +440,11 @@
     }
   },
   "accounts": {
+    "uaDisplay": {
+      "system": "系統：{{value}}", "client": "用戶端：{{value}}", "saved": "目前設定結果", "full": "查看完整 User-Agent",
+      "oauth": "{{value}}（OAuth 配對）", "pool": "跟隨全域（帳號池目前分配：{{value}}）", "global": "{{value}}（全域設定）",
+      "preset": "{{value}}（指定預設）", "manual": "{{value}}（手動指定）", "request": "依請求決定", "unknown": "未確定"
+    },
     "codexUAInherit": "跟隨全域設定",
     "codexUAGatewaySystem": "OAuth 閘道記錄的授權系統：{{system}}（{{environment}}）。這是匯入紀錄，不是手動 UA。",
     "codexUAHint": "僅對目前帳號生效。選擇用戶端預設或手動填寫完整 UA；下方自訂標頭中的 User-Agent 優先。",

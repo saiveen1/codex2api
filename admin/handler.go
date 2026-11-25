@@ -1869,6 +1869,7 @@ type accountResponse struct {
 	ResponsesUpstreamTransport    string                      `json:"responses_upstream_transport,omitempty"`
 	CodexFingerprintMode          string                      `json:"codex_fingerprint_mode,omitempty"`
 	CodexUserAgent                string                      `json:"codex_user_agent"`
+	CodexUADisplay                *proxy.CodexUADisplay        `json:"codex_ua_display,omitempty"`
 	OAuthGatewayEnvironment       string                      `json:"oauth_gateway_environment,omitempty"`
 	ClaudeFingerprintMode         string                      `json:"claude_fingerprint_mode,omitempty"`
 	ClaudeUserAgent               string                      `json:"claude_user_agent,omitempty"`

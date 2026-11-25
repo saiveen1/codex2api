@@ -10,6 +10,7 @@ import (
 	"github.com/codex2api/database"
 	"github.com/codex2api/internal/oauthgateway/upstream"
 	"github.com/codex2api/internal/openaiidentity"
+	"github.com/codex2api/proxy"
 )
 
 func antigravityPersistedStatus(row *database.AccountRow) (string, string) {
@@ -307,6 +308,10 @@ func (h *Handler) buildAccountResponse(
 		ClaudeUsageWindows:           claudeAccountUsageWindows(row),
 		UsageLimitOverride:           ignoreUsageLimitStatusOverride,
 		UsageLimitEffective:          ignoreUsageLimitStatusEffective,
+	}
+	if !isOpenAIResponsesAccount && !isGrokAccount && !isAntigravityAccount && !isClaudeAccount && !isKiroAccount && (upstreamType == "" || strings.EqualFold(upstreamType, "codex")) {
+		display := proxy.ResolveCodexUADisplay(row.ID, row.GetCredential(auth.CodexUserAgentCredentialKey), row.GetCredential(upstream.EnvironmentCredential), headers)
+		resp.CodexUADisplay = &display
 	}
 	// 凭据里只要存在 usage 窗口键(哪怕是空数组)就代表 OAuth usage 采样跑过。
 	resp.ClaudeUsageWindowsProbed = strings.TrimSpace(row.GetCredential(auth.ClaudeUsageWindowsCredentialKey)) != ""

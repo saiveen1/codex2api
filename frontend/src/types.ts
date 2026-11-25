@@ -540,6 +540,11 @@ export interface AccountRow {
   codex_fingerprint_mode?: CodexFingerprintMode
   codex_user_agent?: string
   oauth_gateway_environment?: 'chrome_macos' | 'chrome_windows' | 'firefox_windows'
+  codex_ua_display?: {
+    system: string; system_source: string
+    client: string; client_source: string
+    user_agent?: string
+  }
   claude_fingerprint_mode?: 'preserve' | 'force' | ''
   claude_client_platform?: 'any' | 'claude_code_cli_only'
   claude_version_policy?: 'passthrough' | 'fixed' | 'minimum'

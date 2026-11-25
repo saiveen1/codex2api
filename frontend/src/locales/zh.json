@@ -999,6 +999,11 @@
     "heroChannelTitle": "{{channel}}：可用账号 {{available}}/{{total}} · 今日请求 {{requests}}"
   },
   "accounts": {
+    "uaDisplay": {
+      "system": "系统：{{value}}", "client": "客户端：{{value}}", "saved": "当前配置结果", "full": "查看完整 User-Agent",
+      "oauth": "{{value}}（OAuth 匹配）", "pool": "跟随全局（号池当前分配：{{value}}）", "global": "{{value}}（全局设置）",
+      "preset": "{{value}}（指定预设）", "manual": "{{value}}（手动指定）", "request": "随请求决定", "unknown": "未确定"
+    },
     "codexUAInherit": "跟随全局设置",
     "codexUAGatewaySystem": "OAuth 网关记录的授权系统：{{system}}（{{environment}}）。这是导入记录，不是手动 UA。",
     "codexUAHint": "只对当前账号生效。选择客户端预设或手动填写完整 UA；下方自定义请求头中的 User-Agent 优先。",

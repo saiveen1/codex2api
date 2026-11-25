@@ -65,6 +65,14 @@ func TestSchedulerCodexUserAgentRoundTrip(t *testing.T) {
 	if w.Code != http.StatusOK || gjson.Get(w.Body.String(), "accounts.0.codex_user_agent").String() != "codex-vscode@linux" {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
+	detail := h.buildAccountResponse(row, account, nil, nil, nil, true)
+	light := h.buildAccountResponse(row, account, nil, nil, nil, false)
+	if detail.CodexUADisplay == nil || light.CodexUADisplay == nil || *detail.CodexUADisplay != *light.CodexUADisplay || detail.CodexUADisplay.Client != "codex-vscode" || detail.CodexUADisplay.System != "linux" {
+		t.Fatalf("detail/light UA display mismatch: %+v / %+v", detail.CodexUADisplay, light.CodexUADisplay)
+	}
+	if gjson.Get(w.Body.String(), "accounts.0.codex_ua_display.client").String() != "codex-vscode" {
+		t.Fatalf("paged display: %s", w.Body.String())
+	}
 	patch(`{"codex_user_agent":"raw:example/1.2 (test)"}`, http.StatusOK)
 	patch(`{"codex_user_agent":""}`, http.StatusOK)
 	row, err = db.GetAccountByID(ctx, id)

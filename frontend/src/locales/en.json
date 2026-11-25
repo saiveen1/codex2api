@@ -998,6 +998,11 @@
     "heroChannelTitle": "{{channel}}: {{available}}/{{total}} accounts available · {{requests}} requests today"
   },
   "accounts": {
+    "uaDisplay": {
+      "system": "System: {{value}}", "client": "Client: {{value}}", "saved": "Current saved configuration", "full": "Show full User-Agent",
+      "oauth": "{{value}} (OAuth match)", "pool": "Global pool (currently {{value}})", "global": "{{value}} (global setting)",
+      "preset": "{{value}} (pinned preset)", "manual": "{{value}} (manual override)", "request": "Depends on the request", "unknown": "Undetermined"
+    },
     "codexUAInherit": "Use global settings",
     "codexUAGatewaySystem": "OAuth gateway authorization system: {{system}} ({{environment}}). This is an import record, not a manual User-Agent.",
     "codexUAHint": "Choose a client preset or enter a full User-Agent for this account. A User-Agent in the custom headers below takes precedence.",

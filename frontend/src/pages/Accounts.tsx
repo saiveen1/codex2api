@@ -4,6 +4,7 @@ import type { ChatGPTWebState } from "../api";
 import { getAccountQuotaPausePresentation } from "@/lib/accountQuotaPause";
 import { AccountCardSurface } from "../components/AccountCardSurface";
 import AccountUsageBar from "../components/AccountUsageBar";
+import AccountUAStatus from "../components/AccountUAStatus";
 import APIKeyMultiSelect from "../components/APIKeyMultiSelect";
 import PlanBadge, { normalizePlanType } from "../components/AccountPlanBadge";
 import { useIntelligenceBars } from "../hooks/useIntelligenceBars";
@@ -1372,6 +1373,7 @@ const AccountTableRow = memo(function AccountTableRow({
                                       </button>
                                     )}
                                   </div>
+                                  <AccountUAStatus display={account.codex_ua_display} />
                                   {account.effective_workspace_id && (
                                     <span
                                       className={cn(
@@ -10508,7 +10510,8 @@ export default function Accounts() {
                           <div className="rounded-xl border border-border/70 bg-card p-4.5 shadow-2xs md:col-span-2">
                             <label htmlFor="account-codex-ua" className="text-sm font-semibold">User-Agent</label>
                             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("accounts.codexUAHint")}</p>
-                            {editingAccount.oauth_gateway_environment && <p className="mt-1 text-xs text-muted-foreground">
+                            <AccountUAStatus display={editingAccount.codex_ua_display} detail />
+                            {editingAccount.oauth_gateway_environment && editingAccount.codex_ua_display?.system_source !== "oauth" && <p className="mt-1 text-xs text-muted-foreground">
                               {t("accounts.codexUAGatewaySystem", { system: editingAccount.oauth_gateway_environment === "chrome_macos" ? "macOS" : "Windows", environment: editingAccount.oauth_gateway_environment })}
                             </p>}
                             <label className="mt-3 flex items-center gap-2 text-sm">
@@ -14194,6 +14197,7 @@ function AccountMobileCard({
                 </button>
               )}
             </div>
+            <AccountUAStatus display={account.codex_ua_display} />
             {chatgptAccountId && (
               <div
                 className="codex-account-card__chatgpt-id"
