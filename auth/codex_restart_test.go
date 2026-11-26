@@ -32,11 +32,16 @@ func TestCodexRestartPreservesUnauthorizedUntilVerified(t *testing.T) {
 	if err := db.SetCooldown(ctx, terminal, "rate_limited", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	store := NewStore(db, nil, nil)
-	t.Cleanup(store.Stop)
-	if err := store.Init(ctx); err != nil {
-		t.Fatal(err)
+	startStore := func() *Store {
+		t.Helper()
+		s := NewStore(db, nil, nil)
+		t.Cleanup(s.Stop)
+		if err := s.Init(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return s
 	}
+	store := startStore()
 	a := store.FindByID(unauthorized)
 	if a == nil || a.RuntimeStatus() != "unauthorized" || a.IsAvailable() || !a.NeedsRecoveryProbe(0) || a.ErrorMsg != "previous rejection" {
 		t.Fatal("expired 401 must stay quarantined and eligible for verification")
@@ -49,7 +54,7 @@ func TestCodexRestartPreservesUnauthorizedUntilVerified(t *testing.T) {
 		t.Fatal("expired quota cooldown should release; terminal error must not")
 	}
 	calls := 0
-	store.SetUsageProbeFunc(func(_ context.Context, account *Account) error {
+	probe := func(_ context.Context, account *Account) error {
 		calls++
 		if calls == 1 {
 			store.MarkUpstreamUnauthorized(account, nil, "still unauthorized")
@@ -57,17 +62,34 @@ func TestCodexRestartPreservesUnauthorizedUntilVerified(t *testing.T) {
 			store.ReportRequestSuccess(account, 0)
 		}
 		return nil // The probe reports handled rejections as well as successes this way.
-	})
+	}
+	store.SetUsageProbeFunc(probe)
 	store.parallelRecoveryProbe(ctx)
 	if calls != 1 || a.IsAvailable() || a.RuntimeStatus() != "unauthorized" {
 		t.Fatal("handled 401 incorrectly restored account")
 	}
-	a.SetCooldownUntil(deadline, "unauthorized")
-	a.mu.Lock()
-	a.LastRecoveryProbeAt = time.Time{}
-	a.mu.Unlock()
+	store.Stop()
+	row, err = db.GetAccountByID(ctx, unauthorized)
+	if err != nil || row.CooldownReason != "unauthorized" || !row.CooldownUntil.Time.After(time.Now()) {
+		t.Fatal("rejected recovery probe must persist a new 401 deadline", err)
+	}
+	// Let the persisted cooldown expire between processes, not just in memory.
+	if err := db.SetCooldown(ctx, unauthorized, "unauthorized", deadline); err != nil {
+		t.Fatal(err)
+	}
+	store = startStore()
+	a = store.FindByID(unauthorized)
+	if a == nil || a.IsAvailable() || !a.NeedsRecoveryProbe(0) {
+		t.Fatal("restart after another 401 must still require verification")
+	}
+	store.SetUsageProbeFunc(probe)
 	store.parallelRecoveryProbe(ctx)
 	if calls != 2 || !a.IsAvailable() || a.RuntimeStatus() != "active" {
-		t.Fatal("verified recovery did not restore dispatch")
+		reason, until := a.GetCooldownSnapshot()
+		t.Fatalf("verified recovery: calls=%d status=%s available=%v reason=%q until=%v", calls, a.RuntimeStatus(), a.IsAvailable(), reason, until)
+	}
+	row, err = db.GetAccountByID(ctx, unauthorized)
+	if err != nil || row.CooldownReason != "" || row.CooldownUntil.Valid {
+		t.Fatal("verified recovery did not clear persisted cooldown", err)
 	}
 }
