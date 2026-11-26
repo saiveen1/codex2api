@@ -73,18 +73,6 @@ func (h *Handler) GetAccountPageStats(c *gin.Context) {
 		todayModels = map[int64]map[string]database.AccountModelCount{}
 	}
 
-	billing5hWindows, billing7dWindows := h.accountBillingWindows(ids)
-	billed5h, err := h.db.GetAccountsBilledSince(ctx, billing5hWindows)
-	if err != nil {
-		log.Printf("获取当前页账号 5h 成本失败: %v", err)
-		billed5h = map[int64]float64{}
-	}
-	billed7d, err := h.db.GetAccountsBilledSince(ctx, billing7dWindows)
-	if err != nil {
-		log.Printf("获取当前页账号长窗口成本失败: %v", err)
-		billed7d = map[int64]float64{}
-	}
-
 	// 官方结算快照缺失只是少一行展示，不能拖垮整页统计。
 	officialTotals, err := h.db.SumAccountDailyUsage(ctx, ids, whamDailyUsageKeepDays)
 	if err != nil {
@@ -124,12 +112,8 @@ func (h *Handler) GetAccountPageStats(c *gin.Context) {
 			}
 			item.UsageTodayDetail = todayWindow
 		}
-		if value, ok := billed5h[id]; ok {
-			item.Billed5h = &value
-		}
-		if value, ok := billed7d[id]; ok {
-			item.Billed7d = &value
-		}
+		item.Billed5h = windowBilled(usage5h, id)
+		item.Billed7d = windowBilled(usage7d, id)
 		// 没有快照的账号不下发这个字段，前端显示占位而不是 $0；
 		// 当前页缺快照时异步回补，不挡本次响应。已经成功同步过但
 		// 上游没有数据的账号下发显式空态，不再反复回补。
@@ -148,29 +132,15 @@ func (h *Handler) GetAccountPageStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"stats": stats})
 }
 
-func (h *Handler) accountBillingWindows(ids []int64) (map[int64]time.Time, map[int64]time.Time) {
-	shortWindows := make(map[int64]time.Time, len(ids))
-	longWindows := make(map[int64]time.Time, len(ids))
-	if h.store == nil {
-		return shortWindows, longWindows
+// No matching log rows after a successful query means zero, not unknown.
+func windowBilled(rows map[int64]*database.AccountTimeRangeUsage, id int64) *float64 {
+	if rows == nil {
+		return nil
 	}
-	for _, id := range ids {
-		account := h.store.FindByID(id)
-		if account == nil {
-			continue
-		}
-		if resetAt := account.GetReset5hAt(); !resetAt.IsZero() {
-			shortWindows[id] = resetAt.Add(-5 * time.Hour)
-		}
-		if resetAt := account.GetReset7dAt(); !resetAt.IsZero() {
-			window := 7 * 24 * time.Hour
-			if seconds := account.GetWindow7dSeconds(); seconds > 0 {
-				window = time.Duration(seconds) * time.Second
-			}
-			longWindows[id] = resetAt.Add(-window)
-		}
+	if usage := rows[id]; usage != nil {
+		return &usage.AccountBilled
 	}
-	return shortWindows, longWindows
+	return new(float64)
 }
 
 // loadAccountUsageDetails aggregates list/detail usage windows per account.
@@ -189,29 +159,32 @@ func (h *Handler) loadAccountUsageDetails(ctx context.Context, ids []int64, now 
 	return usage5h, usage7d, nil
 }
 
-// accountUsageWindows returns per-account start times for the short (5h) and
-// long (7d/monthly) usage aggregates. Accounts with an official reset use
-// the same start as accountBillingWindows; the rest fall back to a rolling
-// last 5 hours / last 7 days so unsynced accounts keep today's behavior.
+// Use a live reset when available; otherwise show the rolling window of the same duration.
 func (h *Handler) accountUsageWindows(ids []int64, now time.Time) (map[int64]time.Time, map[int64]time.Time) {
 	shortWindows := make(map[int64]time.Time, len(ids))
 	longWindows := make(map[int64]time.Time, len(ids))
-	fallbackShort := now.Add(-5 * time.Hour)
-	fallbackLong := now.AddDate(0, 0, -7)
 	for _, id := range ids {
-		shortWindows[id] = fallbackShort
-		longWindows[id] = fallbackLong
-	}
-	officialShort, officialLong := h.accountBillingWindows(ids)
-	for id, since := range officialShort {
-		if !since.IsZero() {
-			shortWindows[id] = since
+		shortWindows[id] = now.Add(-5 * time.Hour)
+		longWindows[id] = now.Add(-7 * 24 * time.Hour)
+		if h.store == nil {
+			continue
 		}
-	}
-	for id, since := range officialLong {
-		if !since.IsZero() {
-			longWindows[id] = since
+		account := h.store.FindByID(id)
+		if account == nil {
+			continue
 		}
+		if reset := account.GetReset5hAt(); reset.After(now) {
+			shortWindows[id] = reset.Add(-5 * time.Hour)
+		}
+		end := account.GetReset7dAt()
+		if !end.After(now) {
+			end = now
+		}
+		window := 7 * 24 * time.Hour
+		if seconds := account.GetWindow7dSeconds(); seconds > 0 {
+			window = time.Duration(seconds) * time.Second
+		}
+		longWindows[id] = end.Add(-window)
 	}
 	return shortWindows, longWindows
 }

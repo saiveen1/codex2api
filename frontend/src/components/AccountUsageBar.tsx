@@ -5,7 +5,7 @@ export default function AccountUsageBar({ label, pct, resetAt, detailText }: {
   label: string
   pct: number | null
   resetAt?: string
-  detailText?: string
+  detailText?: import('react').ReactNode
 }) {
   const { t } = useTranslation()
   const known = pct !== null && Number.isFinite(pct)

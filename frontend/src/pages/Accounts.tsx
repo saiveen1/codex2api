@@ -3076,23 +3076,9 @@ export default function Accounts() {
     await reload();
     setPageStatsReloadToken((token) => token + 1);
   }, [reload]);
-  const handleOfficialUsageRefreshed = useCallback(
-    (patch?: { accountId: number; officialUsd: number | null }) => {
-      if (patch) {
-        setAccountPageStats((current) => ({
-          ...current,
-          [String(patch.accountId)]: {
-            ...current[String(patch.accountId)],
-            official_usd: patch.officialUsd ?? undefined,
-            official_usd_7d: patch.officialUsd ?? undefined,
-            official_usage_synced: true,
-          },
-        }));
-      }
-      setPageStatsReloadToken((token) => token + 1);
-    },
-    [],
-  );
+  const handleOfficialUsageRefreshed = useCallback(() => {
+    setPageStatsReloadToken((token) => token + 1);
+  }, []);
   // Codex 视图的统计卡/额度分布/列表/批量操作一律排除 Grok 账号
   // （Grok 账号由顶部切换后的 Grok 页单独统计与管理）。
   const allAccounts = useMemo(() => {
@@ -6359,7 +6345,7 @@ export default function Accounts() {
     resetCredits: (account) => void handleResetCredits(account),
     openModelsEditor,
     remove: (account) => void handleDelete(account),
-    usageRefreshed: () => void reloadSilently(),
+    usageRefreshed: () => void refreshAccountPage(),
   };
   const rowActions = useMemo<AccountRowActions>(
     () => ({
@@ -9448,7 +9434,7 @@ export default function Accounts() {
                 <UsageCell
                   account={detailAccount}
                   wide
-                  onRefreshed={() => void reloadSilently()}
+                  onRefreshed={() => void refreshAccountPage()}
                 />
               ) : null
             }
@@ -14369,83 +14355,37 @@ function hasUsageWindowDetail(detail?: AccountRow["usage_5h_detail"]): boolean {
   );
 }
 
-// 单行用量进度条
-const USAGE_BAR_LABEL_CLASS = "w-10 shrink-0 text-[11px] font-medium text-muted-foreground";
-function UsageBar({ label, pct, resetAt, detail }: { label: string; pct: number; resetAt?: string; detail?: AccountRow["usage_5h_detail"] }) {
+type UsageDetail = NonNullable<AccountRow["usage_5h_detail"]>;
+
+function WindowBreakdown({ detail }: { detail: UsageDetail }) {
   const { t } = useTranslation();
-  const fast = detail?.fast_billed;
-  const detailText = hasUsageWindowDetail(detail)
-    ? `${formatCompactUsageNumber(detail?.requests)} ${t("accounts.usageReqUnit")} / ${formatCompactUsageNumber(detail?.tokens)} ${t("accounts.usageTokUnit")}`
-    : undefined;
-  const withFast = detailText && fast != null && fast > 0
-    ? `${detailText} · ${t("accounts.windowFastBilled", { amount: fast.toFixed(4) })}`
-    : detailText;
-  return <AccountUsageBar label={label} pct={pct} resetAt={resetAt} detailText={withFast} />;
+  const req = t("accounts.usageReqUnit");
+  const tok = t("accounts.usageTokUnit");
+  return (
+    <details className="min-w-0 whitespace-normal text-[11px] tabular-nums text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+      <summary className="cursor-pointer rounded-sm focus-visible:outline-auto">
+        {formatCompactUsageNumber(detail.requests)} {req} / {formatCompactUsageNumber(detail.tokens)} {tok}
+      </summary>
+      <div className="mt-1 space-y-0.5 border-l pl-2 [overflow-wrap:anywhere]">
+        <div>{detail.requests.toLocaleString()} {req} / {detail.tokens.toLocaleString()} {tok}</div>
+        {detail.account_billed != null && <div>{t("accounts.accountBilledLabel")}: ${detail.account_billed.toFixed(4)}</div>}
+        {detail.fast_billed != null && detail.fast_billed > 0 && <div>{t("accounts.windowFastBilled", { amount: detail.fast_billed.toFixed(4) })}</div>}
+        {detail.user_billed != null && <div>{t("accounts.userBilledLabel")}: ${detail.user_billed.toFixed(4)}</div>}
+      </div>
+    </details>
+  );
 }
 
-function UsageWindowStat({
-  label,
-  detail,
-  apiAccount = false,
-}: {
-  label: string;
-  detail?: AccountRow["usage_5h_detail"];
-  apiAccount?: boolean;
-}) {
-  const { t } = useTranslation();
+function UsageBar({ label, pct, resetAt, detail }: { label: string; pct: number | null; resetAt?: string; detail?: UsageDetail }) {
+  return <AccountUsageBar label={label} pct={pct} resetAt={resetAt} detailText={detail && hasUsageWindowDetail(detail) ? <WindowBreakdown detail={detail} /> : undefined} />;
+}
+
+function UsageWindowStat({ label, detail }: { label: string; detail?: UsageDetail }) {
   if (!detail || !hasUsageWindowDetail(detail)) return null;
-
-  const accountBilledText =
-    typeof detail.account_billed === "number"
-      ? detail.account_billed.toFixed(4)
-      : "";
-  const userBilledText =
-    typeof detail.user_billed === "number" ? detail.user_billed.toFixed(4) : "";
-
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-        <span className={USAGE_BAR_LABEL_CLASS}>{label}</span>
-        <span>
-          {formatCompactUsageNumber(detail?.requests)}{" "}
-          {t("accounts.usageReqUnit")} /{" "}
-          {formatCompactUsageNumber(detail?.tokens)}{" "}
-          {t("accounts.usageTokUnit")}
-        </span>
-      </div>
-      {(accountBilledText || userBilledText) && (
-        <div
-          className={cn(
-            "pl-[46px] text-[10px]",
-            apiAccount
-              ? "flex flex-col items-start gap-0.5 font-medium"
-              : "flex items-center gap-1.5 text-muted-foreground/80",
-          )}
-        >
-          {accountBilledText && (
-            <span
-              className={cn(
-                apiAccount &&
-                  "text-emerald-700 dark:text-emerald-400",
-              )}
-            >
-              {t("accounts.accountBilledLabel")}: ${accountBilledText}
-              {detail.fast_billed != null && detail.fast_billed > 0 && (
-                <> ({t("accounts.windowFastBilled", { amount: detail.fast_billed.toFixed(4) })})</>
-              )}
-            </span>
-          )}
-          {userBilledText && (
-            <span
-              className={cn(
-                apiAccount && "text-sky-700 dark:text-sky-400",
-              )}
-            >
-              {t("accounts.userBilledLabel")}: ${userBilledText}
-            </span>
-          )}
-        </div>
-      )}
+    <div className="flex items-baseline gap-1.5">
+      <span className="w-10 shrink-0 text-[11px] font-medium text-muted-foreground">{label}</span>
+      <WindowBreakdown detail={detail} />
     </div>
   );
 }
@@ -14657,7 +14597,7 @@ function UsageCell({
   const has5hReset = !!account.reset_5h_at;
   const has7dReset = !!account.reset_7d_at;
 
-  const fiveHourPresent = has5h || has5hReset || (account.usage_5h_detail?.fast_billed ?? 0) > 0;
+  const fiveHourPresent = has5h || has5hReset || hasUsageWindowDetail(account.usage_5h_detail);
   const sevenDayPresent = has7d || has7dDetail || has7dReset;
   // 长窗口标签:free/team plan 实为月窗(约 30 天),按真实周期显示 30d 而非误标 7d (issue #324)
   const longWindowLabel = formatLongUsageWindowLabel(account);
@@ -14674,7 +14614,7 @@ function UsageCell({
     ) : (
       <UsageBar
         label="spark"
-        pct={0}
+        pct={null}
         resetAt={account.reset_spark_at}
       />
     )
@@ -14695,7 +14635,6 @@ function UsageCell({
             <UsageWindowStat
               label="5h"
               detail={account.usage_5h_detail}
-              apiAccount={account.openai_responses_api}
             />
           )}
           {sparkBar}
@@ -14731,7 +14670,6 @@ function UsageCell({
             <UsageWindowStat
               label={longWindowLabel}
               detail={account.usage_7d_detail}
-              apiAccount={account.openai_responses_api}
             />
           )}
         </div>
@@ -14755,7 +14693,6 @@ function UsageCell({
             <UsageWindowStat
               label={longWindowLabel}
               detail={account.usage_7d_detail}
-              apiAccount={account.openai_responses_api}
             />
           )}
         </div>
@@ -14906,7 +14843,7 @@ function ChannelMonitorRateBadge({
 // 成本列并排两套账,颜色区分口径:
 // 上行(石板色)是网关自己的日志算出来的,只含经由本网关转发的请求;
 // 下行(琥珀色)是 OpenAI 官方结算数,还包含用户直接用官方客户端的消耗。
-// 两者不该相等,差额就是账号在网关之外的用量。
+// 来源、时间跨度和同步时点不同，差额不能推算网关外用量。
 function BilledCell({
   account,
   channelMonitorBilling,
@@ -14942,12 +14879,11 @@ function BilledCell({
   }, [officialPending]);
   const officialSpinning = officialPending && !officialSpinTimedOut;
 
-  const h5 = typeof account.billed_5h === "number" ? account.billed_5h.toFixed(2) : null;
-  const d7 = typeof account.billed_7d === "number" ? account.billed_7d.toFixed(2) : null;
-  const has5hWindow =
-    (account.usage_percent_5h !== null && account.usage_percent_5h !== undefined) ||
-    !!account.reset_5h_at;
-  const visibleH5 = has5hWindow ? h5 : null;
+  const shortCost = account.usage_5h_detail?.account_billed ?? account.billed_5h;
+  const longCost = account.usage_7d_detail?.account_billed ?? account.billed_7d;
+  const has5hWindow = account.usage_percent_5h != null || !!account.reset_5h_at || hasUsageWindowDetail(account.usage_5h_detail);
+  const visibleH5 = has5hWindow && shortCost != null ? formatOfficialUSD(shortCost) : null;
+  const d7 = longCost != null ? formatOfficialUSD(longCost) : null;
   if (visibleH5 === null && d7 === null && !showOfficial && !showAPIBalance && !channelMonitorBilling?.data) {
     return <span className="text-[12px] text-muted-foreground">-</span>;
   }
@@ -14969,21 +14905,20 @@ function BilledCell({
       {showAPIBalance && <ChannelMonitorRateBadge billing={channelMonitorBilling} />}
       {(visibleH5 !== null || d7 !== null) && (
         <span
-          className="account-billed-gateway inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-slate-500/10 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-slate-700 ring-1 ring-inset ring-slate-500/20 dark:text-slate-300"
+          className="account-billed-gateway flex flex-col items-start text-[11px] tabular-nums text-foreground"
           title={t("accounts.billedGatewayHint")}
         >
-          <Wallet className="size-3 shrink-0" aria-hidden />
+          <span className="text-muted-foreground">{t("accounts.billedGatewayLabel")}</span>
           {visibleH5 !== null && (
             <span className="account-billed-window whitespace-nowrap">
               <span className="account-billed-window__label">5h: </span>
-              <span className="account-billed-window__value">${visibleH5}</span>
+              <span className="account-billed-window__value">{visibleH5}</span>
             </span>
           )}
-          {visibleH5 !== null && d7 !== null && <span className="account-billed-divider"> / </span>}
           {d7 !== null && (
             <span className="account-billed-window whitespace-nowrap">
               <span className="account-billed-window__label">{longLabel}: </span>
-              <span className="account-billed-window__value">${d7}</span>
+              <span className="account-billed-window__value">{d7}</span>
             </span>
           )}
         </span>

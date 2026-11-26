@@ -2242,25 +2242,9 @@ func (h *Handler) GetAccount(c *gin.Context) {
 	}
 	runtimeAccount := h.store.FindByID(id)
 	resp := h.buildAccountResponse(row, runtimeAccount, requestCounts[id], usage5h[id], usage7d[id], true)
-	if runtimeAccount != nil {
-		if resetAt := runtimeAccount.GetReset5hAt(); !resetAt.IsZero() {
-			if billed, billedErr := h.db.GetAccountBilledSince(ctx, id, resetAt.Add(-5*time.Hour)); billedErr == nil {
-				resp.Billed5h = &billed
-			} else {
-				log.Printf("获取账号 %d 5h 成本失败: %v", id, billedErr)
-			}
-		}
-		if resetAt := runtimeAccount.GetReset7dAt(); !resetAt.IsZero() {
-			windowDuration := 7 * 24 * time.Hour
-			if seconds := runtimeAccount.GetWindow7dSeconds(); seconds > 0 {
-				windowDuration = time.Duration(seconds) * time.Second
-			}
-			if billed, billedErr := h.db.GetAccountBilledSince(ctx, id, resetAt.Add(-windowDuration)); billedErr == nil {
-				resp.Billed7d = &billed
-			} else {
-				log.Printf("获取账号 %d 长窗口成本失败: %v", id, billedErr)
-			}
-		}
+	if err == nil {
+		resp.Billed5h = windowBilled(usage5h, id)
+		resp.Billed7d = windowBilled(usage7d, id)
 	}
 	c.JSON(http.StatusOK, resp)
 }

@@ -452,6 +452,10 @@
     }
   },
   "accounts": {
+    "billedGatewayLabel": "閘道成本",
+    "billedGatewayHint": "各視窗內閘道日誌的帳號成本，已含 Fast。沒有有效重設時間時依相同長度滾動統計。",
+    "billedOfficialLabel": "官方累計",
+    "billedOfficialHint": "將已同步的官方每日積分快照折算為美元，最多累計 365 天。包含閘道外用量，資料可能延遲，並非本視窗成本。",
     "windowFastBilled": "其中 Fast ${{amount}}",
     "uaDisplay": {
       "system": "系統：{{value}}", "client": "用戶端：{{value}}", "saved": "目前設定結果", "full": "查看完整 User-Agent",

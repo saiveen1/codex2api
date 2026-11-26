@@ -23,7 +23,7 @@ import {
 import Modal from './Modal'
 import { api } from '../api'
 import type { AccountKeyStat, AccountModelStat, AccountRow, AccountUsageDayStat, AccountUsageDetail, ResetCreditItem, WhamDailyUsageBreakdownEntry, WhamDailyUsageCycle, WhamDailyUsageItem, WhamDailyUsageResponse, WhamDailyUsageSplit } from '../types'
-import { formatUsageNumber, officialUsdFromDailyItems, supportsOfficialUsage, isWorkspaceCreditHardStop } from '../lib/usageFormat'
+import { formatUsageNumber, supportsOfficialUsage, isWorkspaceCreditHardStop } from '../lib/usageFormat'
 import { useShowFullUsageNumbers } from '../hooks/useShowFullUsageNumbers'
 import { getErrorMessage } from '../utils/error'
 import { formatBeijingTime } from '../utils/time'
@@ -63,11 +63,6 @@ const MODEL_METRIC_OPTIONS: Array<{ key: ModelMetricKey; labelKey: string }> = [
   { key: 'cost', labelKey: 'accounts.usageModelMetricCost' },
 ]
 
-export interface OfficialUsageRefreshPatch {
-  accountId: number
-  officialUsd: number | null
-}
-
 interface Props {
   account: AccountRow
   onClose: () => void
@@ -77,9 +72,8 @@ interface Props {
   // 打开时直接停在指定 tab（列表里点「官方结算」成本就该落在官方统计上，
   // 而不是让用户开完概览再自己切一次）。
   initialPage?: UsagePage
-  // 官方统计同步成功后回调:列表页立刻用这次 7d 额度改徽章,
-  // 并重拉 page-stats 对齐快照,不用等下一次翻页。
-  onOfficialUsageRefreshed?: (patch: OfficialUsageRefreshPatch) => void
+  // Reread the cumulative page stats rather than publishing this tab's range subtotal.
+  onOfficialUsageRefreshed?: () => void
   // 官方统计 tab 强制开关:Claude 等无 ChatGPT 官方结算链路的渠道传 false 隐藏;
   // 缺省时按 supportsOfficialUsage(account) 自动判定。
   officialUsage?: boolean
@@ -258,7 +252,7 @@ function UsageStatsContent({
   onRangeChange: (range: UsageRangeKey) => void
   onViewLogs: () => void
   showOfficialUsage: boolean
-  onOfficialUsageRefreshed?: (patch: OfficialUsageRefreshPatch) => void
+  onOfficialUsageRefreshed?: () => void
   // 官方统计 tab 强制开关:Claude 等无 ChatGPT 官方结算链路的渠道传 false 隐藏;
   // 缺省时按 supportsOfficialUsage(account) 自动判定。
   officialUsage?: boolean
@@ -522,7 +516,7 @@ function OfficialUsagePage({
   range: UsageRangeKey
   // 点进这个界面时先打上游，再让列表徽章跟上这次同步；换日期范围只读本地快照。
   autoRefresh?: boolean
-  onRefreshed?: (patch: OfficialUsageRefreshPatch) => void
+  onRefreshed?: () => void
 }) {
   const fullNumbers = useShowFullUsageNumbers()
   const { t } = useTranslation()
@@ -547,10 +541,7 @@ function OfficialUsagePage({
       setData(result)
       // 只有真刷成功了才通知列表(refresh_error 时快照没变,重拉没意义)。
       if (refresh && !result.refresh_error) {
-        onRefreshed?.({
-          accountId,
-          officialUsd: officialUsdFromDailyItems(result.items ?? []),
-        })
+        onRefreshed?.()
       }
     } catch (err) {
       if (requestSeq.current !== seq) return
