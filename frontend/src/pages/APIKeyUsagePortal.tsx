@@ -3,6 +3,7 @@ import KeyUsageAccounts from '../components/KeyUsageAccounts'
 import FeatureStatsPanel from '../components/FeatureStatsPanel'
 import { visibleKeyUsageViews, normalizeKeyUsageView, type KeyUsageView as UsageView } from '../lib/keyUsageViews'
 import { mediaBillingUnit } from '../lib/imageBilling'
+import { apiKeyQuotaCost } from '../lib/apiKeyQuota'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
@@ -755,9 +756,9 @@ function QuotaHero({ data, apiKey, quotaPercent, controls }: { data: PublicAPIKe
     .map((row) => ({
       id: row.label,
       label: row.label,
-      value: t('keyUsage.remainingAmount', { amount: formatCostCardValue(Math.max(0, row.limit - row.usage.user_billed)) }),
-      title: `${formatUSD(row.usage.user_billed)} / ${formatUSD(row.limit)}`,
-      percent: clampPercent((row.usage.user_billed / row.limit) * 100),
+      value: t('keyUsage.remainingAmount', { amount: formatCostCardValue(Math.max(0, row.limit - apiKeyQuotaCost(row.usage))) }),
+      title: `${formatUSD(apiKeyQuotaCost(row.usage))} / ${formatUSD(row.limit)}`,
+      percent: clampPercent((apiKeyQuotaCost(row.usage) / row.limit) * 100),
     }))
   const modelMeters = (data.model_request_usage ?? []).map((item) => ({
     id: item.rule_id,
@@ -936,7 +937,9 @@ function WindowUsageCard({ limits, windows }: { limits: APIKeyLimits; windows: P
 }
 
 function WindowRow({ label, usage, costLimit, tokenLimit }: { label: string; usage: PublicAPIKeyWindowUsage; costLimit: number; tokenLimit: number }) {
-  const costPct = costLimit > 0 ? clampPercent((usage.user_billed / costLimit) * 100) : 0
+  const { t } = useTranslation()
+  const quotaCost = apiKeyQuotaCost(usage)
+  const costPct = costLimit > 0 ? clampPercent((quotaCost / costLimit) * 100) : 0
   const tokenPct = tokenLimit > 0 ? clampPercent((usage.tokens / tokenLimit) * 100) : 0
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3">
@@ -945,9 +948,17 @@ function WindowRow({ label, usage, costLimit, tokenLimit }: { label: string; usa
         <span className="text-xs tabular-nums text-muted-foreground">{formatNumber(usage.requests)} req</span>
       </div>
       <div className="space-y-2">
-        <UsageLimitBar label="USD" used={formatUSD(usage.user_billed)} limit={costLimit > 0 ? formatUSD(costLimit) : '-'} percent={costPct} />
+        <UsageLimitBar label="USD" used={formatUSD(quotaCost)} limit={costLimit > 0 ? formatUSD(costLimit) : '-'} percent={costPct} />
         <UsageLimitBar label="Tok" used={formatCompact(usage.tokens)} limit={tokenLimit > 0 ? formatCompact(tokenLimit) : '-'} percent={tokenPct} />
       </div>
+      {(usage.cost_exempted ?? 0) > 0 ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          {t('keyUsage.windowCostExemption', {
+            actual: formatUSD(usage.user_billed),
+            exempted: formatUSD(usage.cost_exempted ?? 0),
+          })}
+        </p>
+      ) : null}
       <WindowResetHint usage={usage} />
     </div>
   )

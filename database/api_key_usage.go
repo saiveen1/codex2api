@@ -15,14 +15,22 @@ import (
 )
 
 // APIKeyWindowUsage 表示一个 API Key 在某时间窗口内的累计使用量。
-// 仅排除 499 客户端取消请求,保持与 GetUsageStats 一致的语义。
+// 排除 499 客户端取消请求及仅供审计的 dispatch terminal diagnostics。
 type APIKeyWindowUsage struct {
 	Requests   int64   `json:"requests"`
 	Tokens     int64   `json:"tokens"`
 	UserBilled float64 `json:"user_billed"`
+	// CostExempted only adjusts the 30-day cost limit, never historical bills
+	// or the request/token totals returned in this window.
+	CostExempted float64 `json:"cost_exempted,omitempty"`
 	// OldestAt 是窗口内最早一笔用量的时间,窗口内无用量时为空。滑动窗口下
 	// OldestAt+窗口长度 即额度开始回落的时刻,供自助用量页展示(issue #460)。
 	OldestAt *time.Time `json:"oldest_at,omitempty"`
+}
+
+// QuotaCost returns the cost counted against a window's monetary limit.
+func (u APIKeyWindowUsage) QuotaCost() float64 {
+	return max(0, u.UserBilled-u.CostExempted)
 }
 
 // StartOfDay 返回 t 所在自然日的零点(保留 t 的时区)。自然日限额与
@@ -33,12 +41,13 @@ func StartOfDay(t time.Time) time.Time {
 
 // GetAPIKeyWindowUsage 聚合指定 API Key 在 [now-window, now] 时间窗口内的使用情况。
 // 用于 API Key 级别的滑动窗口限额校验(rpm/rpd/cost_5h/cost_7d/token_5h/token_7d)。
-// 手动额度重置只截断 5h/7d 窗口，RPM/RPD/30d 与自然日窗口保持原有口径。
+// 普通重置只截断 5h/7d；独立周重置排除已标记的 7d 日志并返回 30d 费用免计额。
+// RPM/RPD、自然日以及原始 30d 费用和 token 总量不受影响。
 func (db *DB) GetAPIKeyWindowUsage(ctx context.Context, apiKeyID int64, window time.Duration) (*APIKeyWindowUsage, error) {
 	if window <= 0 {
 		return &APIKeyWindowUsage{}, nil
 	}
-	return db.getAPIKeyUsageSince(ctx, apiKeyID, time.Now().Add(-window), isResettableAPIKeyWindow(window))
+	return db.getAPIKeyUsageSince(ctx, apiKeyID, time.Now().Add(-window), window)
 }
 
 func isResettableAPIKeyWindow(window time.Duration) bool {
@@ -49,45 +58,30 @@ func isResettableAPIKeyWindow(window time.Duration) bool {
 // (issue #460)以当天零点为 since 复用同一条查询。
 // 索引 idx_usage_logs_api_key_created_at 让该查询在数据量大时仍 O(log n)。
 func (db *DB) GetAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since time.Time) (*APIKeyWindowUsage, error) {
-	return db.getAPIKeyUsageSince(ctx, apiKeyID, since, false)
+	return db.getAPIKeyUsageSince(ctx, apiKeyID, since, 0)
 }
 
-func (db *DB) getAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since time.Time, honorReset bool) (*APIKeyWindowUsage, error) {
+func (db *DB) getAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since time.Time, window time.Duration) (*APIKeyWindowUsage, error) {
 	if apiKeyID <= 0 || since.IsZero() {
 		return &APIKeyWindowUsage{}, nil
 	}
 	usage := &APIKeyWindowUsage{}
+	joins, filters, credit := apiKeyWindowQuotaSQL(window)
 	query := `
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(total_tokens), 0),
-			COALESCE(SUM(user_billed), 0),
-			MIN(created_at)
-		FROM usage_logs
-		WHERE api_key_id = $1
-		  AND created_at >= $2
-		  AND status_code <> 499
-		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
-	`
-	if honorReset {
-		query = `
-			SELECT
-				COUNT(*),
-				COALESCE(SUM(u.total_tokens), 0),
-				COALESCE(SUM(u.user_billed), 0),
-				MIN(u.created_at)
-			FROM usage_logs u
-			JOIN api_keys k ON k.id = u.api_key_id
-			WHERE u.api_key_id = $1
-			  AND u.created_at >= $2
-			  AND (k.last_reset_at IS NULL OR u.created_at >= k.last_reset_at)
-			  AND u.status_code <> 499
-			  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'
-		`
-	}
+			COALESCE(SUM(u.total_tokens), 0),
+			COALESCE(SUM(u.user_billed), 0),
+			MIN(u.created_at),
+			COALESCE(SUM(` + credit + `), 0)
+		FROM usage_logs u ` + joins + `
+		WHERE u.api_key_id = $1
+		  AND u.created_at >= $2
+		  AND u.status_code <> 499
+		  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'` + filters
 	var oldestRaw interface{}
 	err := db.conn.QueryRowContext(ctx, query, apiKeyID, db.timeArg(since)).Scan(
-		&usage.Requests, &usage.Tokens, &usage.UserBilled, &oldestRaw,
+		&usage.Requests, &usage.Tokens, &usage.UserBilled, &oldestRaw, &usage.CostExempted,
 	)
 	if err != nil {
 		return nil, err
@@ -98,12 +92,43 @@ func (db *DB) getAPIKeyUsageSince(ctx context.Context, apiKeyID int64, since tim
 	return usage, nil
 }
 
+// The two sources are disjoint by construction: retained audit rows (including
+// pre-upgrade history) and just the accounting fields for omitted audit rows.
+const scopeWindowEvents = `(SELECT api_key_id, account_id, created_at, total_tokens, user_billed
+	FROM usage_logs WHERE status_code <> 499
+	  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
+	UNION ALL SELECT api_key_id, account_id, created_at, total_tokens, user_billed
+	FROM api_key_scope_unaudited_usage) AS scope_events`
+
+func (db *DB) recordUnauditedScopeUsage(ctx context.Context, tx *sql.Tx, batch []usageLogEntry) error {
+	var values []string
+	var args []any
+	for _, e := range batch {
+		if e.StoreUsageLog || e.APIKeyID <= 0 || e.AccountID <= 0 || e.StatusCode == 499 || e.InternalReason == "dispatch_terminal_diagnostic" {
+			continue
+		}
+		n := len(args)
+		values = append(values, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4, n+5))
+		args = append(args, e.APIKeyID, e.AccountID, db.usageLogCreatedAtArg(e.CreatedAt), e.TotalTokens, e.UserBilled)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO api_key_scope_unaudited_usage
+		(api_key_id, account_id, created_at, total_tokens, user_billed) VALUES `+strings.Join(values, ","), args...); err != nil {
+		return err
+	}
+	// No supported scope window needs more than 30 days of filtered traffic.
+	_, err := tx.ExecContext(ctx, `DELETE FROM api_key_scope_unaudited_usage WHERE created_at < $1`, db.timeArg(time.Now().Add(-30*24*time.Hour)))
+	return err
+}
+
 // GetAPIKeyAccountWindowUsage 聚合指定 API Key 在窗口内**按账号拆分**的使用情况,
 // 供 scope 维度限额(issue #439)判定。一次查询即可覆盖该 Key 的全部 scope 条目:
 // 分组维度在调用方按账号当前所属分组折算,因此分组成员变动即时生效,无需在
 // usage_logs 里冗余 group_id。
 //
-// 复用索引 idx_usage_logs_api_key_created_at,扫描量与同窗口的 Key 级 cost 聚合同级。
+// 两个来源均按 (api_key_id, created_at) 索引过滤；未保留审计明细的事件只保留最长 scope 窗口。
 // 已从账号池删除的账号仍会出现在返回值里,但调用方无法把它折算到分组——这部分历史
 // 用量在分组维度上会被忽略(账号维度仍准确)。
 func (db *DB) GetAPIKeyAccountWindowUsage(ctx context.Context, apiKeyID int64, window time.Duration) (map[int64]APIKeyWindowUsage, error) {
@@ -117,11 +142,9 @@ func (db *DB) GetAPIKeyAccountWindowUsage(ctx context.Context, apiKeyID int64, w
 			COUNT(*),
 			COALESCE(SUM(total_tokens), 0),
 			COALESCE(SUM(user_billed), 0)
-		FROM usage_logs
+		FROM `+scopeWindowEvents+`
 		WHERE api_key_id = $1
 		  AND created_at >= $2
-		  AND status_code <> 499
-		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY account_id
 	`, apiKeyID, db.timeArg(since))
 	if err != nil {
@@ -148,7 +171,7 @@ func (db *DB) GetAPIKeyAccountWindowUsage(ctx context.Context, apiKeyID int64, w
 }
 
 // GetAPIKeyAccountWindowsUsage aggregates all supported scope windows in one
-// index range scan. The previous caller issued one GROUP BY query per window,
+// range query. The previous caller issued one GROUP BY query per window,
 // making the 30-day view scan the same rows up to four times.
 func (db *DB) GetAPIKeyAccountWindowsUsage(ctx context.Context, apiKeyID int64) (map[string]map[int64]APIKeyWindowUsage, error) {
 	out := make(map[string]map[int64]APIKeyWindowUsage, len(APIKeyScopeWindows))
@@ -176,9 +199,8 @@ func (db *DB) GetAPIKeyAccountWindowsUsage(ctx context.Context, apiKeyID int64) 
 			COALESCE(SUM(CASE WHEN created_at >= $4 THEN total_tokens ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN created_at >= $4 THEN user_billed ELSE 0 END), 0),
 			COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(user_billed), 0)
-		FROM usage_logs
-		WHERE api_key_id = $1 AND created_at >= $5 AND status_code <> 499
-		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
+		FROM `+scopeWindowEvents+`
+		WHERE api_key_id = $1 AND created_at >= $5
 		GROUP BY account_id
 	`, apiKeyID, since5h, since1d, since7d, since30d)
 	if err != nil {
@@ -238,11 +260,9 @@ func (db *DB) GetAPIKeysAccountWindowUsage(ctx context.Context, apiKeyIDs []int6
 			COUNT(*),
 			COALESCE(SUM(total_tokens), 0),
 			COALESCE(SUM(user_billed), 0)
-		FROM usage_logs
+		FROM `+scopeWindowEvents+`
 		WHERE api_key_id IN (%s)
 		  AND created_at >= %s
-		  AND status_code <> 499
-		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
 		GROUP BY api_key_id, account_id
 	`, strings.Join(placeholders, ","), sincePlaceholder)
 
@@ -668,47 +688,34 @@ func (db *DB) ListAPIKeyLastUsedAt(ctx context.Context) (map[int64]time.Time, er
 	return result, nil
 }
 
-// GetAllAPIKeysWindowCost 批量聚合所有 API Key 在 [now-window, now] 窗口内的 user_billed。
+// GetAllAPIKeysWindowCost 批量聚合所有 API Key 的窗口限额计费量（30d 扣除有效免计额）。
 // 返回 map[apiKeyID] → cost。仅包含有使用记录的 key。
 func (db *DB) GetAllAPIKeysWindowCost(ctx context.Context, window time.Duration) (map[int64]float64, error) {
 	if window <= 0 {
 		return make(map[int64]float64), nil
 	}
-	return db.getAllAPIKeysCostSince(ctx, time.Now().Add(-window), isResettableAPIKeyWindow(window))
+	return db.getAllAPIKeysCostSince(ctx, time.Now().Add(-window), window)
 }
 
 // GetAllAPIKeysCostSince 批量聚合所有 API Key 自 since 起的 user_billed。
 // 自然日限额(issue #460)以当天零点为 since 复用该查询。
 func (db *DB) GetAllAPIKeysCostSince(ctx context.Context, since time.Time) (map[int64]float64, error) {
-	return db.getAllAPIKeysCostSince(ctx, since, false)
+	return db.getAllAPIKeysCostSince(ctx, since, 0)
 }
 
-func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, honorReset bool) (map[int64]float64, error) {
+func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, window time.Duration) (map[int64]float64, error) {
 	if since.IsZero() {
 		return make(map[int64]float64), nil
 	}
+	joins, filters, credit := apiKeyWindowQuotaSQL(window)
 	query := `
-		SELECT api_key_id, COALESCE(SUM(user_billed), 0)
-		FROM usage_logs
-		WHERE api_key_id > 0
-		  AND created_at >= $1
-		  AND status_code <> 499
-		  AND COALESCE(internal_reason, '') <> 'dispatch_terminal_diagnostic'
-		GROUP BY api_key_id
-	`
-	if honorReset {
-		query = `
-			SELECT u.api_key_id, COALESCE(SUM(u.user_billed), 0)
-			FROM usage_logs u
-			JOIN api_keys k ON k.id = u.api_key_id
-			WHERE u.api_key_id > 0
-			  AND u.created_at >= $1
-			  AND (k.last_reset_at IS NULL OR u.created_at >= k.last_reset_at)
-			  AND u.status_code <> 499
-			  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'
-			GROUP BY u.api_key_id
-		`
-	}
+		SELECT u.api_key_id, COALESCE(SUM(u.user_billed), 0) - COALESCE(SUM(` + credit + `), 0)
+		FROM usage_logs u ` + joins + `
+		WHERE u.api_key_id > 0
+		  AND u.created_at >= $1
+		  AND u.status_code <> 499
+		  AND COALESCE(u.internal_reason, '') <> 'dispatch_terminal_diagnostic'` + filters + `
+		GROUP BY u.api_key_id`
 	rows, err := db.conn.QueryContext(ctx, query, db.timeArg(since))
 	if err != nil {
 		return nil, err
@@ -721,6 +728,9 @@ func (db *DB) getAllAPIKeysCostSince(ctx context.Context, since time.Time, honor
 		var cost float64
 		if err := rows.Scan(&id, &cost); err != nil {
 			return nil, err
+		}
+		if window == 30*24*time.Hour {
+			cost = max(0, cost)
 		}
 		result[id] = cost
 	}
@@ -1009,11 +1019,14 @@ func (db *DB) apiKeySelfUsageWhere(apiKeyID int64, rangeStart, rangeEnd time.Tim
 // 区间、窗口与 RPM 在 Go 里按段合并。分组只有几十到几百行。
 // 整点小时读用量小时汇总,只有边界所在的小时回明细扫描,30 天区间的明细读取量从全部行
 // 降到最多几个小时。
-// 窗口口径与限额判定用的 GetAPIKeyWindowUsage/GetAPIKeyUsageSince 一致:排除 499,
-// 5h/7d 从手动重置时刻起算。
+// 窗口口径与限额判定一致：排除 499 和终止诊断，普通重置截断 5h/7d，
+// 独立周重置仅调整 7d 窗口及 30d 费用免计额。
 func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUsageReport, apiKeyID int64, rangeStart, rangeEnd, now time.Time) error {
 	var lastResetRaw interface{}
-	err := db.conn.QueryRowContext(ctx, `SELECT last_reset_at FROM api_keys WHERE id = $1`, apiKeyID).Scan(&lastResetRaw)
+	var hasWeeklyReset bool
+	err := db.conn.QueryRowContext(ctx, `SELECT last_reset_at,
+		EXISTS (SELECT 1 FROM api_key_weekly_resets r WHERE r.api_key_id = api_keys.id)
+		FROM api_keys WHERE id = $1`, apiKeyID).Scan(&lastResetRaw, &hasWeeklyReset)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -1287,6 +1300,9 @@ func (db *DB) fillAPIKeySelfAggregates(ctx context.Context, report *APIKeySelfUs
 		endpointCounts[name] = item.Requests
 	}
 	report.LogEndpoints = apiKeySelfOptionsByCount(endpointCounts)
+	if hasWeeklyReset {
+		return db.applyAPIKeyWeeklyResetToReport(ctx, report, apiKeyID, now)
+	}
 	return nil
 }
 
