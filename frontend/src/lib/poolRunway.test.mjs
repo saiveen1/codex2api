@@ -35,6 +35,15 @@ test("hasBurnPrediction skips premium 5h when snapshot is missing (#382)", () =>
   assert.equal(hasBurnPrediction({ ...account, usage_percent_5h: 40 }, "5h"), true);
 });
 
+test("Business aliases use the Codex 5h window only when observed", () => {
+  for (const plan of ["business", " Self_serve_business_usage_based ", "self_serve_business_prolite"]) {
+    const account = baseAccount({ plan_type: plan });
+    assert.equal(hasBurnPrediction(account, "5h"), false);
+    assert.equal(hasBurnPrediction({ ...account, usage_percent_5h: 40 }, "5h"), true);
+  }
+  assert.equal(hasBurnPrediction(baseAccount({ plan_type: "free", usage_percent_5h: 40 }), "5h"), false);
+});
+
 test("Claude Max plans participate in native 5h burn prediction", () => {
   assert.equal(isClaudeUsagePlan("max-5x"), true);
   assert.equal(isClaudeUsagePlan("max-20x"), true);

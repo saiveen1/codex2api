@@ -1,5 +1,6 @@
 import { createLucideIcon, DatabaseZap } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { getUsageResponseTiming } from '../lib/diagnosticContext'
 import { cn } from '../lib/utils'
 import { getUsageTokenBreakdown } from '../lib/usageTokenDisplay'
 import { formatUsageNumber as formatTokens } from '../lib/usageFormat'
@@ -22,6 +23,7 @@ type UsageMetricLog = {
   upstream_first_content_ms?: number
   upstream_round_index?: number
   hidden_continuation_round?: boolean
+  diagnostic_context?: string
 }
 
 const usageTableMonoClass = 'font-mono text-[13px] tabular-nums'
@@ -119,35 +121,36 @@ export function TokensPerSecCell({ log }: { log: UsageMetricLog }) {
   )
 }
 
-/** 首字 + 总耗时聚合列：横向双色胶囊，避免把整行撑高。 */
+/** Same-round response timings when measured; legacy first token stays distinct. */
 export function TimingCell({ log }: { log: UsageMetricLog }) {
   const { t } = useTranslation()
   const firstMs = log.first_token_ms || 0
   const durationMs = log.duration_ms || 0
-  if (firstMs <= 0 && durationMs <= 0) {
+  const responseTiming = getUsageResponseTiming(log.diagnostic_context)
+  if (!responseTiming && firstMs <= 0 && durationMs <= 0) {
     return <span className={`${usageTableMonoClass} text-muted-foreground/50`}>-</span>
   }
 
-  const firstLabel = firstMs > 0 ? formatLatencyMs(firstMs) : '-'
-  const durationLabel = durationMs > 0 ? formatLatencyMs(durationMs) : '-'
+  const legacyLabel = t('usage.timingFirst')
+  const durationLabel = t('usage.timingDuration')
+  const firstSamples = responseTiming ? [
+    { label: t('usage.timingFirstFrame', { defaultValue: 'First frame' }), ms: responseTiming.firstFrameMs },
+    { label: t('usage.timingFirstEffective', { defaultValue: 'First output' }), ms: responseTiming.firstEffectiveMs ?? 0 },
+  ].filter(({ ms }) => ms > 0) : [{ label: legacyLabel, ms: firstMs }]
   const title = [
-    firstMs > 0 ? `${t('usage.timingFirst')}: ${firstLabel}` : null,
-    durationMs > 0 ? `${t('usage.timingDuration')}: ${durationLabel}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+    ...firstSamples.filter(({ ms }) => ms > 0).map(({ label, ms }) => `${label}: ${ms} ms`),
+    responseTiming && firstMs > 0 ? `${legacyLabel}: ${firstMs} ms` : null,
+    durationMs > 0 ? `${durationLabel}: ${formatLatencyMs(durationMs)}` : null,
+  ].filter(Boolean).join(' · ')
 
   return (
-    <div className="inline-flex items-center gap-1" title={title || undefined}>
-      <UsageTimingBadge
-        kind="first"
-        label={t('usage.timingFirst')}
-        value={formatLatencyMs(firstMs)}
-        tone={firstTokenTone(firstMs)}
-      />
+    <div className="inline-flex flex-wrap items-center gap-1" title={title || undefined}>
+      {firstSamples.map(({ label, ms }) => (
+        <UsageTimingBadge key={label} kind="first" label={label} value={formatLatencyMs(ms)} tone={firstTokenTone(ms)} />
+      ))}
       <UsageTimingBadge
         kind="duration"
-        label={t('usage.timingDuration')}
+        label={durationLabel}
         value={formatLatencyMs(durationMs)}
         tone={durationTone(durationMs)}
       />

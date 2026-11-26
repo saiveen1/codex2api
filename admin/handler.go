@@ -1992,6 +1992,7 @@ type accountUsageWindow struct {
 	Requests             int64              `json:"requests"`
 	Tokens               int64              `json:"tokens"`
 	AccountBilled        float64            `json:"account_billed"`
+	FastBilled           float64            `json:"fast_billed,omitempty"`
 	UserBilled           float64            `json:"user_billed"`
 	ModelCounts          map[string]int64   `json:"model_counts,omitempty"`
 	ModelSuccessCounts   map[string]int64   `json:"model_success_counts,omitempty"`

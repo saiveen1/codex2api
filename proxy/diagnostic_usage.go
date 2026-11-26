@@ -21,6 +21,15 @@ func compactDiagnosticRequest(s *diagnosticRequestShape) *diagnosticRequestShape
 	return &copy
 }
 
+func encodeUsageResponseTiming(timing *database.UsageResponseTiming, captureStatus string) string {
+	data, _ := json.Marshal(struct {
+		Schema        int                           `json:"schema"`
+		CaptureStatus string                        `json:"capture_status,omitempty"`
+		Timing        *database.UsageResponseTiming `json:"response_timing"`
+	}{2, captureStatus, timing})
+	return string(data)
+}
+
 func encodeDiagnosticEvent(e diagnosticEvent) string {
 	e.Schema = 2
 	status := e.OutcomeStatus
@@ -67,6 +76,9 @@ func encodeDiagnosticEvent(e diagnosticEvent) string {
 		e.Error.Evidence, e.Attempt.Error.Evidence = nil, nil
 		e.Error.EvidenceTruncated, e.Attempt.Error.EvidenceTruncated = true, true
 		data, _ = json.Marshal(e)
+	}
+	if len(data) > database.MaxUsageDiagnosticContextBytes && e.ResponseTiming != nil {
+		return encodeUsageResponseTiming(e.ResponseTiming, "size_limit")
 	}
 	return database.NormalizeUsageDiagnosticContext(string(data))
 }

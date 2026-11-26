@@ -9,7 +9,9 @@ import { AccountCardSurface, AccountCardHeader, AccountCardBody, AccountCardDeta
 import AccountUsageBar from "../components/AccountUsageBar";
 import AccountUAStatus from "../components/AccountUAStatus";
 import APIKeyMultiSelect from "../components/APIKeyMultiSelect";
-import PlanBadge, { normalizePlanType } from "../components/AccountPlanBadge";
+import PlanBadge from "../components/AccountPlanBadge";
+import { isPremiumUsagePlan, normalizePlanType } from "../lib/accountPlans";
+import { splitAccountImportFiles } from "../lib/accountImportBatches";
 import { useIntelligenceBars } from "../hooks/useIntelligenceBars";
 import AccountIntelligenceBar, { AccountIntelligenceActions } from "../components/AccountIntelligenceBar";
 import type { IntelligenceBar } from "../lib/intelligenceCheck";
@@ -290,11 +292,8 @@ import ChipInput from "../components/ChipInput";
 
 const OPERATION_PROGRESS_FLUSH_INTERVAL_MS = 200;
 
-// 账号导入的体积约束。后端对导入端点放宽到 200MB;单个文件无法再切分,超过
-// 上限直接拒绝。多文件按累计大小切成多批,每批控制在 150MB 内(留余量给
-// multipart 边界与其它表单字段),避免单个请求体触发后端上限。
+// Single files cannot be split; multipart batch limits are applied separately.
 const IMPORT_MAX_FILE_BYTES = 200 * 1024 * 1024;
-const IMPORT_BATCH_MAX_BYTES = 150 * 1024 * 1024;
 const API_BALANCE_CACHE_TTL_MS = 60_000;
 const API_BALANCE_ERROR_CACHE_TTL_MS = 15_000;
 
@@ -398,25 +397,6 @@ function AccountConcurrencyBadge({ account }: { account: AccountRow }) {
       )}
     </span>
   );
-}
-
-// splitFilesIntoBatches 按累计字节大小把文件分批。单个文件即便超过 batchMax
-// 也自成一批(交由后端上限兜底),保证每个文件都被投递。
-function splitFilesIntoBatches(files: File[], batchMax: number): File[][] {
-  const batches: File[][] = [];
-  let current: File[] = [];
-  let currentSize = 0;
-  for (const file of files) {
-    if (current.length > 0 && currentSize + file.size > batchMax) {
-      batches.push(current);
-      current = [];
-      currentSize = 0;
-    }
-    current.push(file);
-    currentSize += file.size;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches.length > 0 ? batches : [[]];
 }
 
 const ACCOUNT_ANALYSIS_VISIBILITY_KEY = "codex2api:accounts:analysis-visible";
@@ -4435,9 +4415,8 @@ export default function Accounts() {
       return false;
     }
 
-    // 按累计大小把文件切成多批,每批控制在 IMPORT_BATCH_MAX_BYTES 内,避免单个
-    // 请求体过大触发后端限制;后端导入无状态且按凭据幂等去重,分批完全安全。
-    const batches = splitFilesIntoBatches(files, IMPORT_BATCH_MAX_BYTES);
+    if (!files.length) return false;
+    const batches = splitAccountImportFiles(files);
 
     setImporting(true);
     setImportProgress({
@@ -13118,23 +13097,8 @@ function isActiveAutoPauseWindowReached(
   return value / 100 >= threshold;
 }
 
-// Plans that carry a rolling 5h usage window (mirrors Go isPremium5hPlan).
-// k12/edu are paid education workspaces with 5h limits (issue #307/#309).
 function isSparkUsagePlan(planType?: string): boolean {
   return normalizePlanType(planType) === "pro";
-}
-
-function isPremiumUsagePlan(planType?: string): boolean {
-  return [
-    "plus",
-    "pro",
-    "team",
-    "teamplus",
-    "k12",
-    "edu",
-    "education",
-    "go",
-  ].includes(normalizePlanType(planType));
 }
 
 type RateLimitWindow = "5h" | "7d";
@@ -13259,34 +13223,6 @@ function getRateLimitedWindowStats(accounts: AccountRow[]): {
     ...stats,
     total: stats.fiveHour + stats.sevenDay,
   };
-}
-
-function isSubscriptionPlan(planType?: string): boolean {
-  const normalized = normalizePlanType(planType);
-  if (!normalized || normalized === "free") return false;
-  if (
-    [
-      "plus",
-      "pro",
-      "team",
-      "teamplus",
-      "enterprise",
-      "business",
-      "edu",
-      "education",
-      "k12",
-      "go",
-    ].includes(normalized)
-  ) {
-    return true;
-  }
-  return (
-    normalized.includes("plus") ||
-    normalized.startsWith("pro") ||
-    normalized.startsWith("team") ||
-    normalized.includes("enterprise") ||
-    normalized.includes("business")
-  );
 }
 
 function OperationProgressToast({
@@ -14437,10 +14373,14 @@ function hasUsageWindowDetail(detail?: AccountRow["usage_5h_detail"]): boolean {
 const USAGE_BAR_LABEL_CLASS = "w-10 shrink-0 text-[11px] font-medium text-muted-foreground";
 function UsageBar({ label, pct, resetAt, detail }: { label: string; pct: number; resetAt?: string; detail?: AccountRow["usage_5h_detail"] }) {
   const { t } = useTranslation();
+  const fast = detail?.fast_billed;
   const detailText = hasUsageWindowDetail(detail)
     ? `${formatCompactUsageNumber(detail?.requests)} ${t("accounts.usageReqUnit")} / ${formatCompactUsageNumber(detail?.tokens)} ${t("accounts.usageTokUnit")}`
     : undefined;
-  return <AccountUsageBar label={label} pct={pct} resetAt={resetAt} detailText={detailText} />;
+  const withFast = detailText && fast != null && fast > 0
+    ? `${detailText} · ${t("accounts.windowFastBilled", { amount: fast.toFixed(4) })}`
+    : detailText;
+  return <AccountUsageBar label={label} pct={pct} resetAt={resetAt} detailText={withFast} />;
 }
 
 function UsageWindowStat({
@@ -14490,6 +14430,9 @@ function UsageWindowStat({
               )}
             >
               {t("accounts.accountBilledLabel")}: ${accountBilledText}
+              {detail.fast_billed != null && detail.fast_billed > 0 && (
+                <> ({t("accounts.windowFastBilled", { amount: detail.fast_billed.toFixed(4) })})</>
+              )}
             </span>
           )}
           {userBilledText && (
@@ -14714,7 +14657,7 @@ function UsageCell({
   const has5hReset = !!account.reset_5h_at;
   const has7dReset = !!account.reset_7d_at;
 
-  const fiveHourPresent = has5h || has5hReset;
+  const fiveHourPresent = has5h || has5hReset || (account.usage_5h_detail?.fast_billed ?? 0) > 0;
   const sevenDayPresent = has7d || has7dDetail || has7dReset;
   // 长窗口标签:free/team plan 实为月窗(约 30 天),按真实周期显示 30d 而非误标 7d (issue #324)
   const longWindowLabel = formatLongUsageWindowLabel(account);
@@ -14738,8 +14681,6 @@ function UsageCell({
   ) : null;
 
   if (showFiveHour) {
-    if (!has5h && !has7d && !has7dDetail && !has5hReset && !has7dReset && !showSpark)
-      return <span className="text-[12px] text-muted-foreground">-</span>;
     return (
       <div className={`account-usage-cell ${wide ? "w-full" : "w-56"} flex items-start gap-1`}>
         <div className="account-usage-windows w-[188px] space-y-1.5">

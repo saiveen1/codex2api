@@ -1844,6 +1844,7 @@ func (h *Handler) logContinueThinkingRounds(c *gin.Context, res continueFoldResu
 		round.Trace.apply(logInput)
 		logInput.UpstreamRoundIndex = index
 		logInput.HiddenContinuationRound = true
+		round.Trace.round.applyResponseTiming(logInput)
 		if round.Usage != nil {
 			logInput.PromptTokens = round.Usage.PromptTokens
 			logInput.CompletionTokens = round.Usage.CompletionTokens
@@ -6423,6 +6424,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		if finalRoundIndex > 0 {
 			logInput.UpstreamRoundIndex = finalRoundIndex
 			finalRoundTiming.apply(logInput)
+			finalRoundTiming.applyResponseTiming(logInput)
 		}
 		applyImageUsageLogInfo(logInput, imageLogInfo)
 		// sentModel 优先取 attempt 实发模型（账号级映射可能改写 attemptEffectiveModel），

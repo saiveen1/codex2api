@@ -509,15 +509,17 @@ func TestGetAccountPageStatsIncludesTodayModelCounts(t *testing.T) {
 	}
 }
 
-func insertAccountUsageLog(t *testing.T, db *database.DB, id int64, tokens int, createdAt time.Time) {
+func insertAccountUsageLog(t *testing.T, db *database.DB, id int64, tokens int, createdAt time.Time, billingTier string) {
 	t.Helper()
 	if err := db.InsertUsageLog(context.Background(), &database.UsageLogInput{
-		AccountID:   id,
-		Endpoint:    "/v1/messages",
-		Model:       "claude-sonnet-4-6",
-		StatusCode:  http.StatusOK,
-		TotalTokens: tokens,
-		CreatedAt:   createdAt,
+		AccountID:          id,
+		Endpoint:           "/v1/responses",
+		Model:              "gpt-5.4",
+		StatusCode:         http.StatusOK,
+		InputTokens:        tokens,
+		TotalTokens:        tokens,
+		BillingServiceTier: billingTier,
+		CreatedAt:          createdAt,
 	}); err != nil {
 		t.Fatalf("InsertUsageLog: %v", err)
 	}
@@ -549,8 +551,8 @@ func TestGetAccountPageStatsAlignsUsageWithOfficial5hReset(t *testing.T) {
 	}
 
 	now := time.Now()
-	insertAccountUsageLog(t, db, id, 100, now.Add(-4*time.Hour))
-	insertAccountUsageLog(t, db, id, 40, now.Add(-10*time.Minute))
+	insertAccountUsageLog(t, db, id, 100, now.Add(-4*time.Hour), "fast")
+	insertAccountUsageLog(t, db, id, 40, now.Add(-10*time.Minute), "priority")
 	db.FlushUsageLogs()
 
 	handler := newAccountPageStatsHandler(t, db)
@@ -568,6 +570,9 @@ func TestGetAccountPageStatsAlignsUsageWithOfficial5hReset(t *testing.T) {
 	if detail == nil || detail.Requests != 1 || detail.Tokens != 40 {
 		t.Fatalf("usage_5h_detail = %+v, want 1 request / 40 tokens from the current official window", detail)
 	}
+	if detail.FastBilled <= 0 || detail.FastBilled != detail.AccountBilled {
+		t.Fatalf("page-stats 5h usage = %+v, want all current-window account cost in Fast", detail)
+	}
 
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
@@ -578,13 +583,21 @@ func TestGetAccountPageStatsAlignsUsageWithOfficial5hReset(t *testing.T) {
 		t.Fatalf("GetAccount status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 	var accountPayload struct {
-		Usage5hDetail *accountUsageWindow `json:"usage_5h_detail"`
+		Usage5hDetail *struct {
+			Requests      int64   `json:"requests"`
+			Tokens        int64   `json:"tokens"`
+			AccountBilled float64 `json:"account_billed"`
+			FastBilled    float64 `json:"fast_billed"`
+		} `json:"usage_5h_detail"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &accountPayload); err != nil {
 		t.Fatalf("decode GetAccount: %v", err)
 	}
 	if accountPayload.Usage5hDetail == nil || accountPayload.Usage5hDetail.Requests != 1 || accountPayload.Usage5hDetail.Tokens != 40 {
 		t.Fatalf("GetAccount usage_5h_detail = %+v, want 1 request / 40 tokens", accountPayload.Usage5hDetail)
+	}
+	if accountPayload.Usage5hDetail.FastBilled != detail.FastBilled || accountPayload.Usage5hDetail.AccountBilled != detail.AccountBilled {
+		t.Fatalf("GetAccount usage_5h_detail = %+v, want page-stats amounts %+v", accountPayload.Usage5hDetail, detail)
 	}
 }
 
@@ -602,8 +615,8 @@ func TestGetAccountPageStatsAlignsLongWindowWithOfficialDuration(t *testing.T) {
 	}
 
 	now := time.Now()
-	insertAccountUsageLog(t, db, id, 200, now.Add(-20*24*time.Hour))
-	insertAccountUsageLog(t, db, id, 800, now.Add(-40*24*time.Hour))
+	insertAccountUsageLog(t, db, id, 200, now.Add(-20*24*time.Hour), "ultrafast")
+	insertAccountUsageLog(t, db, id, 800, now.Add(-40*24*time.Hour), "fast")
 	db.FlushUsageLogs()
 
 	handler := newAccountPageStatsHandler(t, db)
@@ -621,6 +634,9 @@ func TestGetAccountPageStatsAlignsLongWindowWithOfficialDuration(t *testing.T) {
 	if detail == nil || detail.Requests != 1 || detail.Tokens != 200 {
 		t.Fatalf("usage_7d_detail = %+v, want the 20-day-old log only", detail)
 	}
+	if detail.FastBilled <= 0 || detail.FastBilled != detail.AccountBilled {
+		t.Fatalf("page-stats long usage = %+v, want all current-window account cost in Fast", detail)
+	}
 }
 
 func TestGetAccountPageStatsUsesRollingWindowsWithoutReset(t *testing.T) {
@@ -637,9 +653,9 @@ func TestGetAccountPageStatsUsesRollingWindowsWithoutReset(t *testing.T) {
 	}
 
 	now := time.Now()
-	insertAccountUsageLog(t, db, id, 15, now.Add(-4*time.Hour))
-	insertAccountUsageLog(t, db, id, 25, now.Add(-36*time.Hour))
-	insertAccountUsageLog(t, db, id, 90, now.Add(-10*24*time.Hour))
+	insertAccountUsageLog(t, db, id, 15, now.Add(-4*time.Hour), "")
+	insertAccountUsageLog(t, db, id, 25, now.Add(-36*time.Hour), "fast")
+	insertAccountUsageLog(t, db, id, 90, now.Add(-10*24*time.Hour), "")
 	db.FlushUsageLogs()
 
 	handler := newAccountPageStatsHandler(t, db)
@@ -650,5 +666,8 @@ func TestGetAccountPageStatsUsesRollingWindowsWithoutReset(t *testing.T) {
 	}
 	if item.Usage7dDetail == nil || item.Usage7dDetail.Requests != 2 || item.Usage7dDetail.Tokens != 40 {
 		t.Fatalf("usage_7d_detail = %+v, want rolling last-7d logs", item.Usage7dDetail)
+	}
+	if item.Usage5hDetail.FastBilled != 0 || item.Usage7dDetail.FastBilled <= 0 || item.Usage7dDetail.FastBilled >= item.Usage7dDetail.AccountBilled {
+		t.Fatalf("page-stats rolling 5h/long usage = %+v / %+v, want Fast only as a subset of long-window account cost", item.Usage5hDetail, item.Usage7dDetail)
 	}
 }

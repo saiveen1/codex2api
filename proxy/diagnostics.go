@@ -60,6 +60,8 @@ type diagnosticEvent struct {
 	Request           *diagnosticRequestShape `json:"request,omitempty"`
 	Error             diagnosticError         `json:"error"`
 	Decision          *dispatchDecision       `json:"decision,omitempty"`
+
+	ResponseTiming *database.UsageResponseTiming `json:"response_timing,omitempty"`
 }
 
 var diagnosticIDPattern = regexp.MustCompile(`^(?:[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}|req_[a-fA-F0-9]{8,64})$`)
@@ -203,6 +205,9 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	}
 	a.mu.Unlock()
 	if !failed && !previousFailure {
+		if input.ResponseTiming != nil {
+			input.DiagnosticContext = encodeUsageResponseTiming(input.ResponseTiming, "")
+		}
 		return
 	}
 	e := diagnosticBase(c.Request.Context(), "attempt_outcome", "upstream_response")
@@ -227,6 +232,7 @@ func logUsageDiagnostic(c *gin.Context, input *database.UsageLogInput) {
 	e.Kind = diagnosticErrorCode(input.UpstreamErrorKind)
 	e.Stream, e.Websocket = input.Stream, input.ViaWebsocket
 	e.DurationMs, e.FirstTokenMs = int64(input.DurationMs), input.FirstTokenMs
+	e.ResponseTiming = input.ResponseTiming
 	e.Request = diagnosticIngress(c)
 	e.Error = e.Attempt.Error
 	if e.Error.Detail == "" || e.Error.Detail == "unavailable" {

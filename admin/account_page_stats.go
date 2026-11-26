@@ -95,18 +95,9 @@ func (h *Handler) GetAccountPageStats(c *gin.Context) {
 	stats := make(map[int64]accountPageStatsItem, len(ids))
 	missingOfficial := make([]int64, 0)
 	for _, id := range ids {
-		item := accountPageStatsItem{}
-		if value := usage5h[id]; value != nil {
-			item.Usage5hDetail = &accountUsageWindow{
-				Requests: value.Requests, Tokens: value.Tokens,
-				AccountBilled: value.AccountBilled, UserBilled: value.UserBilled,
-			}
-		}
-		if value := usage7d[id]; value != nil {
-			item.Usage7dDetail = &accountUsageWindow{
-				Requests: value.Requests, Tokens: value.Tokens,
-				AccountBilled: value.AccountBilled, UserBilled: value.UserBilled,
-			}
+		item := accountPageStatsItem{
+			Usage5hDetail: buildAccountUsageWindow(usage5h[id]),
+			Usage7dDetail: buildAccountUsageWindow(usage7d[id]),
 		}
 		if todayErr == nil {
 			todayWindow := &accountUsageWindow{}

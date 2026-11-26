@@ -149,6 +149,7 @@ func beginUpstreamTrace(ctx context.Context, account *auth.Account, proxyURL str
 	}
 	label.Name = security.MaskSensitiveData(label.Name)
 	attempt := &upstreamTraceAttempt{accountID: account.ID(), proxy: label}
+	attempt.round.codex = !account.IsRelayStyle()
 	if ws {
 		attempt.round.started = time.Now()
 	}
@@ -245,6 +246,7 @@ func populateUpstreamTrace(c *gin.Context, input *database.UsageLogInput) {
 		// Folded rows already carry the snapshot matching their terminal usage.
 		if input.UpstreamRoundIndex == 0 {
 			current.round.apply(input)
+			current.round.applyResponseTiming(input)
 		}
 	}
 }

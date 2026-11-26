@@ -1,3 +1,5 @@
+import { isPremiumUsagePlan, normalizePlanType } from './accountPlans.ts'
+
 /**
  * 号池可支撑时间（Pool Runway）与限流压力预测。
  * 从 AccountRateLimitRecoveryChart 抽出，供账号页与 Dashboard 共用。
@@ -606,19 +608,6 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeNumber(value?: number | null): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function normalizePlanType(planType?: string): string {
-  const raw = (planType || '').toLowerCase().trim()
-  if (raw === 'prolite' || raw === 'pro_lite' || raw === 'pro-lite') return 'pro'
-  if (raw === 'promax' || raw === 'pro_max' || raw === 'pro-max') return 'pro'
-  if (raw === 'ent26' || raw === 'enterprise_cbp_usage_based' || raw === 'enterprise_cbp_automation') return 'enterprise'
-  if (raw === 'edu_plus' || raw === 'edu_pro') return 'edu'
-  return raw
-}
-
-export function isPremiumUsagePlan(planType?: string): boolean {
-  return ['plus', 'pro', 'team', 'teamplus', 'k12', 'edu', 'education', 'go'].includes(normalizePlanType(planType))
 }
 
 /** Claude OAuth 的订阅档位，按 profile 归一化后的 plan_type 匹配。 */

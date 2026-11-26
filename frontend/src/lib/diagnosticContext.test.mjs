@@ -11,6 +11,7 @@ import {
   getDiagnosticError,
   getDiagnosticRequestScopes,
   parseDiagnosticContext,
+  getUsageResponseTiming,
 } from './diagnosticContext.ts'
 
 test('diagnostic context safely distinguishes historical, invalid, and oversized values', () => {
@@ -23,6 +24,18 @@ test('diagnostic context safely distinguishes historical, invalid, and oversized
   if (oversized.state === 'oversize') {
     assert.ok(oversized.bytes > oversized.maxBytes)
   }
+})
+
+test('usage response timings preserve two samples and never invent historical or missing output', () => {
+  const timing = (response_timing) => getUsageResponseTiming(JSON.stringify({ schema: 2, response_timing }))
+  assert.deepEqual(timing({ first_frame_ms: 120, first_effective_ms: 360 }), { firstFrameMs: 120, firstEffectiveMs: 360 })
+  assert.deepEqual(timing({ first_frame_ms: 1, first_effective_ms: 1 }), { firstFrameMs: 1, firstEffectiveMs: 1 })
+  assert.deepEqual(timing({ first_frame_ms: 3 }), { firstFrameMs: 3, firstEffectiveMs: undefined })
+  assert.deepEqual(timing({ first_frame_ms: 3, first_effective_ms: 1 }), { firstFrameMs: 3, firstEffectiveMs: undefined })
+  assert.equal(timing({ first_frame_ms: '3', first_effective_ms: 5 }), undefined)
+  assert.equal(getUsageResponseTiming('{"first_token_ms":20}'), undefined)
+  assert.equal(getUsageResponseTiming('malformed'), undefined)
+  assert.deepEqual(usageDiagnosticStatus({ status_code: 200, diagnostic_context: '{"schema":2,"response_timing":{"first_frame_ms":1}}' }), { failed: false })
 })
 
 test('generic, omitted, and unavailable evidence retain their distinct meanings', () => {

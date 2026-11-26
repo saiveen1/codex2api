@@ -340,6 +340,7 @@ export interface AccountUsageWindow {
   requests: number
   tokens: number
   account_billed?: number
+  fast_billed?: number
   user_billed?: number
   model_counts?: Record<string, number>
   model_success_counts?: Record<string, number>

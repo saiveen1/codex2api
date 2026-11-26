@@ -4665,6 +4665,11 @@ func (db *DB) InsertUsageLog(ctx context.Context, log *UsageLogInput) error {
 	return nil
 }
 
+type UsageResponseTiming struct {
+	FirstFrameMs     int `json:"first_frame_ms,omitempty"`
+	FirstEffectiveMs int `json:"first_effective_ms,omitempty"`
+}
+
 // UsageLogInput 日志写入参数
 type UsageLogInput struct {
 	billingSnapshot *usageBillingSnapshot
@@ -4672,6 +4677,7 @@ type UsageLogInput struct {
 	// Trace-only metadata for structured diagnostics; not persisted to SQL.
 	TraceAttemptIndex int
 	TraceHTTPStatus   int
+	ResponseTiming    *UsageResponseTiming // Stored inside diagnostic_context, not a separate SQL column.
 	UpstreamRequestID string
 	UpstreamProxyID   int64
 	UpstreamProxyName string
@@ -7064,6 +7070,7 @@ type AccountTimeRangeUsage struct {
 	Requests      int64
 	Tokens        int64
 	AccountBilled float64
+	FastBilled    float64
 	UserBilled    float64
 }
 
@@ -7153,11 +7160,12 @@ func (db *DB) GetAccountTimeRangeUsage(ctx context.Context, since time.Time) (ma
 		COUNT(*) AS requests,
 		COALESCE(SUM(total_tokens), 0) AS tokens,
 		COALESCE(SUM(account_billed), 0) AS account_billed,
-		COALESCE(SUM(user_billed), 0) AS user_billed
+		COALESCE(SUM(user_billed), 0) AS user_billed,
+		COALESCE(SUM(CASE WHEN %s THEN account_billed ELSE 0 END), 0) AS fast_billed
 	FROM usage_logs
 	WHERE created_at >= $1 AND status_code <> 499 AND %s AND %s AND %s
 	GROUP BY account_id
-	`, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
+	`, accountFastTierPredicate, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
 	rows, err := db.conn.QueryContext(ctx, query, db.timeArg(since))
 	if err != nil {
 		return nil, err
@@ -7167,7 +7175,7 @@ func (db *DB) GetAccountTimeRangeUsage(ctx context.Context, since time.Time) (ma
 	result := make(map[int64]*AccountTimeRangeUsage)
 	for rows.Next() {
 		usage := &AccountTimeRangeUsage{}
-		if err := rows.Scan(&usage.AccountID, &usage.Requests, &usage.Tokens, &usage.AccountBilled, &usage.UserBilled); err != nil {
+		if err := rows.Scan(&usage.AccountID, &usage.Requests, &usage.Tokens, &usage.AccountBilled, &usage.UserBilled, &usage.FastBilled); err != nil {
 			return nil, err
 		}
 		result[usage.AccountID] = usage
@@ -7186,10 +7194,12 @@ func (db *DB) GetAccountUsageWindows(ctx context.Context, shortSince, longSince 
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN total_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN account_billed ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN user_billed ELSE 0 END), 0),
-		COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(account_billed), 0), COALESCE(SUM(user_billed), 0)
+		COALESCE(SUM(CASE WHEN created_at >= $1 AND %s THEN account_billed ELSE 0 END), 0),
+		COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(account_billed), 0), COALESCE(SUM(user_billed), 0),
+		COALESCE(SUM(CASE WHEN %s THEN account_billed ELSE 0 END), 0)
 	FROM usage_logs
 	WHERE created_at >= $2 AND status_code <> 499 AND %s AND %s AND %s
-	GROUP BY account_id`, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
+	GROUP BY account_id`, accountFastTierPredicate, accountFastTierPredicate, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
 	rows, err := db.conn.QueryContext(ctx, query, db.timeArg(shortSince), db.timeArg(longSince))
 	if err != nil {
 		return nil, nil, err
@@ -7200,8 +7210,8 @@ func (db *DB) GetAccountUsageWindows(ctx context.Context, shortSince, longSince 
 	for rows.Next() {
 		shortUsage := &AccountTimeRangeUsage{}
 		longUsage := &AccountTimeRangeUsage{}
-		if err := rows.Scan(&shortUsage.AccountID, &shortUsage.Requests, &shortUsage.Tokens, &shortUsage.AccountBilled, &shortUsage.UserBilled,
-			&longUsage.Requests, &longUsage.Tokens, &longUsage.AccountBilled, &longUsage.UserBilled); err != nil {
+		if err := rows.Scan(&shortUsage.AccountID, &shortUsage.Requests, &shortUsage.Tokens, &shortUsage.AccountBilled, &shortUsage.UserBilled, &shortUsage.FastBilled,
+			&longUsage.Requests, &longUsage.Tokens, &longUsage.AccountBilled, &longUsage.UserBilled, &longUsage.FastBilled); err != nil {
 			return nil, nil, err
 		}
 		longUsage.AccountID = shortUsage.AccountID

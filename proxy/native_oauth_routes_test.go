@@ -24,6 +24,7 @@ import (
 
 func TestNativeOAuthRoutesWithLegacyCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	t.Setenv("LOG_DISABLED", "true")
 	previousRuntime := proxy.CurrentRuntimeSettings()
 	previousResin := proxy.GetResinConfig()
 	previousWebsocket := proxy.WebsocketExecuteFunc
@@ -138,7 +139,7 @@ func TestNativeOAuthRoutesWithLegacyCredentials(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	proxy.SetResinConfig(&proxy.ResinConfig{BaseURL: upstream.URL, PlatformName: "native-routes"})
 
-	handler := proxy.NewHandler(store, nil, &config.Config{AllowAnonymousV1: true}, nil)
+	handler := proxy.NewHandler(store, db, &config.Config{AllowAnonymousV1: true}, nil)
 	router := gin.New()
 	handler.RegisterRoutes(router)
 	assertNativeAttempt := func(t *testing.T, suffix string, wantWebsocket bool) {
@@ -240,5 +241,35 @@ func TestNativeOAuthRoutesWithLegacyCredentials(t *testing.T) {
 	})
 	if dispatched := account.TotalRequests.Load(); dispatched != int64(len(tests)+1) {
 		t.Fatalf("logical dispatches = %d, want %d", dispatched, len(tests)+1)
+	}
+
+	db.FlushUsageLogs()
+	rows, err := db.ListRecentUsageLogs(t.Context(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTimings := map[string]int{"/v1/responses": 2, "/v1/chat/completions": 2, "websocket": 1}
+	for _, row := range rows {
+		timing := gjson.Get(row.DiagnosticContext, "response_timing")
+		scope := row.Endpoint
+		if row.ViaWebsocket {
+			scope = "websocket"
+		}
+		if _, measured := wantTimings[scope]; !measured {
+			if timing.Exists() {
+				t.Fatalf("unexpected Responses timing on %s: %s", row.Endpoint, timing.Raw)
+			}
+			continue
+		}
+		frame, effective := timing.Get("first_frame_ms").Int(), timing.Get("first_effective_ms").Int()
+		if row.StatusCode != http.StatusOK || row.OutputTokens != 2 || frame < 1 || effective < frame {
+			t.Fatalf("%s log lost timing or real usage: status=%d output=%d timing=%s", scope, row.StatusCode, row.OutputTokens, timing.Raw)
+		}
+		wantTimings[scope]--
+	}
+	for scope, remaining := range wantTimings {
+		if remaining != 0 {
+			t.Errorf("%s: remaining expected timing rows = %d", scope, remaining)
+		}
 	}
 }

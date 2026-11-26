@@ -506,26 +506,25 @@ func (h *Handler) buildAccountResponse(
 			}
 		}
 	}
-	if usage5h != nil {
-		resp.Usage5hDetail = &accountUsageWindow{
-			Requests:      usage5h.Requests,
-			Tokens:        usage5h.Tokens,
-			AccountBilled: usage5h.AccountBilled,
-			UserBilled:    usage5h.UserBilled,
-		}
-	}
-	if usage7d != nil {
-		resp.Usage7dDetail = &accountUsageWindow{
-			Requests:      usage7d.Requests,
-			Tokens:        usage7d.Tokens,
-			AccountBilled: usage7d.AccountBilled,
-			UserBilled:    usage7d.UserBilled,
-		}
-	}
+	resp.Usage5hDetail = buildAccountUsageWindow(usage5h)
+	resp.Usage7dDetail = buildAccountUsageWindow(usage7d)
 	if !includeDetails {
 		stripAccountDetailFields(&resp)
 	}
 	return resp
+}
+
+func buildAccountUsageWindow(usage *database.AccountTimeRangeUsage) *accountUsageWindow {
+	if usage == nil {
+		return nil
+	}
+	return &accountUsageWindow{
+		Requests:      usage.Requests,
+		Tokens:        usage.Tokens,
+		AccountBilled: usage.AccountBilled,
+		UserBilled:    usage.UserBilled,
+		FastBilled:    usage.FastBilled,
+	}
 }
 
 // Keep header-only windows when an OAuth probe has no equivalent bucket;

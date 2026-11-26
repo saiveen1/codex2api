@@ -180,6 +180,9 @@ func (db *DB) attachSuccessModelCounts(ctx context.Context, result map[int64]*Ac
 	return rows.Err()
 }
 
+// Match the billing-tier precedence used by usage log filters and hourly stats.
+const accountFastTierPredicate = `LOWER(COALESCE(NULLIF(billing_service_tier, ''), service_tier, '')) IN ('fast', 'priority', 'ultrafast')`
+
 // GetAccountUsageWindowsByIDs computes the list-page usage fields without a
 // global seven-day GROUP BY.
 func (db *DB) GetAccountUsageWindowsByIDs(ctx context.Context, ids []int64, shortSince, longSince time.Time) (map[int64]*AccountTimeRangeUsage, map[int64]*AccountTimeRangeUsage, error) {
@@ -199,10 +202,12 @@ func (db *DB) GetAccountUsageWindowsByIDs(ctx context.Context, ids []int64, shor
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN total_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN account_billed ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN created_at >= $1 THEN user_billed ELSE 0 END), 0),
-		COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(account_billed), 0), COALESCE(SUM(user_billed), 0)
+		COALESCE(SUM(CASE WHEN created_at >= $1 AND %s THEN account_billed ELSE 0 END), 0),
+		COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(account_billed), 0), COALESCE(SUM(user_billed), 0),
+		COALESCE(SUM(CASE WHEN %s THEN account_billed ELSE 0 END), 0)
 		FROM usage_logs
 		WHERE created_at >= $2 AND status_code <> 499 AND %s AND %s AND %s AND %s
-		GROUP BY account_id`, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate(), idFilter)
+		GROUP BY account_id`, accountFastTierPredicate, accountFastTierPredicate, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate(), idFilter)
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
@@ -211,8 +216,8 @@ func (db *DB) GetAccountUsageWindowsByIDs(ctx context.Context, ids []int64, shor
 	for rows.Next() {
 		shortUsage := &AccountTimeRangeUsage{}
 		longUsage := &AccountTimeRangeUsage{}
-		if err := rows.Scan(&shortUsage.AccountID, &shortUsage.Requests, &shortUsage.Tokens, &shortUsage.AccountBilled, &shortUsage.UserBilled,
-			&longUsage.Requests, &longUsage.Tokens, &longUsage.AccountBilled, &longUsage.UserBilled); err != nil {
+		if err := rows.Scan(&shortUsage.AccountID, &shortUsage.Requests, &shortUsage.Tokens, &shortUsage.AccountBilled, &shortUsage.UserBilled, &shortUsage.FastBilled,
+			&longUsage.Requests, &longUsage.Tokens, &longUsage.AccountBilled, &longUsage.UserBilled, &longUsage.FastBilled); err != nil {
 			return nil, nil, err
 		}
 		longUsage.AccountID = shortUsage.AccountID
@@ -355,7 +360,8 @@ func (db *DB) getAccountUsageSinceWindowsChunk(ctx context.Context, ids []int64,
 		COUNT(*),
 		COALESCE(SUM(usage_logs.total_tokens), 0),
 		COALESCE(SUM(usage_logs.account_billed), 0),
-		COALESCE(SUM(usage_logs.user_billed), 0)
+		COALESCE(SUM(usage_logs.user_billed), 0),
+		COALESCE(SUM(CASE WHEN %s THEN usage_logs.account_billed ELSE 0 END), 0)
 	FROM usage_windows
 	JOIN usage_logs
 		ON usage_logs.account_id = usage_windows.account_id
@@ -365,7 +371,7 @@ func (db *DB) getAccountUsageSinceWindowsChunk(ctx context.Context, ids []int64,
 		AND %s
 		AND %s
 	GROUP BY usage_windows.account_id
-	`, strings.Join(values, ","), db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
+	`, strings.Join(values, ","), accountFastTierPredicate, db.nonRetryUsageLogPredicate(), db.currentAccountUsageGenerationPredicate(), db.endUserUsageLogPredicate())
 
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -375,7 +381,7 @@ func (db *DB) getAccountUsageSinceWindowsChunk(ctx context.Context, ids []int64,
 
 	for rows.Next() {
 		usage := &AccountTimeRangeUsage{}
-		if err := rows.Scan(&usage.AccountID, &usage.Requests, &usage.Tokens, &usage.AccountBilled, &usage.UserBilled); err != nil {
+		if err := rows.Scan(&usage.AccountID, &usage.Requests, &usage.Tokens, &usage.AccountBilled, &usage.UserBilled, &usage.FastBilled); err != nil {
 			return err
 		}
 		result[usage.AccountID] = usage

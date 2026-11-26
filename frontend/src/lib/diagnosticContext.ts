@@ -80,6 +80,19 @@ export function parseDiagnosticContext(
   }
 }
 
+export function getUsageResponseTiming(value?: string | null) {
+  const parsed = parseDiagnosticContext(value)
+  const timing = parsed.state === 'valid' ? diagnosticRecord(parsed.event.response_timing) : undefined
+  const firstFrameMs = diagnosticNumber(timing?.first_frame_ms)
+  if (firstFrameMs == null || !Number.isSafeInteger(firstFrameMs) || firstFrameMs <= 0) return undefined
+  const firstEffectiveMs = diagnosticNumber(timing?.first_effective_ms)
+  return {
+    firstFrameMs,
+    firstEffectiveMs: firstEffectiveMs != null && Number.isSafeInteger(firstEffectiveMs) && firstEffectiveMs >= firstFrameMs
+      ? firstEffectiveMs : undefined,
+  }
+}
+
 /** Keep ingress and outbound shapes separate: request rewriting/compression can make them differ. */
 export function getDiagnosticRequestScopes(event: DiagnosticRecord): DiagnosticRequestScopes {
   const attempt = diagnosticRecord(event.attempt)

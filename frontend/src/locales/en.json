@@ -1339,6 +1339,7 @@
     "usageReqUnit": "req",
     "usageTokUnit": "tok",
     "accountBilledLabel": "Account",
+    "windowFastBilled": "Fast portion: ${{amount}}",
     "userBilledLabel": "User",
     "quotaDistributionTitle": "Quota Distribution",
     "quotaDistributionDesc": "Used quota distribution for non-banned Codex accounts. Sampled {{sampled}} / {{total}} accounts.",
@@ -2732,6 +2733,8 @@
     "reason7dUrgency": "7d Reset Soon"
   },
   "usage": {
+    "timingFirstFrame": "First upstream frame",
+    "timingFirstEffective": "First effective output",
     "internalScheduledActivation": "Scheduled activation",
     "internalScheduledActivationTooltip": "A connection test sent by the server using this account’s saved schedule",
     "usageAnalysis": "Usage breakdown",
