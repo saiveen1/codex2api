@@ -30,7 +30,7 @@ func TestCodexRefreshTransactions(t *testing.T) {
 			ctx := context.Background()
 			rt := "old-" + uuid.NewString()
 			var ids []int64
-			for range 3 {
+			for range 4 {
 				id, err := db.InsertAccountWithCredentials(ctx, "refresh-transaction", map[string]any{"refresh_token": rt, "access_token": "old-at", "custom_headers": map[string]string{"Chatgpt-Account-Id": "keep-route"}}, "")
 				if err != nil {
 					t.Fatal(err)
@@ -53,9 +53,17 @@ func TestCodexRefreshTransactions(t *testing.T) {
 			if err := db.UpdateCredentials(ctx, ids[2], map[string]any{"access_token": "admin-at"}); err != nil {
 				t.Fatal(err)
 			}
+			// A legacy auto-clean tombstone written during this exchange must survive it.
+			if err := db.SetError(ctx, ids[3], "deleted"); err != nil {
+				t.Fatal(err)
+			}
 			published, err := db.FinishCodexRefresh(ctx, attempt, map[string]any{"access_token": "new-at", "refresh_token": "new-" + rt})
 			if err != nil || len(published) != 2 {
 				t.Fatalf("publish count %d: %v", len(published), err)
+			}
+			deleted, err := db.GetAccountByIDIncludingDeleted(ctx, ids[3])
+			if err != nil || deleted.ErrorMessage != "deleted" || deleted.GetCredential("access_token") != "old-at" {
+				t.Fatal("refresh revived legacy deleted sibling", err)
 			}
 			for _, id := range ids[:2] {
 				row, err := db.GetAccountByID(ctx, id)

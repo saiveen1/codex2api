@@ -61,7 +61,7 @@ func (db *DB) codexRefreshRows(ctx context.Context, tx *sql.Tx, rt string) ([]Ac
 	if db.isSQLite() {
 		field, upstream = "json_extract(credentials, '$.refresh_token')", "json_extract(credentials, '$.upstream_type')"
 	}
-	query := `SELECT id, credentials, credential_generation FROM accounts WHERE status <> 'deleted' AND
+	query := `SELECT id, credentials, credential_generation FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted' AND
 		COALESCE(` + upstream + `, '') IN ('', 'codex') AND ` + field + ` IN ($1, $2) ORDER BY id`
 	if !db.isSQLite() {
 		query += ` FOR UPDATE`

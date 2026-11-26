@@ -9193,15 +9193,13 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 		}
 
 		if h.store.GetAutoCleanUnauthorized() {
-			// 开启自动清理时，401 立即从号池删除
-			log.Printf("账号 %d 收到 401，立即清理", account.ID())
-			if h.db != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				_ = h.db.SetError(ctx, account.ID(), "deleted")
-				cancel()
-				h.db.InsertAccountEventAsync(account.ID(), "deleted", "auto_clean_401")
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err := h.store.SoftDeleteForClean(ctx, account, "auto_clean_401")
+			cancel()
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("账号 %d 自动清理 401 失败，保留未授权隔离: %v", account.ID(), err)
+				h.store.MarkUpstreamUnauthorized(account, body, upstreamAccountErrorMessage(statusCode, body))
 			}
-			h.store.RemoveAccount(account.ID())
 		} else {
 			h.store.MarkCooldownWithError(account, 5*time.Minute, "unauthorized", upstreamAccountErrorMessage(statusCode, body))
 		}

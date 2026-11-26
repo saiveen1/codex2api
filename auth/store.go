@@ -6540,11 +6540,14 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		}
 	}
 	account.subscriptionMeta = SubscriptionMetaFromCredentials(row.GetCredential)
-	if row.CooldownUntil.Valid {
-		if time.Now().Before(row.CooldownUntil.Time) {
+	if row.CooldownUntil.Valid && account.Status != StatusError {
+		// For native Codex a 401 deadline permits a recovery probe, not dispatch.
+		keepUnauthorized := row.CooldownReason == "unauthorized" && !account.IsRelayStyle() && !isAgentIdentityAccount
+		if keepUnauthorized || time.Now().Before(row.CooldownUntil.Time) {
 			account.SetCooldownUntil(row.CooldownUntil.Time, row.CooldownReason)
+			account.ErrorMsg = row.ErrorMessage
 		} else if row.CooldownReason != "" {
-			if err := s.db.ClearCooldown(ctx, row.ID); err != nil {
+			if _, err := s.db.ClearCooldownIfReasonAndUntil(ctx, row.ID, row.CooldownReason, row.CooldownUntil.Time); err != nil {
 				log.Printf("[账号 %d] 清理过期冷却状态失败: %v", row.ID, err)
 			}
 		}
@@ -12706,38 +12709,35 @@ func (s *Store) parallelRecoveryProbe(ctx context.Context) {
 				}
 			}
 
+			started := time.Now()
 			if err := probeFn(probeCtx, account); err != nil {
 				log.Printf("[账号 %d] 恢复探测失败: %v", account.DBID, err)
-			} else {
-				// 用量已耗尽的账号不重置状态
-				account.mu.RLock()
-				exhausted := account.usageExhaustedLocked()
-				account.mu.RUnlock()
-				if exhausted {
-					log.Printf("[账号 %d] 恢复探测成功但用量已耗尽，保持当前状态", account.DBID)
-				} else {
-					// 探测成功：将账号从 banned 升级到 warm，给予重新调度的机会
-					atomic.StoreInt32(&account.Disabled, 0) // 清除原子禁用标志
-					account.mu.Lock()
-					if account.HealthTier == HealthTierBanned {
-						account.HealthTier = HealthTierWarm
-						account.SchedulerScore = 80
-						account.FailureStreak = 0
-						account.SuccessStreak = 1
-						account.LastSuccessAt = time.Now()
-						if account.Status == StatusCooldown {
-							account.Status = StatusReady
-							account.CooldownUtil = time.Time{}
-							account.CooldownReason = ""
-						}
-						account.recomputeSchedulerLocked(s.maxConcurrency.Load())
-						log.Printf("[账号 %d] 恢复探测成功！已从 banned 升级到 warm", account.DBID)
-					}
-					account.mu.Unlock()
-					// 清理数据库冷却状态
-					s.persistAccountCooldownState(account, true, false)
-				}
+				return
 			}
+			account.mu.Lock()
+			// A handled 401/429 (or no token) can return nil without reporting success.
+			if account.LastSuccessAt.Before(started) || account.LastFailureAt.After(account.LastSuccessAt) ||
+				account.Status == StatusError || account.CooldownUtil.After(time.Now()) || account.usageExhaustedLocked() {
+				account.mu.Unlock()
+				return
+			}
+			atomic.StoreInt32(&account.Disabled, 0)
+			if account.HealthTier == HealthTierBanned {
+				account.HealthTier = HealthTierWarm
+				account.SchedulerScore = 80
+				account.FailureStreak = 0
+				account.SuccessStreak = 1
+				if account.Status == StatusCooldown {
+					account.Status = StatusReady
+					account.CooldownUtil = time.Time{}
+					account.CooldownReason = ""
+				}
+				account.ErrorMsg = ""
+				account.recomputeSchedulerLocked(s.maxConcurrency.Load())
+			}
+			account.mu.Unlock()
+			s.fastSchedulerUpdate(account)
+			s.persistAccountCooldownState(account, true, false)
 		}(acc)
 	}
 
