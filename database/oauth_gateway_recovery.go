@@ -130,7 +130,7 @@ func (db *DB) CompleteOAuthRecoveryRefresh(ctx context.Context, original service
 			if !row.CooldownUntil.Valid || !row.CooldownUntil.Time.Truncate(time.Microsecond).Equal(until.Truncate(time.Microsecond)) {
 				return ErrCodexCredentialsChanged
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE accounts SET cooldown_reason='',cooldown_until=NULL WHERE id=$1 AND credential_generation=$2 AND enabled=TRUE AND status<>'deleted' AND status<>'disabled' AND cooldown_reason='unauthorized'`, row.ID, current.Generation); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE accounts SET cooldown_reason='',cooldown_until=NULL,error_message='' WHERE id=$1 AND credential_generation=$2 AND enabled=TRUE AND status<>'deleted' AND status<>'disabled' AND cooldown_reason='unauthorized'`, row.ID, current.Generation); err != nil {
 				return err
 			}
 			clearRuntime = true

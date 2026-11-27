@@ -54,12 +54,12 @@ func TestCodexRestartPreservesUnauthorizedUntilVerified(t *testing.T) {
 		t.Fatal("expired quota cooldown should release; terminal error must not")
 	}
 	calls := 0
-	probe := func(_ context.Context, account *Account) error {
+	probe := func(ctx context.Context, account *Account) error {
 		calls++
 		if calls == 1 {
 			store.MarkUpstreamUnauthorized(account, nil, "still unauthorized")
 		} else {
-			store.ReportRequestSuccess(account, 0)
+			ReportCodexAuthorizationProbeSuccess(ctx, account)
 		}
 		return nil // The probe reports handled rejections as well as successes this way.
 	}
@@ -91,5 +91,40 @@ func TestCodexRestartPreservesUnauthorizedUntilVerified(t *testing.T) {
 	row, err = db.GetAccountByID(ctx, unauthorized)
 	if err != nil || row.CooldownReason != "" || row.CooldownUntil.Valid {
 		t.Fatal("verified recovery did not clear persisted cooldown", err)
+	}
+}
+
+func TestCodexAuthorizationRecoveryProbeEligibility(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, at, rt, upstream, reason string
+		expiry, deadline               time.Time
+		terminal, want                 bool
+	}{
+		{name: "AT only", at: "at", expiry: now.Add(time.Hour), reason: "unauthorized", want: true},
+		{name: "AT without known expiry", at: "at", reason: "unauthorized", want: true},
+		{name: "expired AT only", at: "at", expiry: now.Add(-time.Hour), reason: "unauthorized"},
+		{name: "no credentials", reason: "unauthorized"},
+		{name: "active deadline", at: "at", reason: "unauthorized", deadline: now.Add(time.Hour)},
+		{name: "terminal", at: "at", rt: "rt", reason: "unauthorized", terminal: true},
+		{name: "other cooldown AT only", at: "at", reason: "rate_limited"},
+		{name: "relay 401", at: "at", rt: "rt", upstream: UpstreamOpenAIResponses, reason: "unauthorized"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			acc := &Account{AccessToken: tc.at, RefreshToken: tc.rt, UpstreamType: tc.upstream, ExpiresAt: tc.expiry, HealthTier: HealthTierBanned}
+			if tc.upstream == UpstreamOpenAIResponses {
+				acc.BaseURL, acc.APIKey = "https://relay.example.invalid", "fixture-key"
+				if !acc.IsRelayStyle() {
+					t.Fatal("expected a configured relay account")
+				}
+			}
+			acc.SetCooldownUntil(tc.deadline, tc.reason)
+			if tc.terminal {
+				acc.PermanentRefreshFailures = permanentRefreshFailureTerminalLimit
+			}
+			if got := acc.NeedsRecoveryProbe(0); got != tc.want {
+				t.Fatalf("NeedsRecoveryProbe = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

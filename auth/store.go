@@ -2498,6 +2498,9 @@ func cooldownMatchesReset(cooldownUntil, resetAt time.Time) bool {
 // Authentication failures retain the higher priority used by the runtime cache.
 // The caller must hold a.mu.
 func (a *Account) usageCooldownTargetLocked(now, resetAt time.Time, reason string) (time.Time, string, bool) {
+	if a.hasCodexAuthorizationCooldownLocked() {
+		return a.CooldownUtil, a.CooldownReason, false
+	}
 	if a.Status == StatusCooldown && now.Before(a.CooldownUtil) {
 		if reason == ResponsesRateLimitedCooldownReason && a.usageWindowCooldownLocked() {
 			if resetAt.Before(a.CooldownUtil) {
@@ -3776,7 +3779,7 @@ func (a *Account) NeedsUsageProbe(maxAge time.Duration) bool {
 	if a.isRelayStyleLocked() && !a.isClaudeOAuthLocked() {
 		return false // wham 探针是 ChatGPT 专属；中转/Grok 账号没有该端点
 	}
-	if a.Status == StatusCooldown && a.CooldownReason == "unauthorized" && (a.CooldownUtil.IsZero() || now.Before(a.CooldownUtil)) {
+	if a.hasCodexAuthorizationCooldownLocked() || (a.Status == StatusCooldown && a.CooldownReason == "unauthorized" && (a.CooldownUtil.IsZero() || now.Before(a.CooldownUtil))) {
 		return false // token 失效，wham 也会 401，探针无意义
 	}
 	// Claude uses the native Messages endpoint rather than WHAM and may legally
@@ -3933,7 +3936,14 @@ func (a *Account) NeedsRecoveryProbe(minInterval time.Duration) bool {
 	if a.isRelayStyleLocked() {
 		return false // 恢复探测走 ChatGPT 探针；中转/Grok 账号不适用
 	}
-	if a.RefreshToken == "" {
+	if a.Status == StatusError && !a.isCodexAgentIdentityLocked() {
+		return false
+	}
+	if a.hasCodexAuthorizationCooldownLocked() {
+		if !a.hasUsableCodexProbeTokenLocked(time.Now()) && strings.TrimSpace(a.RefreshToken) == "" {
+			return false
+		}
+	} else if a.RefreshToken == "" {
 		return false
 	}
 	if a.PermanentRefreshFailures >= permanentRefreshFailureTerminalLimit {
@@ -12715,6 +12725,13 @@ func (s *Store) parallelRecoveryProbe(ctx context.Context) {
 
 			probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
+			account.mu.RLock()
+			codex401 := account.hasCodexAuthorizationCooldownLocked()
+			account.mu.RUnlock()
+			if codex401 {
+				s.probeCodexAuthorization(probeCtx, account, probeFn)
+				return
+			}
 
 			if account.NeedsRefresh() {
 				if err := s.refreshAccount(probeCtx, account); err != nil {
@@ -12729,7 +12746,7 @@ func (s *Store) parallelRecoveryProbe(ctx context.Context) {
 			}
 			account.mu.Lock()
 			// A handled 401/429 (or no token) can return nil without reporting success.
-			if account.LastSuccessAt.Before(started) || account.LastFailureAt.After(account.LastSuccessAt) ||
+			if account.hasCodexAuthorizationCooldownLocked() || account.LastSuccessAt.Before(started) || account.LastFailureAt.After(account.LastSuccessAt) ||
 				account.Status == StatusError || account.CooldownUtil.After(time.Now()) || account.usageExhaustedLocked() {
 				account.mu.Unlock()
 				return
