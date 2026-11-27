@@ -34,11 +34,15 @@ export function resolveBuildVersions(frontendVersion: string, backendVersion?: s
   const versionMismatch = isReleaseVersion(frontendVersion)
     && isReleaseVersion(backendVersion)
     && normalizeVersion(frontendVersion) !== normalizeVersion(backendVersion)
+  // Release-like numeric identities keep the legacy fallback when malformed.
+  const backendIdentity = normalizeVersion(backendVersion)
+  const customBackend = isReleaseVersion(frontendVersion)
+    && /^[0-9a-z._-]{1,64}$/i.test(backendIdentity) && !/^\d+(?:[.+-]|$)/.test(backendIdentity)
 
   return {
     frontendVersion,
     // Preserve the existing release label when it already matches the service.
-    currentVersion: versionMismatch ? versionLabel(normalizeVersion(backendVersion))! : frontendVersion,
+    currentVersion: customBackend ? backendVersion!.trim() : versionMismatch ? versionLabel(normalizeVersion(backendVersion))! : frontendVersion,
     versionMismatch,
   }
 }

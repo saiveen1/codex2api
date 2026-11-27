@@ -22,12 +22,22 @@ test('matching release prefixes preserve the original frontend label', () => {
   }
 })
 
-test('missing, development and malformed backend identities keep the frontend behavior', () => {
-  for (const backend of [undefined, null, '', 'dev', 'local-20261002-1234-abc', 'main', '3.0', '3.0.5oops', '01.0.5', '3.0.5-01', '3.0.5+']) {
+test('missing and malformed numeric backend identities keep the frontend behavior', () => {
+  for (const backend of [undefined, null, '', '   ', '3.0', '3.0.5oops', '01.0.5', '3.0.5-01', '3.0.5+']) {
     const versions = resolveBuildVersions('v3.0.1', backend)
     assert.equal(versions.currentVersion, 'v3.0.1', String(backend))
     assert.equal(versions.versionMismatch, false, String(backend))
     assert.equal(hasRemoteUpdate(versions.currentVersion, '3.0.5'), true)
+  }
+})
+
+test('explicit custom backend identities override an official frontend without claiming an update', () => {
+  for (const backend of ['custom.abcdef1', 'local-20261002-1234-abc', 'main', 'dev', 'bad-version', '758d5a8d', '_nightly']) {
+    const versions = resolveBuildVersions('v3.0.1', backend)
+    assert.equal(versions.currentVersion, backend)
+    assert.equal(versions.versionMismatch, false)
+    assert.equal(isComparableVersion(versions.currentVersion), false)
+    assert.equal(hasRemoteUpdate(versions.currentVersion, '3.0.5'), false)
   }
 })
 

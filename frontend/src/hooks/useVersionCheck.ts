@@ -84,12 +84,13 @@ export function useVersionCheck(triggerKey?: string) {
   const [updateInfo, setUpdateInfo] = useState<SystemUpdateInfo | null>(null)
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
   const [backendVersion, setBackendVersion] = useState<string | null>(null)
+  const [healthResolved, setHealthResolved] = useState(false)
   const activeRef = useRef(false)
   const healthRequestRef = useRef(0)
   const updateRequestRef = useRef(0)
   const lastTriggerRef = useRef<string | undefined>(undefined)
   const versions = resolveBuildVersions(__APP_VERSION__, backendVersion)
-  const hasUpdate = hasRemoteUpdate(versions.currentVersion, latestVersion)
+  const hasUpdate = healthResolved && hasRemoteUpdate(versions.currentVersion, latestVersion)
   const isCustomBuild = !isComparableVersion(versions.currentVersion)
 
   const check = useCallback(async (forceNetwork = false) => {
@@ -108,6 +109,7 @@ export function useVersionCheck(triggerKey?: string) {
       }
       if (activeRef.current && healthRequest === healthRequestRef.current) {
         setBackendVersion(runtimeVersion)
+        setHealthResolved(true)
       }
     })()
 

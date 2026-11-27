@@ -46,7 +46,7 @@ before(async () => {
 
 after(async () => { await browser?.close() })
 
-async function fixture(t, version, { mobile = false, cached = false } = {}) {
+async function fixture(t, version, { mobile = false, cached = false, backend = version } = {}) {
   const page = await browser.newPage({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } })
   page.setDefaultTimeout(5_000)
   const errors = []
@@ -55,7 +55,7 @@ async function fixture(t, version, { mobile = false, cached = false } = {}) {
   t.after(() => page.close())
   await page.route('http://version-popover.test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }))
   await page.goto('http://version-popover.test/')
-  await page.evaluate(({ version, cached }) => {
+  await page.evaluate(({ version, cached, backend }) => {
     window.__buildVersion = version
     localStorage.setItem('lang', 'zh')
     if (cached) localStorage.setItem('codex2api_latest_release', JSON.stringify({ latest_version: '3.1.6', checkedAt: Date.now() }))
@@ -63,7 +63,7 @@ async function fixture(t, version, { mobile = false, cached = false } = {}) {
       if (options.method && options.method !== 'GET') throw new Error('Unexpected write in version check')
       const pathname = new URL(String(url), location.origin).pathname
       let body = {}
-      if (pathname === '/health') body = { status: 'ok', build_version: version }
+      if (pathname === '/api/admin/health') body = { status: 'ok', build_version: backend }
       else if (pathname === '/api/admin/system/update') body = {
         current_version: version, latest_version: '3.1.6', has_update: true,
         supported: version.startsWith('v'), release_url: 'https://example.test/releases/v3.1.6',
@@ -71,7 +71,7 @@ async function fixture(t, version, { mobile = false, cached = false } = {}) {
       else if (pathname === '/api/admin/keys') body = { keys: [{ id: 1 }] }
       return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } })
     }
-  }, { version, cached })
+  }, { version, cached, backend })
   await page.addStyleTag({ content: css })
   await page.addScriptTag({ content: script })
   return page
@@ -89,6 +89,22 @@ test('custom build popover has no update dot or action on desktop, including a c
     assert.equal(await badge.locator('span[aria-hidden="true"]').count(), 0)
     assert.equal(await popover.getByRole('button', { name: '立即更新', exact: true }).count(), 0)
     assert.equal(await popover.getByText('已是最新版本', { exact: true }).count(), 0)
+    assert.equal(await popover.getByRole('link', { name: '查看更新内容' }).getAttribute('href'), cached
+      ? 'https://github.com/james-6-23/codex2api/releases/tag/v3.1.6'
+      : 'https://example.test/releases/v3.1.6')
+  }
+})
+
+test('old official frontend with custom backend has no update dot or action with or without cache', async t => {
+  for (const cached of [false, true]) {
+    const page = await fixture(t, 'v3.1.5', { cached, backend: 'custom.abcdef1' })
+    const badge = page.getByRole('button', { name: 'custom.abcdef1', exact: true }).filter({ visible: true })
+    await badge.click()
+    const popover = page.locator('#version-details')
+    await popover.getByText('自定义构建', { exact: true }).waitFor()
+    await popover.getByText('最新版本：v3.1.6', { exact: true }).waitFor()
+    assert.equal(await badge.locator('span[aria-hidden="true"]').count(), 0)
+    assert.equal(await popover.getByRole('button', { name: '立即更新', exact: true }).count(), 0)
     assert.equal(await popover.getByRole('link', { name: '查看更新内容' }).getAttribute('href'), cached
       ? 'https://github.com/james-6-23/codex2api/releases/tag/v3.1.6'
       : 'https://example.test/releases/v3.1.6')

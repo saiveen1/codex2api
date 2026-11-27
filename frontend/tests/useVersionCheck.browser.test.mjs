@@ -23,7 +23,7 @@ before(async () => {
       enforce: 'pre',
       resolveId(id, importer) {
         if (id === 'virtual:version-check-harness') return '\0version-check-harness'
-        if (id === '../api' && importer === hookPath) return '\0version-check-api'
+        if (id === '../api' && importer?.replaceAll('\\', '/') === hookPath.replaceAll('\\', '/')) return '\0version-check-api'
       },
       load(id) {
         if (id === '\0version-check-api') {
@@ -164,17 +164,32 @@ test('health resolves while GitHub is pending and remote metadata excludes runti
   assert.equal('supported' in cached, false)
 })
 
-test('failed, legacy and non-release health responses fall back without retaining an old runtime version', async t => {
+test('failed, legacy and malformed numeric health responses fall back without retaining an old runtime version', async t => {
   const page = await fixture(t, 'v3.0.1', { latest_version: '3.0.5' })
   await waitRequests(page, 1)
   await settle(page, 0, health('3.0.5'))
   await waitState(page, { currentVersion: 'v3.0.5', hasUpdate: false })
-  for (const [index, version] of [undefined, 'dev', 'local-20261002-1234-abc', 'bad-version', 'failed'].entries()) {
+  for (const [index, version] of [undefined, '', '   ', '3.0.5oops', 'failed'].entries()) {
     await page.evaluate(() => { void window.__refresh() })
     await waitRequests(page, index + 2)
     await settle(page, index + 1, health(version), version === 'failed')
     await waitState(page, { currentVersion: 'v3.0.1', hasUpdate: true, versionMismatch: false })
   }
+})
+
+test('cached release waits for health and follows explicit custom backend identities', async t => {
+  const page = await fixture(t, 'v3.0.1', { latest_version: '3.0.5', release_url: 'https://example.test/release' })
+  await waitRequests(page, 1)
+  await waitState(page, { latestVersion: 'v3.0.5', hasUpdate: false })
+  for (const [index, version] of ['custom.abcdef1', 'local-20261002-1234-abc', 'main', 'dev', 'bad-version', '758d5a8d', '_nightly'].entries()) {
+    if (index) {
+      await page.evaluate(() => { void window.__refresh() })
+      await waitRequests(page, index + 1)
+    }
+    await settle(page, index, health(version))
+    await waitState(page, { currentVersion: version, hasUpdate: false, versionMismatch: false, isCustomBuild: true })
+  }
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).release_url, CACHE_KEY), 'https://example.test/release')
 })
 
 test('dev skips update probes and local frontend builds do not claim an upstream update', async t => {
