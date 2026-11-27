@@ -5561,7 +5561,7 @@ func (s *Store) ResolveChatGPTWebProxy(acc *Account) (string, bool) {
 	return s.resolveProxyForAccountRoute(acc, false)
 }
 
-func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (string, bool) {
+func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool, plannedProxies ...string) (string, bool) {
 	if s == nil {
 		return "", false
 	}
@@ -5625,6 +5625,13 @@ func (s *Store) resolveProxyForAccountRoute(acc *Account, allowResin bool) (stri
 		start := stickyProxyIndex(accountID, len(s.proxyPool))
 		for i := 0; i < len(s.proxyPool); i++ {
 			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" && !s.proxyIsExclusiveLocked(proxy) {
+				return proxy, true
+			}
+		}
+	}
+	if s.proxyPoolEnabled {
+		for _, proxy := range plannedProxies {
+			if proxy != "" && !s.proxyIsExclusiveLocked(proxy) && !managedProxyUnavailable(proxy) {
 				return proxy, true
 			}
 		}
@@ -5764,6 +5771,12 @@ func (s *Store) ResolveUsableProxyForAccount(acc *Account) (string, bool) {
 		return "", false
 	}
 	return s.resolveProxyForAccountSnapshot(acc)
+}
+
+// ResolveImportProxyForAccount previews validated proxies that would be appended
+// to the public pool on commit, without changing the current policy or pool.
+func (s *Store) ResolveImportProxyForAccount(acc *Account, plannedProxies []string) (string, bool) {
+	return s.resolveProxyForAccountRoute(acc, true, plannedProxies...)
 }
 
 func (s *Store) withUsableEgressFilter(filter AccountFilter) AccountFilter {

@@ -7,8 +7,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"github.com/codex2api/security"
 )
 
 // maxImportedProxies 限制单次导入能注册进代理池的代理条数。导入文件是外部输入，
@@ -57,18 +55,26 @@ func importedProxyLabel() string {
 	return "imported-" + time.Now().UTC().Format("20060102-1504")
 }
 
-// registerImportedProxies 是 Codex 导入条目的入口，把 importToken 上的代理三件套
-// 投影成通用绑定后交给 registerImportedProxyBindings，再把规范化结果写回条目。
+type importProxyPlan struct {
+	urls           []string
+	initialOutcome importProxyOutcome
+	sourceDisabled int
+}
+
 func (h *Handler) registerImportedProxies(ctx context.Context, tokens []importToken) (importProxyOutcome, error) {
+	return h.commitImportedProxyPlan(ctx, planImportedProxies(tokens))
+}
+
+func planImportedProxies(tokens []importToken) importProxyPlan {
 	bindings := make([]importProxyBinding, len(tokens))
 	for i := range tokens {
 		bindings[i] = importProxyBinding{url: tokens[i].proxyURL, enabled: tokens[i].proxyEnabled}
 	}
-	outcome, err := h.registerImportedProxyBindings(ctx, bindings)
+	plan := planImportedProxyBindings(bindings)
 	for i := range tokens {
 		tokens[i].proxyURL = bindings[i].url
 	}
-	return outcome, err
+	return plan
 }
 
 // registerImportedProxyBindings 把导入文件里携带的代理写进代理表并同步到内存代理池，
@@ -79,6 +85,10 @@ func (h *Handler) registerImportedProxies(ctx context.Context, tokens []importTo
 // 出口而整批不可调度；先写账号再同步代理池正好会开出这样一个窗口。同步失败按
 // 错误返回，由调用方中止整次导入——继续导入只会写出一批不可调度的账号。
 func (h *Handler) registerImportedProxyBindings(ctx context.Context, bindings []importProxyBinding) (importProxyOutcome, error) {
+	return h.commitImportedProxyPlan(ctx, planImportedProxyBindings(bindings))
+}
+
+func planImportedProxyBindings(bindings []importProxyBinding) importProxyPlan {
 	var outcome importProxyOutcome
 
 	// 收集 + 校验 + 去重。非法条目跳过而不是整批 400：一条烂代理不该毁掉整个
@@ -98,7 +108,6 @@ func (h *Handler) registerImportedProxyBindings(ctx context.Context, bindings []
 			if err != nil {
 				normalized = ""
 				outcome.skipped++
-				log.Printf("导入代理: 跳过无效代理 %s: %v", security.MaskURLCredentials(raw), err)
 			}
 			resolved[raw] = normalized
 			if normalized != "" && !seen[normalized] {
@@ -113,7 +122,7 @@ func (h *Handler) registerImportedProxyBindings(ctx context.Context, bindings []
 			fmt.Sprintf("%d 个代理格式无效已跳过，对应账号改用表单填写的代理", outcome.skipped))
 	}
 	if len(ordered) == 0 {
-		return outcome, nil
+		return importProxyPlan{initialOutcome: outcome}
 	}
 
 	if len(ordered) > maxImportedProxies {
@@ -125,9 +134,16 @@ func (h *Handler) registerImportedProxyBindings(ctx context.Context, bindings []
 		outcome.skipped += len(ordered)
 		outcome.warnings = append(outcome.warnings,
 			fmt.Sprintf("文件内代理 %d 条，超过单次 %d 条上限，已全部跳过", len(ordered), maxImportedProxies))
+		return importProxyPlan{initialOutcome: outcome}
+	}
+	return importProxyPlan{urls: ordered, initialOutcome: outcome, sourceDisabled: countDisabledAtSource(bindings)}
+}
+
+func (h *Handler) commitImportedProxyPlan(ctx context.Context, plan importProxyPlan) (importProxyOutcome, error) {
+	ordered, outcome := plan.urls, plan.initialOutcome
+	if len(ordered) == 0 {
 		return outcome, nil
 	}
-
 	inserted, err := h.db.InsertProxies(ctx, ordered, importedProxyLabel())
 	if err != nil {
 		return outcome, fmt.Errorf("写入代理表失败: %w", err)
@@ -144,7 +160,7 @@ func (h *Handler) registerImportedProxyBindings(ctx context.Context, bindings []
 				fmt.Sprintf("%d 个代理在本机处于禁用或测试失败状态，绑定它们的账号暂不会被调度", len(unusable)))
 		}
 	}
-	if disabled := countDisabledAtSource(bindings); disabled > 0 {
+	if disabled := plan.sourceDisabled; disabled > 0 {
 		outcome.warnings = append(outcome.warnings,
 			fmt.Sprintf("%d 个代理在源端是禁用状态，已按启用导入，如需保持禁用请到代理管理页关闭", disabled))
 	}

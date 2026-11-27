@@ -11,7 +11,7 @@ import AccountUAStatus from "../components/AccountUAStatus";
 import APIKeyMultiSelect from "../components/APIKeyMultiSelect";
 import PlanBadge from "../components/AccountPlanBadge";
 import { isPremiumUsagePlan, normalizePlanType } from "../lib/accountPlans";
-import { splitAccountImportFiles } from "../lib/accountImportBatches";
+import { sendAccountImportBatches, splitAccountImportFiles } from "../lib/accountImportBatches";
 import { useIntelligenceBars } from "../hooks/useIntelligenceBars";
 import AccountIntelligenceBar, { AccountIntelligenceActions } from "../components/AccountIntelligenceBar";
 import type { IntelligenceBar } from "../lib/intelligenceCheck";
@@ -2168,6 +2168,7 @@ export default function Accounts() {
     failed: 0,
     done: false,
   });
+  const [importPreflight, setImportPreflight] = useState<{ current: number; total: number } | null>(null);
   // 导入后的邀请积分引导。ids 是本次导入新建的账号,后端会过滤出能发邀请的。
   const [inviteGuide, setInviteGuide] = useState<{ show: boolean; ids: number[] }>({
     show: false,
@@ -4429,41 +4430,50 @@ export default function Accounts() {
     const importedAccountIDs: number[] = [];
     // 本次导入注册进代理池的代理统计,跨批累加后在结束 toast 里汇报。
     const proxySummary = { imported: 0, skipped: 0, warnings: [] as string[] };
+    const isJSON = format === "json" || format === "json_at";
     // 只有 JSON 系格式的文件才可能携带代理,后端也只对这两种格式认这个开关。
-    const carriesFileProxies =
-      importFileProxies && (format === "json" || format === "json_at");
+    const carriesFileProxies = importFileProxies && isJSON;
+
+    const makeForm = (batch: File[]) => {
+      const formData = new FormData();
+      if (format !== "txt") formData.append("format", format);
+      const trimmedImportProxy = (options.proxyUrl ?? importProxyUrl).trim();
+      if (trimmedImportProxy) formData.append("proxy_url", trimmedImportProxy);
+      const timezone = options.timezone?.trim();
+      if (timezone) formData.append("timezone", timezone);
+      if (carriesFileProxies) formData.append("import_proxy", "true");
+      const routedHeaders = applyOptionalWorkspaceRouteHeader(
+        parsedCustomHeaders.value,
+        options.workspaceRouteID,
+      );
+      if (routedHeaders) {
+        formData.append("custom_headers", JSON.stringify(routedHeaders));
+      }
+      if (allowDuplicate) formData.append("allow_duplicate", "true");
+      if (importGroupIds.length > 0) {
+        formData.append("group_ids", JSON.stringify(importGroupIds));
+      }
+      for (const f of batch) formData.append("file", f);
+      return formData;
+    };
 
     try {
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        const formData = new FormData();
-        if (format !== "txt") formData.append("format", format);
-        const trimmedImportProxy = (options.proxyUrl ?? importProxyUrl).trim();
-        if (trimmedImportProxy) formData.append("proxy_url", trimmedImportProxy);
-        const timezone = options.timezone?.trim();
-        if (timezone) formData.append("timezone", timezone);
-        if (carriesFileProxies) formData.append("import_proxy", "true");
-        const routedHeaders = applyOptionalWorkspaceRouteHeader(
-          parsedCustomHeaders.value,
-          options.workspaceRouteID,
-        );
-        if (routedHeaders) {
-          formData.append("custom_headers", JSON.stringify(routedHeaders));
-        }
-        if (allowDuplicate) formData.append("allow_duplicate", "true");
-        if (importGroupIds.length > 0) {
-          formData.append("group_ids", JSON.stringify(importGroupIds));
-        }
-        for (const f of batch) formData.append("file", f);
-
-        const res = await fetch("/api/admin/accounts/import", {
+      const adminKey = getAdminKey();
+      const responses = sendAccountImportBatches(
+        batches,
+        isJSON,
+        makeForm,
+        (path, headers, body) => fetch(path, {
           method: "POST",
-          body: formData,
-          headers: getAdminKey() ? { "X-Admin-Key": getAdminKey() } : {},
-        });
-
+          body,
+          headers: { ...headers, ...(adminKey ? { "X-Admin-Key": adminKey } : {}) },
+        }),
+        setImportPreflight,
+      );
+      let batchIndex = 0;
+      for await (const res of responses) {
         // 只有最后一批完成后才标记 done,让进度条在多批之间保持运行态。
-        const isLastBatch = i === batches.length - 1;
+        const isLastBatch = ++batchIndex === batches.length;
         if (res.headers.get("content-type")?.includes("text/event-stream")) {
           await readImportSSE(
             res,
@@ -11686,16 +11696,20 @@ export default function Accounts() {
                   className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
                   style={{
                     width:
-                      importProgress.total > 0
-                        ? `${Math.round((importProgress.current / importProgress.total) * 100)}%`
-                        : "0%",
+                      importPreflight
+                        ? `${Math.round((importPreflight.current / importPreflight.total) * 100)}%`
+                        : importProgress.total > 0
+                          ? `${Math.round((importProgress.current / importProgress.total) * 100)}%`
+                          : "0%",
                   }}
                 />
               </div>
               <div className="text-center text-sm text-muted-foreground">
-                {importProgress.total > 0
-                  ? `${importProgress.current} / ${importProgress.total}  (${Math.round((importProgress.current / importProgress.total) * 100)}%)`
-                  : t("accounts.importPreparing")}
+                {importPreflight
+                  ? `${t("accounts.importPreparing")} ${importPreflight.current} / ${importPreflight.total}`
+                  : importProgress.total > 0
+                    ? `${importProgress.current} / ${importProgress.total}  (${Math.round((importProgress.current / importProgress.total) * 100)}%)`
+                    : t("accounts.importPreparing")}
               </div>
               <div className="grid grid-cols-4 gap-2 text-center">
                 <div className="rounded-xl bg-emerald-500/10 px-2 py-2">

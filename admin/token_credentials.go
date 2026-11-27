@@ -140,7 +140,7 @@ func effectiveWorkspaceIDFromSeed(seed tokenCredentialSeed) string {
 
 // prepareTokenCredentialSeed is the shared import boundary, before dedupe or writes.
 // Metadata outages remain visible pending diagnostics, not native account failures.
-func (h *Handler) prepareTokenCredentialSeed(ctx context.Context, seed tokenCredentialSeed, proxyURL string, accountID int64) (tokenCredentialSeed, error) {
+func (h *Handler) prepareTokenCredentialSeed(ctx context.Context, seed tokenCredentialSeed, proxyURL string, accountID int64, plannedProxies ...string) (tokenCredentialSeed, error) {
 	seed = normalizeTokenCredentialSeed(seed)
 	if seed.invalidWorkspace {
 		return seed, errors.New("workspace identity: invalid_supplied_workspace")
@@ -165,7 +165,7 @@ func (h *Handler) prepareTokenCredentialSeed(ctx context.Context, seed tokenCred
 		seed.workspaceDiagnostic = "workspace identity: proxy_policy_unavailable"
 		return seed, nil
 	}
-	selected, usable := h.store.ResolveUsableProxyForAccount(&auth.Account{DBID: accountID, ProxyURL: proxyURL})
+	selected, usable := h.store.ResolveImportProxyForAccount(&auth.Account{DBID: accountID, ProxyURL: proxyURL}, plannedProxies)
 	if !usable {
 		seed.workspaceDiagnostic = "workspace identity: proxy_denied"
 		log.Printf("Codex import identity pending: %s", seed.workspaceDiagnostic)
@@ -512,8 +512,7 @@ func mergeImportCustomHeaders(base, overrides map[string]string) map[string]stri
 	return result
 }
 
-func (h *Handler) prepareImportedTokenSeeds(ctx context.Context, tokens []importToken, settings importSettings) ([]importToken, error) {
-	conflicts := conflictingImportChatGPTIDs(tokens)
+func (h *Handler) prepareImportedTokenSeeds(ctx context.Context, tokens []importToken, settings importSettings, conflicts map[string]bool, plannedProxies []string) error {
 	for i := range tokens {
 		if tokens[i].isAgentIdentity() {
 			continue
@@ -521,16 +520,16 @@ func (h *Handler) prepareImportedTokenSeeds(ctx context.Context, tokens []import
 		seed := importTokenSeed(tokens[i], conflicts)
 		headers, err := normalizeCustomHeaders(mergeImportCustomHeaders(seed.customHeaders, settings.customHeaders))
 		if err != nil {
-			return nil, errors.New("import identity: invalid custom headers")
+			return errors.New("import identity: invalid custom headers")
 		}
 		seed.customHeaders = headers
-		seed, err = h.prepareTokenCredentialSeed(ctx, seed, settings.proxyForToken(tokens[i]), 0)
+		seed, err = h.prepareTokenCredentialSeed(ctx, seed, settings.proxyForToken(tokens[i]), 0, plannedProxies...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		tokens[i].preparedSeed = &seed
 	}
-	return tokens, nil
+	return nil
 }
 
 func joinImportWorkspaceWarnings(warnings ...string) string {
